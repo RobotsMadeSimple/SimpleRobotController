@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="HidSharp" Version="2.6.4" />
+    <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />
   </ItemGroup>
 
 </Project>

@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 
@@ -12,12 +11,9 @@ namespace Controller.RobotControl
 {
     internal class RobotController
     {
+        public PointRepository pointRepo = new();
         public STB4100 stb = new();
         public ScalarMotionProfiler mp = new();
-        public StepperMotor motor1;
-        public StepperMotor motor2;
-        public StepperMotor motor3;
-        public StepperMotor motor4;
         public TBotKinematics TBot = new();
 
         // Joint motion profiler
@@ -38,7 +34,7 @@ namespace Controller.RobotControl
         private Vector6 CurrentPosition = new();  // Actual position of the robot
         public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || IsJogging;
         // X is away from flange, Y is towards the inside of the robot, Z is Vertical
-        public Vector6 CurrentTool = new Vector6(0, 50, 50);
+        public Vector6 CurrentTool = new(0, 50, 50);
         // Current Pose Of the Joints
         private Vector6 CurrentJointTargets = new();
 
@@ -51,14 +47,8 @@ namespace Controller.RobotControl
 
         public RobotController()
         {
-            // ---- Robot startup ----
-            motor1 = stb.AddMotor("1", 1600, 1, 1, 0);
-            motor2 = stb.AddMotor("2", 1600, 1, 2, 0);
-            motor3 = stb.AddMotor("3", 1600, 1, 3, 0);
-            motor4 = stb.AddMotor("4", 1600, 1, 4, 0);
-
             stb.Reset();
-            //stb.Start();
+            stb.Start();
 
             new Thread(Loop) { IsBackground = true }.Start();
         }
@@ -131,9 +121,7 @@ namespace Controller.RobotControl
             TBot.UpdateJointTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg);
 
             // Drive the motors to the target
-            motor1.SetTarget(m1Deg);
-            motor2.SetTarget(m2Deg);
-            motor3.SetTarget(m3Deg);
+            stb.SetMotorTargets(m1Deg, m2Deg, m3Deg);
         }
 
         public Task<object> AddCommand(CommandMessage command)
@@ -185,11 +173,6 @@ namespace Controller.RobotControl
                 default:
                     RobotCommand NewCommand = LoadParams<RobotCommand>(command);
                     NewCommand.CommandType = command.Command;
-                    if (NewCommand is null)
-                    {
-                        Console.WriteLine($"Adding null command for some reason? {command.Command}");
-                        break;
-                    }
                     QueuedCommands.Add(NewCommand);
                     break;
 
@@ -222,6 +205,7 @@ namespace Controller.RobotControl
                     if (IsMoving)
                         return;
 
+                    // Gather the commands motion params if there specified otherwise default to the last set ones
                     Speed = Command.Speed ??= this.SpeedS;
                     Accel = Command.Accel ??= this.AccelS;
                     Decel = Command.Decel ??= this.DecelS;
@@ -242,11 +226,16 @@ namespace Controller.RobotControl
                     // Copy the Command Position to the Target Position
                     this.TargetPosition = Command.Vector6;
 
+                    // Gather the commands motion params if there specified otherwise default to the last set ones
+                    Speed = Command.Speed ??= this.SpeedJ;
+                    Accel = Command.Accel ??= this.AccelJ;
+                    Decel = Command.Decel ??= this.DecelJ;
+
                     // Calculate the joint positions for the target position and the current tooling
                     this.TargetJoints = TBotKinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
 
                     // Generate a joint motion profile using the current and target joint positions
-                    jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, 100, 100, 100);
+                    jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, Speed, Accel, Decel);
 
                     break;
 
