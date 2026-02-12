@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.NetworkInformation;
 using System.Threading;
 
 public class STB4100
@@ -43,21 +44,56 @@ public class STB4100
 
     private readonly Stopwatch _statusTimer = Stopwatch.StartNew();
 
-    public STB4100() {}
+    public StepperMotor Motor1 { get; }
+    public StepperMotor Motor2 { get; }
+    public StepperMotor Motor3 { get; }
+    public StepperMotor Motor4 { get; }
 
-    private void Connect()
-    {
-        _device = DeviceList.Local.GetHidDeviceOrNull(VendorId, ProductId)
-            ?? throw new Exception("STB4100 not found");
-
-        _stream = _device.Open();
+    public STB4100() {
+        Motor1 = AddMotor(1, 1600, 1, 0);
+        Motor2 = AddMotor(2, 1600, 1, 0);
+        Motor3 = AddMotor(3, 1600, 1, 0);
+        Motor4 = AddMotor(4, 1600, 1, 0);
     }
 
-    public StepperMotor AddMotor(string name, int stepsPerRev, double gearRatio, int pin, double startAngle)
+    private bool Connect()
     {
-        var newMotor = new StepperMotor(name, stepsPerRev, gearRatio, pin, startAngle);
+        // Check if already connected
+        if (_device != null && _stream != null && _stream.CanRead && _stream.CanWrite)
+            return true;
+
+        // Get the first available device that matches vendor and product identifications
+        _device = DeviceList.Local.GetHidDeviceOrNull(VendorId, ProductId);
+        if (_device == null)
+            return false;
+
+        // Get that stream open!
+        try
+        {
+            _stream = _device.Open();
+            return _stream != null && _stream.CanRead && _stream.CanWrite;
+        }
+        catch
+        {
+            _stream = null;
+            _device = null;
+            return false;
+        }
+    }
+
+    private StepperMotor AddMotor(int pin, int stepsPerRev, double gearRatio, double startAngle)
+    {
+        var newMotor = new StepperMotor(pin, stepsPerRev, gearRatio, startAngle);
         _motors.Add(newMotor);
         return newMotor;
+    }
+
+    public void SetMotorTargets(double? m1Deg = null, double? m2Deg = null, double? m3Deg = null, double? m4Deg=null)
+    {
+        if (m1Deg.HasValue) Motor1.SetTarget(m1Deg.Value);
+        if (m2Deg.HasValue) Motor2.SetTarget(m2Deg.Value);
+        if (m3Deg.HasValue) Motor3.SetTarget(m3Deg.Value);
+        if (m4Deg.HasValue) Motor4.SetTarget(m4Deg.Value);
     }
 
     public void Start()

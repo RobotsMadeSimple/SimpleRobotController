@@ -1,0 +1,28 @@
+{
+  "Pick": [
+    {
+      "TimestampUnixMs": 1770880604768,
+      "Point": {
+        "Name": "Pick",
+        "X": 100,
+        "Y": 200,
+        "Z": 75,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1770880604765,
+      "Point": {
+        "Name": "Pick",
+        "X": 100,
+        "Y": 200,
+        "Z": 50,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    }
+  ]
+}

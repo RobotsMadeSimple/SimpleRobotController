@@ -1,6 +1,5 @@
 public class StepperMotor
 {
-    public string Name { get; }
     public int StepsPerRev { get; }
     public double GearRatio { get; }
     public int Pin { get; }
@@ -14,9 +13,8 @@ public class StepperMotor
 
     public double TargetAngle { get; private set; }
 
-    public StepperMotor(string name, int stepsPerRev, double gearRatio, int pin, double startingAngle)
+    public StepperMotor(int pin, int stepsPerRev, double gearRatio,  double startingAngle)
     {
-        Name = name;
         StepsPerRev = stepsPerRev;
         GearRatio = gearRatio;
         Pin = pin;

@@ -227,3 +227,15 @@ public class RobotCommand
     // Avoid mutating your fields in a getter
     public Vector6 Vector6 => new(X ?? 0, Y ?? 0, Z ?? 0, RX ?? 0, RY ?? 0, RZ ?? 0);
 }
+
+
+public class Point: Vector6
+{
+    public string? Name { get; set; }
+
+}
+public class PointHistoryEntry
+{
+    public long TimestampUnixMs { get; set; }
+    public Point Point { get; set; } = new();
+}
