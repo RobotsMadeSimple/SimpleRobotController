@@ -1,5 +1,4 @@
-﻿using Controller.RobotControl.Joints;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -86,19 +85,13 @@ namespace Controller.RobotControl.Robots.TBot
             double radial = Math.Sqrt(flangeXFinal * flangeXFinal + flangeYFinal * flangeYFinal);
 
             // -----------------------------
-            // 4) CoreXY inverse (belt space)
-            // -----------------------------
-            double linear1 = radial + flangeZFinal;
-            double linear2 = radial - flangeZFinal;
-
-            // -----------------------------
-            // 5) Return joint-space
+            // 4) Return joint-space (radial + vertical)
             // -----------------------------
             return new Vector6
             {
-                X = j1Deg,     // J1 rotation (deg) - tooling-aware
-                Y = linear1,   // CoreXY belt 1 (mm)
-                Z = linear2,   // CoreXY belt 2 (mm)
+                X = j1Deg,          // J1 rotation (deg)
+                Y = radial,         // CoreXY radial component (mm)
+                Z = flangeZFinal,   // CoreXY vertical component (mm)
                 RX = 0,
                 RY = 0,
                 RZ = 0
@@ -109,7 +102,7 @@ namespace Controller.RobotControl.Robots.TBot
             double j1Rad = CurrentJoint1.JointAngleRad;
 
             // radial (mm) and flangeZ (mm)
-            var (radial, flangeZ) = CurrentJoint2.Cartesian();
+            var (radial, flangeZ) = CurrentJoint2.Cartesian;
 
             double flangeX = radial * Math.Cos(j1Rad);
             double flangeY = radial * Math.Sin(j1Rad);
@@ -163,7 +156,8 @@ namespace Controller.RobotControl.Robots.TBot
             // Joint Targets are Joint Angles and Belt Length 1 and Belt Length 2
             InterpolatedJoint1.JointAngleDeg = JointTargets.X;
             m1Deg = InterpolatedJoint1.MotorAngleDeg;
-            (m2Deg, m3Deg) = InterpolatedJoint2.SetLinears(JointTargets.Y, JointTargets.Z);
+            InterpolatedJoint2.Cartesian = (JointTargets.Y, JointTargets.Z);
+            (m2Deg, m3Deg) = InterpolatedJoint2.GetLinears();
 
             // Update the current Joint poses with the new target motor angles
             CurrentJoint1.MotorAngleDeg = m1Deg;

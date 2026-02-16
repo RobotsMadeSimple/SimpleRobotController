@@ -1,101 +1,99 @@
-﻿using System;
-using System.Numerics;
+﻿using System.Numerics;
 
-namespace Controller.RobotControl.Joints
+public class CoreXYStage
 {
-    public class CoreXYStage
+    private readonly double _pulleyDiameter1;
+    private readonly double _pulleyDiameter2;
+
+    public double Linear1 { get; private set; }
+    public double Linear2 { get; private set; }
+
+    public CoreXYStage(double pulleyDiameter1, double pulleyDiameter2)
     {
-        // -----------------------------
-        // Pulley geometry (mm)
-        // -----------------------------
-        private readonly double _pulleyDiameter1;
-        private readonly double _pulleyDiameter2;
+        _pulleyDiameter1 = pulleyDiameter1;
+        _pulleyDiameter2 = pulleyDiameter2;
+    }
 
-        // -----------------------------
-        // Internal linear belt motion (mm)
-        // -----------------------------
-        private double _linear1;
-        private double _linear2;
+    // -----------------------------
+    // Motor angle interface (pure belt space)
+    // -----------------------------
+    public double Motor1AngleDeg
+    {
+        get => LinearToDegrees(Linear1, _pulleyDiameter1);
+        set => Linear1 = DegreesToLinear(value, _pulleyDiameter1);
+    }
 
-        /// <summary>
-        /// Fixed radial offset from J1 axis (optional, mm)
-        /// </summary>
-        public double BaseOffset { get; set; }
+    public double Motor2AngleDeg
+    {
+        get => LinearToDegrees(Linear2, _pulleyDiameter2);
+        set => Linear2 = DegreesToLinear(value, _pulleyDiameter2);
+    }
 
-        // -----------------------------
-        // Constructor
-        // -----------------------------
-        public CoreXYStage(double pulleyDiameter1, double pulleyDiameter2)
+    // -----------------------------
+    // IK Path (belt space directly)
+    // -----------------------------
+    public (double motor1Deg, double motor2Deg) SetLinears(double linear1, double linear2)
+    {
+        Linear1 = linear1;
+        Linear2 = linear2;
+
+        return (
+            LinearToDegrees(Linear1, _pulleyDiameter1),
+            LinearToDegrees(Linear2, _pulleyDiameter2)
+        );
+    }
+
+    // -----------------------------
+    // CoreXY kinematics
+    // -----------------------------
+    public (double x, double z) Cartesian
+    {
+        get
         {
-            _pulleyDiameter1 = pulleyDiameter1;
-            _pulleyDiameter2 = pulleyDiameter2;
-        }
-
-        // -----------------------------
-        // Motor angle interface (degrees)
-        // -----------------------------
-        public double Motor1AngleDeg
-        {
-            get => LinearToDegrees(_linear1, _pulleyDiameter1);
-            set => _linear1 = DegreesToLinear(value, _pulleyDiameter1);
-        }
-
-        public double Motor2AngleDeg
-        {
-            get => LinearToDegrees(_linear2, _pulleyDiameter2);
-            set => _linear2 = DegreesToLinear(value, _pulleyDiameter2);
-        }
-
-        // -----------------------------
-        // NEW: Set linears directly (IK path)
-        // -----------------------------
-        public (double motor1Deg, double motor2Deg) SetLinears(double linear1, double linear2)
-        {
-            _linear1 = linear1;
-            _linear2 = linear2;
-
-            double m1Deg = LinearToDegrees(_linear1, _pulleyDiameter1);
-            double m2Deg = LinearToDegrees(_linear2, _pulleyDiameter2);
-
-            return (m1Deg, m2Deg);
-        }
-
-        // -----------------------------
-        // CoreXY kinematics
-        // -----------------------------
-        public (double x, double z) Cartesian()
-        {
-            double x = (_linear1 + _linear2) * 0.5 + BaseOffset;
-            double z = (_linear1 - _linear2) * 0.5;
+            double x = (Linear1 + Linear2) * 0.5;
+            double z = (Linear1 - Linear2) * 0.5;
             return (x, z);
         }
-
-        public Matrix4x4 Transform()
+        set
         {
-            var (x, z) = Cartesian();
-
-            return Matrix4x4.CreateTranslation(
-                (float)x,
-                0f,
-                (float)z
-            );
+            Linear1 = value.x + value.z;
+            Linear2 = value.x - value.z;
         }
+    }
 
-        // -----------------------------
-        // Helpers
-        // -----------------------------
-        private static double DegreesToLinear(double angleDeg, double pulleyDiameter)
-        {
-            double radius = pulleyDiameter * 0.5;
-            double angleRad = angleDeg * Math.PI / 180.0;
-            return angleRad * radius;
-        }
+    public (double motor1Deg, double motor2Deg) GetLinears()
+    {
+        return (
+            LinearToDegrees(Linear1, _pulleyDiameter1),
+            LinearToDegrees(Linear2, _pulleyDiameter2)
+        );
+    }
 
-        private static double LinearToDegrees(double linear, double pulleyDiameter)
-        {
-            double radius = pulleyDiameter * 0.5;
-            double angleRad = linear / radius;
-            return angleRad * 180.0 / Math.PI;
-        }
+    public Matrix4x4 Transform()
+    {
+        var (x, z) = Cartesian;
+
+        return Matrix4x4.CreateTranslation(
+            (float)x,
+            0f,
+            (float)z
+        );
+    }
+
+    // -----------------------------
+    // Helpers
+    // -----------------------------
+    private static double DegreesToLinear(double angleDeg, double pulleyDiameter)
+    {
+        double radius = pulleyDiameter * 0.5;
+        double angleRad = angleDeg * Math.PI / 180.0;
+        return angleRad * radius;
+    }
+
+    private static double LinearToDegrees(double linear, double pulleyDiameter)
+    {
+        double radius = pulleyDiameter * 0.5;
+        double angleRad = linear / radius;
+        return angleRad * 180.0 / Math.PI;
     }
 }

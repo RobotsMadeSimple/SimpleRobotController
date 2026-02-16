@@ -30,5 +30,11 @@ public class StepperMotor
     public int StepError => TargetSteps - CurrentSteps;
 
     public void SetTarget(double angle) => TargetAngle = angle;
+    public void OverwriteTarget(double angle)
+    {
+        // Clear the current location of the motor to this new angle
+        TargetAngle = angle;
+        CurrentSteps = TargetSteps;
+    }
     public void Stop() => TargetAngle = CurrentAngle;
 }

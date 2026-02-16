@@ -42,6 +42,11 @@ public class STB4100
     private bool _flip;
     private bool _resetBit;
 
+    public bool Input1 { get; private set; }
+    public bool Input2 { get; private set; }
+    public bool Input3 { get; private set; }
+    public bool Input4 { get; private set; }
+
     private readonly Stopwatch _statusTimer = Stopwatch.StartNew();
 
     public StepperMotor Motor1 { get; }
@@ -94,6 +99,14 @@ public class STB4100
         if (m2Deg.HasValue) Motor2.SetTarget(m2Deg.Value);
         if (m3Deg.HasValue) Motor3.SetTarget(m3Deg.Value);
         if (m4Deg.HasValue) Motor4.SetTarget(m4Deg.Value);
+    }
+
+    public void OverwriteMotorTargets(double? m1Deg = null, double? m2Deg = null, double? m3Deg = null, double? m4Deg = null)
+    {
+        if (m1Deg.HasValue) Motor1.OverwriteTarget(m1Deg.Value);
+        if (m2Deg.HasValue) Motor2.OverwriteTarget(m2Deg.Value);
+        if (m3Deg.HasValue) Motor3.OverwriteTarget(m3Deg.Value);
+        if (m4Deg.HasValue) Motor4.OverwriteTarget(m4Deg.Value);
     }
 
     public void Start()
@@ -206,6 +219,12 @@ public class STB4100
                 if (m.Pin == i + 1)
                     m.Steps = steps[i];
         }
+
+        var bits = BitTools.ByteToBits(buffer[42]);
+        Input1 = bits[0];
+        Input2 = bits[1];
+        Input3 = bits[2];
+        Input4 = bits[3];
     }
 
     private void SendCommand(string command)

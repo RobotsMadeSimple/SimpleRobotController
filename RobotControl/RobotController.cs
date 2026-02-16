@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Text;
 using System.Text.Json;
+using System.Runtime.InteropServices.Swift;
 
 namespace Controller.RobotControl
 {
@@ -32,16 +33,25 @@ namespace Controller.RobotControl
 
         // Current Status of Robot
         private Vector6 CurrentPosition = new();  // Actual position of the robot
-        public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || IsJogging;
+        public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || IsJogging || IsJointJogging;
         // X is away from flange, Y is towards the inside of the robot, Z is Vertical
-        public Vector6 CurrentTool = new(0, 50, 50);
+        public Vector6 CurrentTool = new(0, 0, 0);
         // Current Pose Of the Joints
         private Vector6 CurrentJointTargets = new();
 
+        // If the Robot was homed from startup
+        private bool homed = false;
+        private bool startHoming = false;
+        private String homingState = "WaitingForStart";
+        private double homedJointDeg = 0; // J1 when homed is at 0
+        private double verticalHomed = 200; // Z Height when homed
+        private double horizontalHomed = 60; // Horizontal distance when homed
 
         private JoggingMotionProfiler joggingMotionProfiler = new();
+        private JoggingMotionProfiler jointJoggingProfiler = new();
 
         private bool IsJogging => !joggingMotionProfiler.IsFinished;
+        private bool IsJointJogging => !jointJoggingProfiler.IsFinished;
 
         public List<RobotCommand> QueuedCommands = new();
 
@@ -62,6 +72,9 @@ namespace Controller.RobotControl
                 
                 // Run the robot motion control
                 RunMotion();
+
+                // Execute Homing
+                RunHoming();
 
                 // Let the stepper motor drive towards the new targets
                 stb.Loop(linearMotionProfiler is not null || jointMotionProfiler is not null);
@@ -90,7 +103,7 @@ namespace Controller.RobotControl
                 if (jointMotionProfiler.IsFinished)
                 {
                     // Set the joint targets to the final target position
-                    CurrentJointTargets = TargetJoints;
+                    CurrentJointTargets.Copy(TargetJoints);
 
                     // Destroy the profiler
                     jointMotionProfiler = null;
@@ -114,6 +127,17 @@ namespace Controller.RobotControl
                 CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
             }
+            else if (IsJointJogging)
+            {
+                // Continue Jogging the joints that are moving
+                CurrentJointTargets = jointJoggingProfiler.Update(CurrentJointTargets);
+
+                // Update the joint angles with the new calculated ones
+                UpdateJointTargets();
+
+                // Recalculate the Cartesian Coordinate position to keep it current
+                CurrentPosition = TBot.TcpPosition(CurrentTool);
+            }
         }
         public void UpdateJointTargets()
         {
@@ -130,6 +154,10 @@ namespace Controller.RobotControl
 
             switch (command.Command)
             {
+                case "Home":
+                    startHoming = true;
+                    break;
+
                 case "GetStatus":
                     {
                         Vector6 pose = TBot.GetVisualRobotPose(CurrentPosition, CurrentTool);
@@ -137,6 +165,8 @@ namespace Controller.RobotControl
                         payload = new
                         {
                             moving = IsMoving,
+                            wasHomed = homed,
+                            homingState = this.homingState,
 
                             x = CurrentPosition.X,
                             y = CurrentPosition.Y,
@@ -152,6 +182,10 @@ namespace Controller.RobotControl
                             targetRy = this.TargetPosition.RY,
                             targetRz = this.TargetPosition.RZ,
 
+                            joint1Angle = this.TBot.CurrentJoint1.JointAngleDeg,
+                            joint2X = this.TBot.CurrentJoint2.Cartesian.x,
+                            joint2Z = this.TBot.CurrentJoint2.Cartesian.z,
+
                             poseX = pose.X,
                             poseY = pose.Y,
                             poseZ = pose.Z,
@@ -165,7 +199,13 @@ namespace Controller.RobotControl
 
                             speedJ = SpeedJ,
                             accelJ = AccelJ,
-                            decelJ = DecelJ
+                            decelJ = DecelJ,
+
+                            // STB Axis Limits
+                            input1 = stb.Input1,
+                            input2 = stb.Input2,
+                            input3 = stb.Input3,
+                            input4 = stb.Input4,
                         };
                         break;
                     }
@@ -182,6 +222,123 @@ namespace Controller.RobotControl
             // instance logic here
             return Task.FromResult((object)payload);
         }
+        public void RunHoming()
+        {
+            double m1Deg, m2Deg, m3Deg;
+
+            switch (homingState)
+            {
+                case "WaitingForStart":
+                    if (startHoming)
+                        homingState = "HomeJ1";
+                    break;
+
+                case "HomeJ1":
+                    Vector6 J1JogDirection = new(1);
+                    jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 100000, 0.01);
+                    if (stb.Input1)
+                    {
+                        homingState = "WaitJ1MoveComplete";
+                    }
+                    break;
+
+                case "WaitJ1MoveComplete":
+                    if (!IsMoving)
+                    {
+                        homingState = "SetJ1MotorHomed";
+                    }
+                    break;
+
+                case "SetJ1MotorHomed":
+                    // Offset the current joint angle
+                    TBot.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
+                    TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
+
+                    // Recalculate the position and joint targets
+                    CurrentPosition = TBot.TcpPosition(CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+
+                    // Have the robot update its joints
+                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg);
+
+                    // Drive the motors to the target
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg);
+
+                    homingState = "HomeVertical";
+                    break;
+
+                case "HomeVertical":
+                    jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 100000, 0.01);
+                    if (stb.Input3)
+                    {
+                        homingState = "WaitVerticalMoveComplete";
+                    }
+                    break;
+
+                case "WaitVerticalMoveComplete":
+                    if (!IsMoving)
+                        homingState = "SetVerticalHomed";
+                    break;
+
+                case "SetVerticalHomed":
+                    // Offset the current joint angle
+                    TBot.InterpolatedJoint2.Cartesian = (TBot.InterpolatedJoint2.Cartesian.x, verticalHomed);
+                    TBot.CurrentJoint2.Cartesian = (TBot.CurrentJoint2.Cartesian.x, verticalHomed);
+
+                    CurrentPosition = TBot.TcpPosition(CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+
+                    // Have the robot update its joints
+                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg);
+
+                    // Drive the motors to the target
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg);
+
+                    homingState = "HomeHorizontal";
+                    break;
+
+                case "HomeHorizontal":
+                    jointJoggingProfiler.Jog(new(0, 1), 20, 100, 100000, 0.01);
+                    if (stb.Input2)
+                    {
+                        homingState = "WaitHorizontalMoveComplete";
+                    }
+                    break;
+
+                case "WaitHorizontalMoveComplete":
+                    if (!IsMoving)
+                    {
+                        homingState = "SetHorizontalHomed";
+                    }
+                    break;
+
+                case "SetHorizontalHomed":
+                    // Offset the current joint angle
+                    TBot.InterpolatedJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
+                    TBot.CurrentJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
+
+                    CurrentPosition = TBot.TcpPosition(CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+
+                    // Have the robot update its joints
+                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg);
+
+                    // Drive the motors to the target
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg);
+
+                    homingState = "HomingComplete";
+                    break;
+
+                case "HomingComplete":
+                    startHoming = false;
+                    homingState = "WaitingForStart";
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
         public void RunCommands()
         {
             if (QueuedCommands.Count == 0)
@@ -194,49 +351,14 @@ namespace Controller.RobotControl
                 return;
             }
 
-            double Speed;
-            double Accel;
-            double Decel;
-
             switch (Command.CommandType)
             {
                 case "MoveL":
-                    // If already moving, wait for the movement to complete
-                    if (IsMoving)
-                        return;
-
-                    // Gather the commands motion params if there specified otherwise default to the last set ones
-                    Speed = Command.Speed ??= this.SpeedS;
-                    Accel = Command.Accel ??= this.AccelS;
-                    Decel = Command.Decel ??= this.DecelS;
-
-                    // Copy the Command position to the TargetPosition
-                    this.TargetPosition = Command.Vector6;
-
-                    // Generate a new linear motion profiler for this move
-                    linearMotionProfiler = new(CurrentPosition, this.TargetPosition, Speed, Accel, Decel);
-
+                    MoveL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 case "MoveJ":
-                    // If already moving, wait for the movement to complete
-                    if (IsMoving)
-                        return;
-                    
-                    // Copy the Command Position to the Target Position
-                    this.TargetPosition = Command.Vector6;
-
-                    // Gather the commands motion params if there specified otherwise default to the last set ones
-                    Speed = Command.Speed ??= this.SpeedJ;
-                    Accel = Command.Accel ??= this.AccelJ;
-                    Decel = Command.Decel ??= this.DecelJ;
-
-                    // Calculate the joint positions for the target position and the current tooling
-                    this.TargetJoints = TBotKinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
-
-                    // Generate a joint motion profile using the current and target joint positions
-                    jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, Speed, Accel, Decel);
-
+                    MoveJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 case "SetTool":
@@ -262,13 +384,11 @@ namespace Controller.RobotControl
                     break;
 
                 case "JogL":
-                    Vector6 jogDirection = Command.Vector6;
+                    JogL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    break;
 
-                    Speed = Command.Speed ??= this.SpeedS;
-                    Accel = Command.Accel ??= this.AccelS;
-                    Decel = Command.Decel ??= this.DecelS;
-
-                    joggingMotionProfiler.Jog(jogDirection, Speed, Accel, Decel);
+                case "JogJ":
+                    MoveJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 default:
@@ -277,6 +397,69 @@ namespace Controller.RobotControl
 
             // The command was successful, destroy it
             QueuedCommands.Remove(Command);
+        }
+
+        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel)
+        {
+            if (IsMoving)
+                return;
+
+            // Copy the Command Position to the Target Position
+            this.TargetPosition = TargetPosition;
+
+            // Gather the commands motion params if there specified otherwise default to the last set ones
+            double jointSpeed = Speed ??= this.SpeedJ;
+            double jointAccel = Accel ??= this.AccelJ;
+            double jointDecel = Decel ??= this.DecelJ;
+
+            // Calculate the joint positions for the target position and the current tooling
+            this.TargetJoints = TBotKinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
+
+            // Generate a joint motion profile using the current and target joint positions
+            jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, jointSpeed, jointAccel, jointDecel);
+        }
+
+        
+
+        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel)
+        {
+            if (IsMoving)
+                return;
+
+            // Copy the Command Position to the Target Position
+            this.TargetPosition = TargetPosition;
+
+            // Gather the commands motion params if there specified otherwise default to the last set ones
+            double lineSpeed = Speed ??= this.SpeedS;
+            double lineAccel = Accel ??= this.AccelS;
+            double lineDecel = Decel ??= this.DecelS;
+
+            // Copy the Command position to the TargetPosition
+            this.TargetPosition = TargetPosition;
+
+            // Generate a new linear motion profiler for this move
+            linearMotionProfiler = new(CurrentPosition, this.TargetPosition, lineSpeed, lineAccel, lineDecel);
+        }
+
+        public void JogJ(Vector6 jogJointDirection, double? Speed, double? Accel, double? Decel)
+        {
+            // Gather the commands motion params if there specified otherwise default to the last set ones
+            double jointSpeed = Speed ??= this.SpeedJ;
+            double jointAccel = Accel ??= this.AccelJ;
+            double jointDecel = Decel ??= this.DecelJ;
+
+
+            jointJoggingProfiler.Jog(jogJointDirection, jointSpeed, jointAccel, jointDecel);
+        }
+
+        public void JogL(Vector6 jogDirection, double? Speed, double? Accel, double? Decel)
+        {
+            // Gather the commands motion params if there specified otherwise default to the last set ones
+            double lineSpeed = Speed ??= this.SpeedS;
+            double lineAccel = Accel ??= this.AccelS;
+            double lineDecel = Decel ??= this.DecelS;
+
+            joggingMotionProfiler.Jog(jogDirection, lineSpeed, lineAccel, lineDecel);
         }
 
         public static T LoadParams<T>(CommandMessage msg)

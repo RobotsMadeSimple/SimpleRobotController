@@ -3,22 +3,12 @@ using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 
-public abstract class Message
+public class CommandMessage
 {
     public string Type { get; set; } = default!;
-}
-
-public class CommandMessage : Message
-{
     public string Id { get; set; } = default!;
     public string Command { get; set; } = default!;
     public JsonElement? Params { get; set; }
-}
-
-public class MoveJ
-{
-    public int Joint { get; set; }
-    public double Angle { get; set; }
 }
 
 public class Vector6
@@ -187,29 +177,6 @@ class ArcSegment : PathSegment
     }
 }
 
-
-
-public class SpeedSetting
-{
-    public double Speed { get; set; }
-}
-
-public class AccelSetting
-{
-    public double AccelSpeed { get; set; }
-    public double DecelSpeed { get; set; }
-}
-public class SpeedJ
-{
-    public double Speed { get; set; }
-}
-
-public class AccelJ
-{
-    public double AccelSpeed { get; set; }
-    public double DecelSpeed { get; set; }
-}
-
 public class RobotCommand
 {
     public string? CommandType { get; set; }
@@ -224,7 +191,7 @@ public class RobotCommand
     public double? Decel { get; set; }
     public double? Time { get; set; }
 
-    // Avoid mutating your fields in a getter
+
     public Vector6 Vector6 => new(X ?? 0, Y ?? 0, Z ?? 0, RX ?? 0, RY ?? 0, RZ ?? 0);
 }
 
