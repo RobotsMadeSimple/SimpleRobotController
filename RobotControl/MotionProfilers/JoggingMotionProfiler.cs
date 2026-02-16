@@ -13,6 +13,7 @@ namespace Controller.RobotControl.MotionProfilers
         private readonly Stopwatch _sw = new();
         private bool _started;
         private Stopwatch autoResetSw = new();
+        private double defaultResetTime = 0.1f;
         private double resetTime = 0.1f;
 
         public bool IsFinished { get; private set; } = true;
@@ -79,8 +80,17 @@ namespace Controller.RobotControl.MotionProfilers
             );
         }
 
-        public void Jog(Vector6 jogAxis, double speed, double accel, double decel)
+        public void Jog(Vector6 jogAxis, double speed, double accel, double decel, double? resetTime = null)
         {
+            if (resetTime != null)
+            {
+                this.resetTime = resetTime.Value;
+            }
+            else
+            {
+                this.resetTime = defaultResetTime;
+            }
+
             this.jogAxis = jogAxis;
             this.speed = speed;
             this.accel = accel;

@@ -16,13 +16,18 @@ public static class BitTools
         return value;
     }
 
-    public static List<int> ByteToBits(byte value)
+    public static List<bool> ByteToBits(byte value)
     {
-        var bits = new List<int>(8);
-        for (int i = 7; i >= 0; i--)
-            bits.Add((value >> i) & 1);
+        var bits = new List<bool>(8);
+
+        for (int i = 0; i < 8; i++)
+        {
+            bits.Add(((value >> i) & 1) == 1);
+        }
+
         return bits;
     }
+
 
     public static List<byte> NumberToBytes(int value, int count)
     {
