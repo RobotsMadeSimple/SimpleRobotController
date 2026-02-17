@@ -42,6 +42,8 @@ public class STB4100
     private bool _flip;
     private bool _resetBit;
 
+    public bool moving;
+
     public bool Input1 { get; private set; }
     public bool Input2 { get; private set; }
     public bool Input3 { get; private set; }
@@ -112,8 +114,34 @@ public class STB4100
     public void Start()
     {
         Connect();
+
         new Thread(StatusLoop) { IsBackground = true }.Start();
+        new Thread(ControlLoop) { IsBackground = true }.Start();
     }
+
+    private void ControlLoop()
+    {
+        var sw = Stopwatch.StartNew();
+        long nextTick = 0;
+
+        const double periodSec = 0.004; // 4ms
+        long periodTicks = (long)(periodSec * Stopwatch.Frequency);
+
+        while (true)
+        {
+            long now = sw.ElapsedTicks;
+
+            if (now >= nextTick)
+            {
+                Loop();
+                nextTick += periodTicks;
+            }
+
+            // Small spin wait to reduce CPU burn but keep timing tight
+            Thread.SpinWait(50);
+        }
+    }
+
 
     private void StatusLoop()
     {
@@ -128,7 +156,7 @@ public class STB4100
         }
     }
 
-    public void Loop(bool moving = false)
+    public void Loop()
     {
         bool move = moving || _motors.Any(m => m.StepError != 0);
 
@@ -251,6 +279,10 @@ public class STB4100
                     {
                         step = m.StepError;
                         m.CurrentSteps += step;
+                        if (m.InvertDirection)
+                        {
+                            step *= -1;
+                        }
                     }
                 }
                 send.AddRange(BitTools.NumberToSignedBytes(step));

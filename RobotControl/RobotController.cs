@@ -44,8 +44,8 @@ namespace Controller.RobotControl
         private bool startHoming = false;
         private String homingState = "WaitingForStart";
         private double homedJointDeg = 0; // J1 when homed is at 0
-        private double verticalHomed = 200; // Z Height when homed
-        private double horizontalHomed = 60; // Horizontal distance when homed
+        private double verticalHomed = 305; // Z Height when homed
+        private double horizontalHomed = 254; // Horizontal distance when homed
 
         private JoggingMotionProfiler joggingMotionProfiler = new();
         private JoggingMotionProfiler jointJoggingProfiler = new();
@@ -59,6 +59,8 @@ namespace Controller.RobotControl
         {
             stb.Reset();
             stb.Start();
+
+            stb.Motor2.InvertDirection = true;
 
             new Thread(Loop) { IsBackground = true }.Start();
         }
@@ -77,7 +79,7 @@ namespace Controller.RobotControl
                 RunHoming();
 
                 // Let the stepper motor drive towards the new targets
-                stb.Loop(linearMotionProfiler is not null || jointMotionProfiler is not null);
+                stb.moving = IsMoving;
             }
         }
 
@@ -158,6 +160,10 @@ namespace Controller.RobotControl
                     startHoming = true;
                     break;
 
+                case "SetHomed":
+                    SetAllHomed();
+                    break;
+
                 case "GetStatus":
                     {
                         Vector6 pose = TBot.GetVisualRobotPose(CurrentPosition, CurrentTool);
@@ -221,6 +227,27 @@ namespace Controller.RobotControl
 
             // instance logic here
             return Task.FromResult((object)payload);
+        }
+        public void SetAllHomed()
+        {
+            double m1Deg, m2Deg, m3Deg;
+            // Offset the current joint angle
+            TBot.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
+            TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
+            TBot.InterpolatedJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
+            TBot.CurrentJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
+            TBot.InterpolatedJoint2.Cartesian = (TBot.InterpolatedJoint2.Cartesian.x, verticalHomed);
+            TBot.CurrentJoint2.Cartesian = (TBot.CurrentJoint2.Cartesian.x, verticalHomed);
+
+            // Recalculate the position and joint targets
+            CurrentPosition = TBot.TcpPosition(CurrentTool);
+            CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+
+            // Have the robot update its joints
+            TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg);
+
+            // Drive the motors to the target
+            stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg);
         }
         public void RunHoming()
         {
@@ -388,7 +415,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "JogJ":
-                    MoveJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    JogJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 default:
