@@ -12,6 +12,7 @@ public class StepperMotor
     public double StepsToAngle { get; }
 
     public double TargetAngle { get; private set; }
+    public bool InvertDirection { get; set; }
 
     public StepperMotor(int pin, int stepsPerRev, double gearRatio,  double startingAngle)
     {
@@ -37,4 +38,5 @@ public class StepperMotor
         CurrentSteps = TargetSteps;
     }
     public void Stop() => TargetAngle = CurrentAngle;
+
 }

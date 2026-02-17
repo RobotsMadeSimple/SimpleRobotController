@@ -69,14 +69,13 @@ namespace Controller.RobotControl.MotionProfilers
 
             IsFinished = false;
 
-            // average velocity integration (prevents the “first tick jump”)
             return new Vector6(
-                currentPosition.X + (velPrev.X + _vel.X) * 0.5 * dt,
-                currentPosition.Y + (velPrev.Y + _vel.Y) * 0.5 * dt,
-                currentPosition.Z + (velPrev.Z + _vel.Z) * 0.5 * dt,
-                currentPosition.RX + (velPrev.RX + _vel.RX) * 0.5 * dt,
-                currentPosition.RY + (velPrev.RY + _vel.RY) * 0.5 * dt,
-                currentPosition.RZ + (velPrev.RZ + _vel.RZ) * 0.5 * dt
+                currentPosition.X + _vel.X * dt,
+                currentPosition.Y + _vel.Y * dt,
+                currentPosition.Z + _vel.Z * dt,
+                currentPosition.RX + _vel.RX * dt,
+                currentPosition.RY + _vel.RY * dt,
+                currentPosition.RZ + _vel.RZ * dt
             );
         }
 
