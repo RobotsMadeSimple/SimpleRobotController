@@ -57,7 +57,6 @@ namespace Controller.RobotControl
 
         public RobotController()
         {
-            stb.Reset();
             stb.Start();
 
             stb.Motor2.InvertDirection = true;
@@ -162,6 +161,10 @@ namespace Controller.RobotControl
 
                 case "SetHomed":
                     SetAllHomed();
+                    break;
+
+                case "Reset":
+                    stb.Reset();
                     break;
 
                 case "GetStatus":
@@ -296,7 +299,7 @@ namespace Controller.RobotControl
 
                 case "HomeVertical":
                     jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 100000, 0.01);
-                    if (stb.Input3)
+                    if (stb.Input2)
                     {
                         homingState = "WaitVerticalMoveComplete";
                     }
@@ -326,7 +329,7 @@ namespace Controller.RobotControl
 
                 case "HomeHorizontal":
                     jointJoggingProfiler.Jog(new(0, 1), 20, 100, 100000, 0.01);
-                    if (stb.Input2)
+                    if (stb.Input3)
                     {
                         homingState = "WaitHorizontalMoveComplete";
                     }
