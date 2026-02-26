@@ -14,7 +14,7 @@ namespace Controller.RobotControl.MotionProfilers
         private bool _started;
         private Stopwatch autoResetSw = new();
         private double defaultResetTime = 0.1f;
-        private double resetTime = 0.1f;
+        private double resetTime = 0.6f;
 
         public bool IsFinished { get; private set; } = true;
         public double StopEpsilon { get; set; } = 1e-6;

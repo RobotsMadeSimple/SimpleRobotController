@@ -124,7 +124,7 @@ public class STB4100
         var sw = Stopwatch.StartNew();
         long nextTick = 0;
 
-        const double periodSec = 0.004; // 4ms
+        double periodSec = 0.004; // 4ms
         long periodTicks = (long)(periodSec * Stopwatch.Frequency);
 
         while (true)
@@ -134,7 +134,20 @@ public class STB4100
             if (now >= nextTick)
             {
                 Loop();
+
+                if (moving)
+                {
+                    periodSec = 0.005; // 5ms
+                    periodTicks = (long)(periodSec * Stopwatch.Frequency);
+                }
+                else
+                {
+                    periodSec = 0.02; // 20ms
+                    periodTicks = (long)(periodSec * Stopwatch.Frequency);
+                }
+
                 nextTick += periodTicks;
+                
             }
 
             // Small spin wait to reduce CPU burn but keep timing tight
@@ -147,7 +160,7 @@ public class STB4100
     {
         while (true)
         {
-            if (_statusTimer.ElapsedMilliseconds >= 40)
+            if (_statusTimer.ElapsedMilliseconds >= 20)
             {
                 GetStatus();
                 _statusTimer.Restart();
@@ -298,8 +311,8 @@ public class STB4100
         }
         else if (command == "Reset")
         {
-            send.AddRange([34, 0, 34, 0, 34, 0, 34, 0]);   // Bytes 5–12
-            send.AddRange([68, 0, 255, 100, 5]);         // Bytes 13–17
+            send.AddRange([0, 0, 0, 0, 0, 0, 0, 0]);   // Bytes 5–12
+            send.AddRange([0, 0, 0, 100, 5]);         // Bytes 13–17
             send.AddRange(BitTools.NumberToBytes(0, 9));              // Bytes 18–26
         }
         if (_stream is null)
@@ -319,10 +332,19 @@ public class STB4100
         };
 
         send.AddRange(BitTools.NumberToBytes(_commandCount++, 2));
-        send.Add(0);
-        send.Add(0);
-        send.Add(0);
-        send.Add(0);
+        send.Add(0); // Outputs Byte
+        send.Add(0); // Padding?
+        if (command == 14)
+        {
+            send.Add(5);
+            send.Add(0);
+        }
+        else
+        {
+            send.Add(0);
+            send.Add(0);
+        }
+            
 
         if (_stream is null)
             return;
