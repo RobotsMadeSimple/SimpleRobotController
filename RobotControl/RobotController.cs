@@ -43,9 +43,9 @@ namespace Controller.RobotControl
         private bool homed = false;
         private bool startHoming = false;
         private String homingState = "WaitingForStart";
-        private double homedJointDeg = 0; // J1 when homed is at 0
-        private double verticalHomed = 305; // Z Height when homed
-        private double horizontalHomed = 254; // Horizontal distance when homed
+        private double homedJointDeg = -11; // J1 when homed is at 0
+        private double verticalHomed = 445; // Z Height when homed
+        private double horizontalHomed = 413; // Horizontal distance when homed
 
         private JoggingMotionProfiler joggingMotionProfiler = new();
         private JoggingMotionProfiler jointJoggingProfiler = new();
@@ -59,7 +59,7 @@ namespace Controller.RobotControl
         {
             stb.Start();
 
-            stb.Motor2.InvertDirection = true;
+            stb.Motor3.InvertDirection = true;
 
             new Thread(Loop) { IsBackground = true }.Start();
         }
@@ -260,45 +260,11 @@ namespace Controller.RobotControl
             {
                 case "WaitingForStart":
                     if (startHoming)
-                        homingState = "HomeJ1";
-                    break;
-
-                case "HomeJ1":
-                    Vector6 J1JogDirection = new(1);
-                    jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 100000, 0.01);
-                    if (stb.Input1)
-                    {
-                        homingState = "WaitJ1MoveComplete";
-                    }
-                    break;
-
-                case "WaitJ1MoveComplete":
-                    if (!IsMoving)
-                    {
-                        homingState = "SetJ1MotorHomed";
-                    }
-                    break;
-
-                case "SetJ1MotorHomed":
-                    // Offset the current joint angle
-                    TBot.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
-                    TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
-
-                    // Recalculate the position and joint targets
-                    CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
-
-                    // Have the robot update its joints
-                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg);
-
-                    // Drive the motors to the target
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg);
-
-                    homingState = "HomeVertical";
+                        homingState = "HomeVertical";
                     break;
 
                 case "HomeVertical":
-                    jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 100000, 0.01);
+                    jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input2)
                     {
                         homingState = "WaitVerticalMoveComplete";
@@ -328,7 +294,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeHorizontal":
-                    jointJoggingProfiler.Jog(new(0, 1), 20, 100, 100000, 0.01);
+                    jointJoggingProfiler.Jog(new(0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input3)
                     {
                         homingState = "WaitHorizontalMoveComplete";
@@ -346,6 +312,39 @@ namespace Controller.RobotControl
                     // Offset the current joint angle
                     TBot.InterpolatedJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
                     TBot.CurrentJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
+
+                    CurrentPosition = TBot.TcpPosition(CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+
+                    // Have the robot update its joints
+                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg);
+
+                    // Drive the motors to the target
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg);
+
+                    homingState = "HomeJ1";
+                    break;
+
+                case "HomeJ1":
+                    Vector6 J1JogDirection = new(1);
+                    jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 10000000, 0.001);
+                    if (stb.Input1)
+                    {
+                        homingState = "WaitJ1MoveComplete";
+                    }
+                    break;
+
+                case "WaitJ1MoveComplete":
+                    if (!IsMoving)
+                    {
+                        homingState = "SetJ1MotorHomed";
+                    }
+                    break;
+
+                case "SetJ1MotorHomed":
+                    // Offset the current joint angle
+                    TBot.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
+                    TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
 
                     CurrentPosition = TBot.TcpPosition(CurrentTool);
                     CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);

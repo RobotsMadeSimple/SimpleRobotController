@@ -137,12 +137,12 @@ public class STB4100
 
                 if (moving)
                 {
-                    periodSec = 0.004; // 4ms
+                    periodSec = 0.005; // 5ms
                     periodTicks = (long)(periodSec * Stopwatch.Frequency);
                 }
                 else
                 {
-                    periodSec = 0.02; // 40ms
+                    periodSec = 0.02; // 20ms
                     periodTicks = (long)(periodSec * Stopwatch.Frequency);
                 }
 
