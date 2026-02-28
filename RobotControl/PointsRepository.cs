@@ -9,6 +9,7 @@ public class PointRepository
 {
     private readonly string _pointsFile;
     private readonly string _historyFile;
+    public string? pointsJson;
 
     private readonly JsonSerializerOptions _jsonOptions;
 
@@ -42,8 +43,8 @@ public class PointRepository
             return;
         }
 
-        var json = File.ReadAllText(_pointsFile);
-        var list = JsonSerializer.Deserialize<List<Point>>(json, _jsonOptions)
+        pointsJson = File.ReadAllText(_pointsFile);
+        var list = JsonSerializer.Deserialize<List<Point>>(pointsJson, _jsonOptions)
                    ?? new List<Point>();
 
         Points = list
@@ -53,8 +54,8 @@ public class PointRepository
 
     public void Save()
     {
-        var json = JsonSerializer.Serialize(Points.Values.ToList(), _jsonOptions);
-        File.WriteAllText(_pointsFile, json);
+        pointsJson = JsonSerializer.Serialize(Points.Values.ToList(), _jsonOptions);
+        File.WriteAllText(_pointsFile, pointsJson);
     }
 
     private void LoadHistory()

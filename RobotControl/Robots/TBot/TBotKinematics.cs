@@ -1,168 +1,289 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Text;
+using System.Numerics;
 
 namespace Controller.RobotControl.Robots.TBot
 {
     internal class TBotKinematics
     {
         private static readonly double pulley30tPcd = 19.099;
+
+        // ======= Mechanical Offset =======
+        // Offset from J1 column center to J4 axis (mm)
+        // Expressed in flange-local coordinates
+        private static readonly Vector3 J4OffsetLocal = new Vector3(
+            0f,  // X offset (Radial Offset)
+            48.356f,   // Y offset (Offcenter Distance)
+            0f    // Z offset
+        );
+
+        // ======= Interpolated Joints =======
         public RotaryJoint InterpolatedJoint1 { get; } = new RotaryJoint(120 / 30);
         public CoreXYStage InterpolatedJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
+        public RotaryJoint InterpolatedJoint4 { get; } = new RotaryJoint(1);
 
+        // ======= Current Joints =======
         public RotaryJoint CurrentJoint1 { get; } = new RotaryJoint(120 / 30);
         public CoreXYStage CurrentJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
+        public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(1);
 
         public TBotKinematics() { }
 
+        // ============================================================
+        // FORWARD KINEMATICS
+        // ============================================================
+        public Vector6 TcpPosition(Vector6 toolOffset)
+        {
+            double j1Rad = CurrentJoint1.JointAngleRad;
+            double j4Rad = CurrentJoint4.JointAngleRad;
+
+            var (radial, flangeZ) = CurrentJoint2.Cartesian;
+
+            // --- Flange centerline position ---
+            Vector3 flange = new Vector3(
+                (float)(radial * Math.Cos(j1Rad)),
+                (float)(radial * Math.Sin(j1Rad)),
+                (float)flangeZ
+            );
+
+            // --- J4 axis world position ---
+            Matrix4x4 Rj1 = Matrix4x4.CreateRotationZ((float)j1Rad);
+            Vector3 j4OffsetWorld = Vector3.Transform(J4OffsetLocal, Rj1);
+            Vector3 j4World = flange + j4OffsetWorld;
+
+            // --- Tool world position ---
+            // Tool rotates by (J1 + J4)
+            Matrix4x4 Rtool = Matrix4x4.CreateRotationZ((float)(j1Rad + j4Rad));
+
+            Vector3 toolWorld = Vector3.Transform(
+                new Vector3((float)toolOffset.X,
+                            (float)toolOffset.Y,
+                            (float)toolOffset.Z),
+                Rtool
+            );
+
+            Vector3 tcp = j4World + toolWorld;
+
+            return new Vector6(
+                tcp.X,
+                tcp.Y,
+                tcp.Z,
+                0,
+                0,
+                CurrentJoint1.JointAngleDeg + CurrentJoint4.JointAngleDeg
+            );
+        }
+
+        // ============================================================
+        // INVERSE KINEMATICS
+        // ============================================================
+        // Solves J1, radial, vertical, J4
+        // TCP.RZ = world tool orientation = J1 + J4
+        // Tool offset defined relative to J4 axis
         public static Vector6 InverseKinematics(
             Vector6 tcp,
             Vector6 toolOffset
         )
         {
-            // TCP in world (mm)
             double tcpX = tcp.X;
             double tcpY = tcp.Y;
             double tcpZ = tcp.Z;
 
-            // Tool offset in flange-local (mm)
-            double tX = toolOffset.X;
-            double tY = toolOffset.Y;
-            double tZ = toolOffset.Z;
+            double desiredWorldRzDeg = tcp.RZ;
+            double desiredWorldRzRad = desiredWorldRzDeg * Math.PI / 180.0;
 
-            // -----------------------------
-            // 1) Solve J1 rotation (tooling-aware)
-            //    Initial guess: angle to TCP (good start)
-            // -----------------------------
+            // --- Solve J1 ignoring J4 first (initial guess) ---
             double j1Rad = Math.Atan2(tcpY, tcpX);
 
-            // Iterate to account for lateral tool offsets
-            // 3-5 iterations is plenty; converges fast for realistic tool lengths.
-            for (int i = 0; i < 6; i++)
+            for (int i = 0; i < 8; i++)
             {
-                double cos = Math.Cos(j1Rad);
-                double sin = Math.Sin(j1Rad);
+                // J4 from world orientation
+                double j4Rad = desiredWorldRzRad - j1Rad;
 
-                // Rotate tool offset into world XY
-                double toolXw = tX * cos - tY * sin;
-                double toolYw = tX * sin + tY * cos;
+                double c1 = Math.Cos(j1Rad);
+                double s1 = Math.Sin(j1Rad);
 
-                // Flange position in XY
-                double flangeX = tcpX - toolXw;
-                double flangeY = tcpY - toolYw;
+                // Flange center
+                double flangeX = tcpX;
+                double flangeY = tcpY;
 
-                double newJ1Rad = Math.Atan2(flangeY, flangeX);
+                // Remove tool contribution
+                double toolRot = j1Rad + j4Rad;
 
-                // Early exit if converged
-                if (Math.Abs(newJ1Rad - j1Rad) < 1e-12)
+                double toolXw =
+                    toolOffset.X * Math.Cos(toolRot)
+                  - toolOffset.Y * Math.Sin(toolRot);
+
+                double toolYw =
+                    toolOffset.X * Math.Sin(toolRot)
+                  + toolOffset.Y * Math.Cos(toolRot);
+
+                flangeX -= toolXw;
+                flangeY -= toolYw;
+
+                // Remove J4 axis offset
+                double j4OffX =
+                    J4OffsetLocal.X * c1
+                  - J4OffsetLocal.Y * s1;
+
+                double j4OffY =
+                    J4OffsetLocal.X * s1
+                  + J4OffsetLocal.Y * c1;
+
+                flangeX -= j4OffX;
+                flangeY -= j4OffY;
+
+                double newJ1 = Math.Atan2(flangeY, flangeX);
+
+                if (Math.Abs(newJ1 - j1Rad) < 1e-10)
                 {
-                    j1Rad = newJ1Rad;
+                    j1Rad = newJ1;
                     break;
                 }
 
-                j1Rad = newJ1Rad;
+                j1Rad = newJ1;
             }
 
-            double j1Deg = j1Rad * 180.0 / Math.PI;
+            double j4FinalRad = desiredWorldRzRad - j1Rad;
 
-            // -----------------------------
-            // 2) Compute flange position (final, using converged j1)
-            // -----------------------------
+            // --- Compute final flange center ---
             double c = Math.Cos(j1Rad);
             double s = Math.Sin(j1Rad);
 
-            double toolXwFinal = tX * c - tY * s;
-            double toolYwFinal = tX * s + tY * c;
-            double toolZwFinal = tZ;
+            double toolRotFinal = j1Rad + j4FinalRad;
 
-            double flangeXFinal = tcpX - toolXwFinal;
-            double flangeYFinal = tcpY - toolYwFinal;
-            double flangeZFinal = tcpZ - toolZwFinal;
+            double toolXwFinal =
+                toolOffset.X * Math.Cos(toolRotFinal)
+              - toolOffset.Y * Math.Sin(toolRotFinal);
 
-            // -----------------------------
-            // 3) Solve radial distance (flange)
-            // -----------------------------
-            double radial = Math.Sqrt(flangeXFinal * flangeXFinal + flangeYFinal * flangeYFinal);
+            double toolYwFinal =
+                toolOffset.X * Math.Sin(toolRotFinal)
+              + toolOffset.Y * Math.Cos(toolRotFinal);
 
-            // -----------------------------
-            // 4) Return joint-space (radial + vertical)
-            // -----------------------------
+            double j4OffXFinal =
+                J4OffsetLocal.X * c
+              - J4OffsetLocal.Y * s;
+
+            double j4OffYFinal =
+                J4OffsetLocal.X * s
+              + J4OffsetLocal.Y * c;
+
+            double flangeXFinal = tcpX - toolXwFinal - j4OffXFinal;
+            double flangeYFinal = tcpY - toolYwFinal - j4OffYFinal;
+            double flangeZFinal = tcpZ - toolOffset.Z - J4OffsetLocal.Z;
+
+            double radial = Math.Sqrt(
+                flangeXFinal * flangeXFinal +
+                flangeYFinal * flangeYFinal
+            );
+
             return new Vector6
             {
-                X = j1Deg,          // J1 rotation (deg)
-                Y = radial,         // CoreXY radial component (mm)
-                Z = flangeZFinal,   // CoreXY vertical component (mm)
+                X = j1Rad * 180.0 / Math.PI,
+                Y = radial,
+                Z = flangeZFinal,
                 RX = 0,
                 RY = 0,
-                RZ = 0
+                RZ = j4FinalRad * 180.0 / Math.PI
             };
         }
-        public Vector6 TcpPosition(Vector6 CurrentTool)
+
+        // ============================================================
+        // MOTOR TARGET UPDATE
+        // ============================================================
+        public void UpdateJointTargets(
+            Vector6 JointTargets,
+            out double m1Deg,
+            out double m2Deg,
+            out double m3Deg,
+            out double m4Deg
+        )
         {
-            double j1Rad = CurrentJoint1.JointAngleRad;
-
-            // radial (mm) and flangeZ (mm)
-            var (radial, flangeZ) = CurrentJoint2.Cartesian;
-
-            double flangeX = radial * Math.Cos(j1Rad);
-            double flangeY = radial * Math.Sin(j1Rad);
-
-            double toolXw = CurrentTool.X * Math.Cos(j1Rad) - CurrentTool.Y * Math.Sin(j1Rad);
-            double toolYw = CurrentTool.X * Math.Sin(j1Rad) + CurrentTool.Y * Math.Cos(j1Rad);
-
-            return new Vector6(
-                flangeX + toolXw,
-                flangeY + toolYw,
-                flangeZ + CurrentTool.Z
-            );
-        }
-
-        public Vector6 GetVisualRobotPose(Vector6 CurrentPosition, Vector6 CurrentTool)
-        {
-            // J1 from actual joint state (recommended)
-            double j1Deg = CurrentJoint1.JointAngleDeg;
-            float j1Rad = (float)(j1Deg * Math.PI / 180.0);
-
-            // TCP position (world, mm)
-            var tcp = new System.Numerics.Vector3(
-                (float)CurrentPosition.X,
-                (float)CurrentPosition.Y,
-                (float)CurrentPosition.Z
-            );
-
-            // Tool offset in flange-local (mm)
-            var toolLocal = new System.Numerics.Vector3(
-                (float)CurrentTool.X,
-                (float)CurrentTool.Y,
-                (float)CurrentTool.Z
-            );
-
-            // Rotate tool offset into world (about Z)
-            var Rz = System.Numerics.Matrix4x4.CreateRotationZ(j1Rad);
-            var toolWorld = System.Numerics.Vector3.TransformNormal(toolLocal, Rz);
-
-            // Flange position = TCP - tool(world)
-            var flange = tcp - toolWorld;
-
-            // Joint-friendly values
-            double radial = Math.Sqrt(flange.X * flange.X + flange.Y * flange.Y);
-            double vertical = flange.Z;
-
-            return new(j1Deg, radial, vertical);
-        }
-
-        public void UpdateJointTargets(Vector6 JointTargets, out double m1Deg, out double m2Deg, out double m3Deg)
-        {
-            // Joint Targets are Joint Angles and Belt Length 1 and Belt Length 2
+            // J1
             InterpolatedJoint1.JointAngleDeg = JointTargets.X;
             m1Deg = InterpolatedJoint1.MotorAngleDeg;
+
+            // CoreXY
             InterpolatedJoint2.Cartesian = (JointTargets.Y, JointTargets.Z);
             (m2Deg, m3Deg) = InterpolatedJoint2.GetLinears();
 
-            // Update the current Joint poses with the new target motor angles
+            // J4
+            InterpolatedJoint4.JointAngleDeg = JointTargets.RZ;
+            m4Deg = InterpolatedJoint4.MotorAngleDeg;
+
+            // Update current states
             CurrentJoint1.MotorAngleDeg = m1Deg;
             CurrentJoint2.Motor1AngleDeg = m2Deg;
             CurrentJoint2.Motor2AngleDeg = m3Deg;
+            CurrentJoint4.MotorAngleDeg = m4Deg;
+        }
+
+        public Vector6 GetVisualRobotPose(Vector6 currentTcp, Vector6 toolOffset)
+        {
+            // ----- Current joint angles -----
+            double j1Deg = CurrentJoint1.JointAngleDeg;
+            double j4Deg = CurrentJoint4.JointAngleDeg;
+
+            double j1Rad = j1Deg * Math.PI / 180.0;
+            double j4Rad = j4Deg * Math.PI / 180.0;
+
+            // ----- World TCP -----
+            Vector3 tcp = new Vector3(
+                (float)currentTcp.X,
+                (float)currentTcp.Y,
+                (float)currentTcp.Z
+            );
+
+            // ----- Build transforms -----
+
+            // 1) Remove tool contribution
+            double toolWorldAngle = j1Rad + j4Rad;
+
+            Vector3 toolWorld = new Vector3(
+                (float)(
+                    toolOffset.X * Math.Cos(toolWorldAngle)
+                  - toolOffset.Y * Math.Sin(toolWorldAngle)
+                ),
+                (float)(
+                    toolOffset.X * Math.Sin(toolWorldAngle)
+                  + toolOffset.Y * Math.Cos(toolWorldAngle)
+                ),
+                (float)toolOffset.Z
+            );
+
+            Vector3 afterToolRemoval = tcp - toolWorld;
+
+            // 2) Remove J4 axis offset
+            Vector3 j4OffsetWorld = new Vector3(
+                (float)(
+                    J4OffsetLocal.X * Math.Cos(j1Rad)
+                  - J4OffsetLocal.Y * Math.Sin(j1Rad)
+                ),
+                (float)(
+                    J4OffsetLocal.X * Math.Sin(j1Rad)
+                  + J4OffsetLocal.Y * Math.Cos(j1Rad)
+                ),
+                J4OffsetLocal.Z
+            );
+
+            Vector3 flange = afterToolRemoval - j4OffsetWorld;
+
+            // ----- Convert to joint-friendly coordinates -----
+
+            double radial = Math.Sqrt(
+                flange.X * flange.X +
+                flange.Y * flange.Y
+            );
+
+            double vertical = flange.Z;
+
+            return new Vector6(
+                j1Deg,
+                radial,
+                vertical,
+                0,
+                0,
+                j4Deg
+            );
         }
     }
 }
