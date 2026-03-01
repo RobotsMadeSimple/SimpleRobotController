@@ -13,8 +13,12 @@ public class PointRepository
 
     private readonly JsonSerializerOptions _jsonOptions;
 
+    // Unix ms when this point was last created or modified
+    public long LastUpdatedUnixMs { get; set; }
+
     public Dictionary<string, Point> Points { get; private set; } = new();
     private Dictionary<string, List<PointHistoryEntry>> History { get; set; } = new();
+    
 
     public PointRepository(
         string pointsFile = "points.json",
@@ -54,6 +58,7 @@ public class PointRepository
 
     public void Save()
     {
+        LastUpdatedUnixMs = NowUnixMs();
         pointsJson = JsonSerializer.Serialize(Points.Values.ToList(), _jsonOptions);
         File.WriteAllText(_pointsFile, pointsJson);
     }
@@ -80,10 +85,12 @@ public class PointRepository
 
     // -------------------- CREATE --------------------
 
-    public Point CreatePoint(Dictionary<string, object?> values)
+    public Point SavePoint(string name, Vector6 vector)
     {
         var point = new Point();
-        ApplyValues(point, values);
+        point.Copy(vector);
+        point.Name = name;
+        point.LastUpdatedUnixMs = NowUnixMs();
 
         if (string.IsNullOrWhiteSpace(point.Name))
             throw new Exception("Point must have a Name");
@@ -113,6 +120,8 @@ public class PointRepository
             Points.Remove(name);
             Points[point.Name!] = point;
         }
+
+        point.LastUpdatedUnixMs = NowUnixMs();
 
         AddHistory(point);
 
@@ -189,5 +198,10 @@ public class PointRepository
             var converted = Convert.ChangeType(kvp.Value, prop.PropertyType);
             prop.SetValue(point, converted);
         }
+    }
+
+    private static long NowUnixMs()
+    {
+        return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 }

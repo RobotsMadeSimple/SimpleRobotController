@@ -63,22 +63,23 @@ namespace Controller.RobotControl.Robots.TBot
 
             Vector3 tcp = j4World + toolWorld;
 
+            double worldRzMath =
+                CurrentJoint1.JointAngleDeg +
+                CurrentJoint4.JointAngleDeg;
+
             return new Vector6(
                 tcp.X,
                 tcp.Y,
                 tcp.Z,
                 0,
                 0,
-                CurrentJoint1.JointAngleDeg + CurrentJoint4.JointAngleDeg
+                worldRzMath * -1
             );
         }
 
         // ============================================================
         // INVERSE KINEMATICS
         // ============================================================
-        // Solves J1, radial, vertical, J4
-        // TCP.RZ = world tool orientation = J1 + J4
-        // Tool offset defined relative to J4 axis
         public static Vector6 InverseKinematics(
             Vector6 tcp,
             Vector6 toolOffset
@@ -88,7 +89,8 @@ namespace Controller.RobotControl.Robots.TBot
             double tcpY = tcp.Y;
             double tcpZ = tcp.Z;
 
-            double desiredWorldRzDeg = tcp.RZ;
+            // Convert operator RZ -> math RZ
+            double desiredWorldRzDeg = tcp.RZ * -1;
             double desiredWorldRzRad = desiredWorldRzDeg * Math.PI / 180.0;
 
             // --- Solve J1 ignoring J4 first (initial guess) ---
@@ -219,7 +221,6 @@ namespace Controller.RobotControl.Robots.TBot
 
         public Vector6 GetVisualRobotPose(Vector6 currentTcp, Vector6 toolOffset)
         {
-            // ----- Current joint angles -----
             double j1Deg = CurrentJoint1.JointAngleDeg;
             double j4Deg = CurrentJoint4.JointAngleDeg;
 
