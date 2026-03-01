@@ -1,12 +1,6 @@
 ﻿using Controller.RobotControl.Robots.TBot;
 using Controller.RobotControl.MotionProfilers;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Numerics;
-using System.Text;
 using System.Text.Json;
-using System.Runtime.InteropServices.Swift;
 
 namespace Controller.RobotControl
 {
@@ -174,6 +168,10 @@ namespace Controller.RobotControl
                     };
                     break;
 
+                case "Teach":
+                    pointRepo.SavePoint("Name", CurrentPosition);
+                    break;
+
                 case "GetStatus":
                     {
                         Vector6 pose = TBot.GetVisualRobotPose(CurrentPosition, CurrentTool);
@@ -183,6 +181,7 @@ namespace Controller.RobotControl
                             moving = IsMoving,
                             wasHomed = homed,
                             homingState = this.homingState,
+                            lastPointUpdate = pointRepo.LastUpdatedUnixMs,
 
                             x = CurrentPosition.X,
                             y = CurrentPosition.Y,
@@ -244,16 +243,24 @@ namespace Controller.RobotControl
                 return;
 
             RobotCommand? Command = QueuedCommands[0];
-
-            if (Command is null || IsMoving)
-            {
+            
+            if (Command is null)
                 return;
-            }
 
-            switch (Command.CommandType)
+            string CommandType = Command.CommandType ?? "";
+
+            if (IsMoving && !CommandType.Contains("Jog"))
+                return;
+
+            switch (CommandType)
             {
                 case "MoveL":
                     MoveL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    break;
+
+                case "OffsetL":
+                    Vector6 NewPosition = CurrentPosition + Command.Vector6;
+                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 case "MoveJ":

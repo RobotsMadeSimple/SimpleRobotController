@@ -200,6 +200,9 @@ public class Point: Vector6
 {
     public string? Name { get; set; }
 
+    // Unix ms when this point was last created or modified
+    public long LastUpdatedUnixMs { get; set; }
+
 }
 public class PointHistoryEntry
 {

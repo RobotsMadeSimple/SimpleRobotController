@@ -4,6 +4,7 @@
       "TimestampUnixMs": 1770880604768,
       "Point": {
         "Name": "Pick",
+        "LastUpdatedUnixMs": 0,
         "X": 100,
         "Y": 200,
         "Z": 75,
@@ -16,12 +17,145 @@
       "TimestampUnixMs": 1770880604765,
       "Point": {
         "Name": "Pick",
+        "LastUpdatedUnixMs": 0,
         "X": 100,
         "Y": 200,
         "Z": 50,
         "RX": 0,
         "RY": 0,
         "RZ": 0
+      }
+    }
+  ],
+  "Name": [
+    {
+      "TimestampUnixMs": 1772356104195,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 1772356104195,
+        "X": 18.410075276069744,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1772356103661,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 1772356103661,
+        "X": 18.410075276069744,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1772356101861,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 1772356101861,
+        "X": 14.4421516677734,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1772356100338,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 1772356100338,
+        "X": 14.4421516677734,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1772356095923,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 1772356095922,
+        "X": 14.4421516677734,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1772356057970,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 0,
+        "X": 34.715171129757884,
+        "Y": -0.3027668624064906,
+        "Z": 4.4278958099361585,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 5.128388467721269
+      }
+    },
+    {
+      "TimestampUnixMs": 1772356046244,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 0,
+        "X": 34.715171129757884,
+        "Y": -0.3027668624064906,
+        "Z": 4.4278958099361585,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 5.128388467721269
+      }
+    },
+    {
+      "TimestampUnixMs": 1772356040576,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 0,
+        "X": 34.715171129757884,
+        "Y": -0.3027668624064906,
+        "Z": 4.4278958099361585,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 5.128388467721269
+      }
+    },
+    {
+      "TimestampUnixMs": 1772355725247,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 0,
+        "X": 34.715171129757884,
+        "Y": -0.3027668624064906,
+        "Z": 4.4278958099361585,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 5.128388467721269
+      }
+    },
+    {
+      "TimestampUnixMs": 1772355718046,
+      "Point": {
+        "Name": "Name",
+        "LastUpdatedUnixMs": 0,
+        "X": 34.715171129757884,
+        "Y": -0.3027668624064906,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 5.128388467721269
       }
     }
   ]

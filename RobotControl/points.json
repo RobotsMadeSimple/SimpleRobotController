@@ -1,6 +1,7 @@
 [
   {
     "Name": "Home",
+    "LastUpdatedUnixMs": 0,
     "X": 0,
     "Y": 0,
     "Z": 100,
@@ -10,6 +11,7 @@
   },
   {
     "Name": "Point1",
+    "LastUpdatedUnixMs": 0,
     "X": 100,
     "Y": 100,
     "Z": 100,
@@ -19,6 +21,7 @@
   },
   {
     "Name": "Point2",
+    "LastUpdatedUnixMs": 0,
     "X": 300,
     "Y": 300,
     "Z": 300,
@@ -28,9 +31,20 @@
   },
   {
     "Name": "Point3",
+    "LastUpdatedUnixMs": 0,
     "X": 200,
     "Y": 200,
     "Z": 200,
+    "RX": 0,
+    "RY": 0,
+    "RZ": 0
+  },
+  {
+    "Name": "Name",
+    "LastUpdatedUnixMs": 1772356104195,
+    "X": 18.410075276069744,
+    "Y": 0,
+    "Z": 0,
     "RX": 0,
     "RY": 0,
     "RZ": 0
