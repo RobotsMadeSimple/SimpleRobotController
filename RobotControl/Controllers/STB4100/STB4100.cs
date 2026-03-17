@@ -91,7 +91,7 @@ public class STB4100
             connected = true;
             return _stream != null && _stream.CanRead && _stream.CanWrite;
         }
-        catch (Exception ex) {
+        catch (Exception ex)
         {
             Console.WriteLine("Error trying to connect to STB4100: " + ex);
             _stream = null;
