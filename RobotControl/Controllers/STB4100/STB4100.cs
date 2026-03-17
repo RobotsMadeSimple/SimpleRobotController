@@ -70,6 +70,11 @@ public class STB4100
         if (_device != null && _stream != null && _stream.CanRead && _stream.CanWrite)
             return true;
 
+        foreach (var d in DeviceList.Local.GetHidDevices())
+        {
+            Console.WriteLine($"{d.ProductID} {d.VendorID:X4}:{d.ProductID:X4}");
+        }
+
         // Get the first available device that matches vendor and product identifications
         _device = DeviceList.Local.GetHidDeviceOrNull(VendorId, ProductId);
         if (_device == null)
