@@ -108,7 +108,7 @@ public class RobotWebSocketServer
                     var ack = new Dictionary<string, object?>
                     {
                         ["type"] = "ack",
-                        ["command"] = cmd,
+                        ["command"] = cmd.Command.Clone(),
                         ["id"] = cmd.Id,
                         ["ok"] = true
                     };
