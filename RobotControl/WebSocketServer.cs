@@ -118,7 +118,7 @@ public class RobotWebSocketServer
                     if (resultObj != null)
                     {
                         // Serialize result object to JSON
-                        var resultJson = JsonSerializer.Serialize(resultObj);
+                        var resultJson = JsonSerializer.Serialize(resultObj, JsonOpts);
 
                         // Parse into JsonDocument
                         using var doc = JsonDocument.Parse(resultJson);
