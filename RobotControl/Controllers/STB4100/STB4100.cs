@@ -78,17 +78,22 @@ public class STB4100
         // Get the first available device that matches vendor and product identifications
         _device = DeviceList.Local.GetHidDeviceOrNull(VendorId, ProductId);
         if (_device == null)
+        {
+            Console.WriteLine("STB4100 could not be found");
             return false;
+        }
 
         // Get that stream open!
         try
         {
+            Console.WriteLine("STB4100 found! Opening Connection");
             _stream = _device.Open();
             connected = true;
             return _stream != null && _stream.CanRead && _stream.CanWrite;
         }
-        catch
+        catch (Exception ex) {
         {
+            Console.WriteLine("Error trying to connect to STB4100: " + ex);
             _stream = null;
             _device = null;
             connected = false;
