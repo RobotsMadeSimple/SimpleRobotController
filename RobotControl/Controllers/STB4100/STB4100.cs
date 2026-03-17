@@ -32,6 +32,7 @@ public class STB4100
         { 7, "Stopping" }
     };
 
+    public bool connected;
     public int status;
     private int _commandCount;
     private bool _ready;
@@ -78,12 +79,14 @@ public class STB4100
         try
         {
             _stream = _device.Open();
+            connected = true;
             return _stream != null && _stream.CanRead && _stream.CanWrite;
         }
         catch
         {
             _stream = null;
             _device = null;
+            connected = false;
             return false;
         }
     }

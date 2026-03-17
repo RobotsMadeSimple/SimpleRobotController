@@ -207,6 +207,7 @@ namespace Controller.RobotControl
                             wasHomed = homed,
                             homingState = this.homingState,
                             lastPointUpdate = pointRepo.LastUpdatedUnixMs,
+                            driverConnected = stb.connected,
 
                             x = CurrentPosition.X,
                             y = CurrentPosition.Y,
