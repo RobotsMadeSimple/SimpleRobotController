@@ -24,7 +24,7 @@ namespace Controller.RobotControl.Robots.TBot
         // ======= Current Joints =======
         public RotaryJoint CurrentJoint1 { get; } = new RotaryJoint(120 / 30);
         public CoreXYStage CurrentJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
-        public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(10);
+        public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(1/10);
 
         public TBotKinematics() { }
 
