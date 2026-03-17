@@ -19,7 +19,7 @@ namespace Controller.RobotControl.Robots.TBot
         // ======= Interpolated Joints =======
         public RotaryJoint InterpolatedJoint1 { get; } = new RotaryJoint(120 / 30);
         public CoreXYStage InterpolatedJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
-        public RotaryJoint InterpolatedJoint4 { get; } = new RotaryJoint(1);
+        public RotaryJoint InterpolatedJoint4 { get; } = new RotaryJoint(1/10);
 
         // ======= Current Joints =======
         public RotaryJoint CurrentJoint1 { get; } = new RotaryJoint(120 / 30);
