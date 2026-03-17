@@ -1,5 +1,6 @@
-﻿using Controller.RobotControl.Robots.TBot;
-using Controller.RobotControl.MotionProfilers;
+﻿using Controller.RobotControl.MotionProfilers;
+using Controller.RobotControl.Robots.TBot;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace Controller.RobotControl
@@ -55,7 +56,31 @@ namespace Controller.RobotControl
 
             stb.Motor3.InvertDirection = true;
 
-            new Thread(Loop) { IsBackground = true }.Start();
+            new Thread(ControlLoop) { IsBackground = true }.Start();
+        }
+
+        private void ControlLoop()
+        {
+            var sw = Stopwatch.StartNew();
+            long nextTick = 0;
+
+            double periodSec = 0.004; // 4ms
+            long periodTicks = (long)(periodSec * Stopwatch.Frequency);
+
+            while (true)
+            {
+                long now = sw.ElapsedTicks;
+
+                if (now >= nextTick)
+                {
+                    Loop();
+                    nextTick += periodTicks;
+
+                }
+
+                // Small spin wait to reduce CPU burn but keep timing tight
+                Thread.SpinWait(50);
+            }
         }
 
         public void Loop()
