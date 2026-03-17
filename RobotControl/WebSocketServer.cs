@@ -1,6 +1,7 @@
 ﻿using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 
@@ -57,7 +58,8 @@ public class RobotWebSocketServer
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
     };
 
     private async Task HandleMessage(WebSocket socket, string json)
