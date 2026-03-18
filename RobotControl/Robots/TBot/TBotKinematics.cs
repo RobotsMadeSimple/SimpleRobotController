@@ -12,7 +12,7 @@ namespace Controller.RobotControl.Robots.TBot
         // Expressed in flange-local coordinates
         private static readonly Vector3 J4OffsetLocal = new Vector3(
             0f,  // X offset (Radial Offset)
-            48.356f,   // Y offset (Offcenter Distance)
+            -48.356f,   // Y offset (Offcenter Distance)
             0f    // Z offset
         );
 
