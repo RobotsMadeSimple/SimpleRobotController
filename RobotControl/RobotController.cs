@@ -55,6 +55,7 @@ namespace Controller.RobotControl
             stb.Start();
 
             stb.Motor3.InvertDirection = true;
+            stb.Motor4.InvertDirection = true;
 
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
