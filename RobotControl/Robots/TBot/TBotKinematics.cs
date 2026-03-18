@@ -73,7 +73,7 @@ namespace Controller.RobotControl.Robots.TBot
                 tcp.Z,
                 0,
                 0,
-                worldRzMath * -1
+                worldRzMath
             );
         }
 
@@ -90,7 +90,7 @@ namespace Controller.RobotControl.Robots.TBot
             double tcpZ = tcp.Z;
 
             // Convert operator RZ -> math RZ
-            double desiredWorldRzDeg = tcp.RZ * -1;
+            double desiredWorldRzDeg = tcp.RZ;
             double desiredWorldRzRad = desiredWorldRzDeg * Math.PI / 180.0;
 
             // --- Solve J1 ignoring J4 first (initial guess) ---
