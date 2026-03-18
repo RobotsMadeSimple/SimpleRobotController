@@ -69,11 +69,11 @@ namespace Controller.RobotControl.Robots.TBot
 
             return new Vector6(
                 tcp.X,
-                tcp.Y,
+                -tcp.Y,
                 tcp.Z,
                 0,
                 0,
-                worldRzMath
+                worldRzMath * -1
             );
         }
 
@@ -86,11 +86,11 @@ namespace Controller.RobotControl.Robots.TBot
         )
         {
             double tcpX = tcp.X;
-            double tcpY = tcp.Y;
+            double tcpY = -tcp.Y;
             double tcpZ = tcp.Z;
 
             // Convert operator RZ -> math RZ
-            double desiredWorldRzDeg = tcp.RZ;
+            double desiredWorldRzDeg = tcp.RZ * -1;
             double desiredWorldRzRad = desiredWorldRzDeg * Math.PI / 180.0;
 
             // --- Solve J1 ignoring J4 first (initial guess) ---
@@ -230,7 +230,7 @@ namespace Controller.RobotControl.Robots.TBot
             // ----- World TCP -----
             Vector3 tcp = new Vector3(
                 (float)currentTcp.X,
-                (float)currentTcp.Y,
+                (float)(-currentTcp.Y),
                 (float)currentTcp.Z
             );
 
