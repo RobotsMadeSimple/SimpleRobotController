@@ -61,7 +61,7 @@ public class STB4100
         Motor1 = AddMotor(1, 1600, 1, 0);
         Motor2 = AddMotor(2, 1600, 1, 0);
         Motor3 = AddMotor(3, 1600, 1, 0);
-        Motor4 = AddMotor(4, 1600, 1, 0);
+        Motor4 = AddMotor(4, 400, 1, 0);
     }
 
     private bool Connect()
