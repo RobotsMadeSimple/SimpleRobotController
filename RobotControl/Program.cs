@@ -8,6 +8,8 @@ class Program
 {
     static void Main(string[] args)
     {
+        var identity = RobotIdentityService.Load();
+
         var robotController = new Controller.RobotControl.RobotController();
 
         // ---- Web server ----
@@ -23,13 +25,17 @@ class Program
             }
         );
 
-        var service = new ServiceProfile("RobotController", "_robot._tcp", 9000);
+        // Use serial number as the mDNS instance name so each robot is addressable uniquely
+        var service = new ServiceProfile(identity.SerialNumber, "_robot._tcp", 9000);
         service.AddProperty("ControlEndpoint", "/control");
-        service.AddProperty("RobotType", "TBot");
-        service.AddProperty("SerialNumber", "1");
-        service.AddProperty("RobotName", "TBot");
+        service.AddProperty("SerialNumber",    identity.SerialNumber);
+        service.AddProperty("RobotType",       identity.RobotType);
+        service.AddProperty("RobotName",       identity.RobotName);
         var sd = new ServiceDiscovery();
         sd.Advertise(service);
+
+        Console.WriteLine($"[mDNS] Advertising as '{identity.SerialNumber}._robot._tcp' " +
+                          $"(Type: '{identity.RobotType}', Name: '{identity.RobotName}')");
 
         wsServer.Map(app);
 
