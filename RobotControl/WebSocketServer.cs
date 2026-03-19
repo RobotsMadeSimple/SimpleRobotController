@@ -1,6 +1,7 @@
 ﻿using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 
@@ -57,7 +58,8 @@ public class RobotWebSocketServer
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
     };
 
     private async Task HandleMessage(WebSocket socket, string json)
@@ -108,7 +110,7 @@ public class RobotWebSocketServer
                     var ack = new Dictionary<string, object?>
                     {
                         ["type"] = "ack",
-                        ["command"] = cmd,
+                        ["command"] = cmd.Command.Clone(),
                         ["id"] = cmd.Id,
                         ["ok"] = true
                     };
@@ -116,7 +118,7 @@ public class RobotWebSocketServer
                     if (resultObj != null)
                     {
                         // Serialize result object to JSON
-                        var resultJson = JsonSerializer.Serialize(resultObj);
+                        var resultJson = JsonSerializer.Serialize(resultObj, JsonOpts);
 
                         // Parse into JsonDocument
                         using var doc = JsonDocument.Parse(resultJson);

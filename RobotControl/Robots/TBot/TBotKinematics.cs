@@ -12,19 +12,19 @@ namespace Controller.RobotControl.Robots.TBot
         // Expressed in flange-local coordinates
         private static readonly Vector3 J4OffsetLocal = new Vector3(
             0f,  // X offset (Radial Offset)
-            48.356f,   // Y offset (Offcenter Distance)
+            -48.356f,   // Y offset (Offcenter Distance)
             0f    // Z offset
         );
 
         // ======= Interpolated Joints =======
-        public RotaryJoint InterpolatedJoint1 { get; } = new RotaryJoint(120 / 30);
+        public RotaryJoint InterpolatedJoint1 { get; } = new RotaryJoint(120.0 / 30.0);
         public CoreXYStage InterpolatedJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
-        public RotaryJoint InterpolatedJoint4 { get; } = new RotaryJoint(1);
+        public RotaryJoint InterpolatedJoint4 { get; } = new RotaryJoint(10.0);
 
         // ======= Current Joints =======
-        public RotaryJoint CurrentJoint1 { get; } = new RotaryJoint(120 / 30);
+        public RotaryJoint CurrentJoint1 { get; } = new RotaryJoint(120.0 / 30.0);
         public CoreXYStage CurrentJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
-        public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(1);
+        public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(10.0);
 
         public TBotKinematics() { }
 
@@ -69,7 +69,7 @@ namespace Controller.RobotControl.Robots.TBot
 
             return new Vector6(
                 tcp.X,
-                tcp.Y,
+                -tcp.Y,
                 tcp.Z,
                 0,
                 0,
@@ -86,7 +86,7 @@ namespace Controller.RobotControl.Robots.TBot
         )
         {
             double tcpX = tcp.X;
-            double tcpY = tcp.Y;
+            double tcpY = -tcp.Y;
             double tcpZ = tcp.Z;
 
             // Convert operator RZ -> math RZ
@@ -230,7 +230,7 @@ namespace Controller.RobotControl.Robots.TBot
             // ----- World TCP -----
             Vector3 tcp = new Vector3(
                 (float)currentTcp.X,
-                (float)currentTcp.Y,
+                (float)(-currentTcp.Y),
                 (float)currentTcp.Z
             );
 
@@ -278,12 +278,12 @@ namespace Controller.RobotControl.Robots.TBot
             double vertical = flange.Z;
 
             return new Vector6(
-                j1Deg,
+                -j1Deg,
                 radial,
                 vertical,
                 0,
                 0,
-                j4Deg
+                -j4Deg
             );
         }
     }

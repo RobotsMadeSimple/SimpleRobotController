@@ -32,6 +32,7 @@ public class STB4100
         { 7, "Stopping" }
     };
 
+    public bool connected;
     public int status;
     private int _commandCount;
     private bool _ready;
@@ -60,7 +61,7 @@ public class STB4100
         Motor1 = AddMotor(1, 1600, 1, 0);
         Motor2 = AddMotor(2, 1600, 1, 0);
         Motor3 = AddMotor(3, 1600, 1, 0);
-        Motor4 = AddMotor(4, 1600, 1, 0);
+        Motor4 = AddMotor(4, 400, 1, 0);
     }
 
     private bool Connect()
@@ -69,21 +70,33 @@ public class STB4100
         if (_device != null && _stream != null && _stream.CanRead && _stream.CanWrite)
             return true;
 
+        foreach (var d in DeviceList.Local.GetHidDevices())
+        {
+            Console.WriteLine($"{d.ProductID} {d.VendorID:X4}:{d.ProductID:X4}");
+        }
+
         // Get the first available device that matches vendor and product identifications
         _device = DeviceList.Local.GetHidDeviceOrNull(VendorId, ProductId);
         if (_device == null)
+        {
+            Console.WriteLine("STB4100 could not be found");
             return false;
+        }
 
         // Get that stream open!
         try
         {
+            Console.WriteLine("STB4100 found! Opening Connection");
             _stream = _device.Open();
+            connected = true;
             return _stream != null && _stream.CanRead && _stream.CanWrite;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine("Error trying to connect to STB4100: " + ex);
             _stream = null;
             _device = null;
+            connected = false;
             return false;
         }
     }
