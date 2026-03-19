@@ -186,6 +186,14 @@ public class RobotCommand
     public double? RX { get; set; }
     public double? RY { get; set; }
     public double? RZ { get; set; }
+    public double? TX { get; set; }
+    public double? TY { get; set; }
+    public double? TZ { get; set; }
+    public double? TRX { get; set; }
+    public double? TRY { get; set; }
+    public double? TRZ { get; set; }
+
+
     public double? Speed { get; set; }
     public double? Accel { get; set; }
     public double? Decel { get; set; }
@@ -193,6 +201,7 @@ public class RobotCommand
 
 
     public Vector6 Vector6 => new(X ?? 0, Y ?? 0, Z ?? 0, RX ?? 0, RY ?? 0, RZ ?? 0);
+    public Vector6 ToolOffsetVector6 => new(TX ?? 0, TY ?? 0, TZ ?? 0, TRX ?? 0, TRY ?? 0, TRZ ?? 0);
 }
 
 

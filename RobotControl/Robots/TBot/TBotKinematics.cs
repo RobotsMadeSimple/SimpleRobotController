@@ -278,12 +278,12 @@ namespace Controller.RobotControl.Robots.TBot
             double vertical = flange.Z;
 
             return new Vector6(
-                j1Deg,
+                -j1Deg,
                 radial,
                 vertical,
                 0,
                 0,
-                j4Deg
+                -j4Deg
             );
         }
     }

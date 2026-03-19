@@ -1,6 +1,7 @@
 ﻿using Controller.RobotControl.MotionProfilers;
 using Controller.RobotControl.Robots.TBot;
 using System.Diagnostics;
+using System.Numerics;
 using System.Text.Json;
 
 namespace Controller.RobotControl
@@ -28,7 +29,7 @@ namespace Controller.RobotControl
 
         // Current Status of Robot
         private Vector6 CurrentPosition = new();  // Actual position of the robot
-        public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || IsJogging || IsJointJogging;
+        public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || IsJogging || IsJointJogging || IsToolJogging;
         // X is away from flange, Y is towards the inside of the robot, Z is Vertical
         public Vector6 CurrentTool = new(0, 0, 0);
         // Current Pose Of the Joints
@@ -44,9 +45,11 @@ namespace Controller.RobotControl
 
         private JoggingMotionProfiler joggingMotionProfiler = new();
         private JoggingMotionProfiler jointJoggingProfiler = new();
+        private ToolJoggingMotionProfiler toolJoggingMotionProfiler = new();
 
         private bool IsJogging => !joggingMotionProfiler.IsFinished;
         private bool IsJointJogging => !jointJoggingProfiler.IsFinished;
+        private bool IsToolJogging => !toolJoggingMotionProfiler.IsFinished;
 
         public List<RobotCommand> QueuedCommands = new();
 
@@ -158,6 +161,13 @@ namespace Controller.RobotControl
 
                 // Recalculate the Cartesian Coordinate position to keep it current
                 CurrentPosition = TBot.TcpPosition(CurrentTool);
+            }
+            else if (IsToolJogging)
+            {
+                CurrentPosition = toolJoggingMotionProfiler.Update(CurrentPosition);
+                // Calculate IK to get the joint targets for the next Jog movement
+                CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                UpdateJointTargets();
             }
         }
         public void UpdateJointTargets()
@@ -282,16 +292,16 @@ namespace Controller.RobotControl
             switch (CommandType)
             {
                 case "MoveL":
-                    MoveL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    MoveL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
                     break;
 
                 case "OffsetL":
                     Vector6 NewPosition = CurrentPosition + Command.Vector6;
-                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel);
+                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
                     break;
 
                 case "MoveJ":
-                    MoveJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    MoveJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
                     break;
 
                 case "SetTool":
@@ -322,6 +332,10 @@ namespace Controller.RobotControl
 
                 case "JogJ":
                     JogJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    break;
+
+                case "JogTool":
+                    JogTool(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 default:
@@ -469,18 +483,25 @@ namespace Controller.RobotControl
             }
         }
 
-        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel)
+        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)
         {
             if (IsMoving)
                 return;
-
-            // Copy the Command Position to the Target Position
-            this.TargetPosition = TargetPosition;
 
             // Gather the commands motion params if there specified otherwise default to the last set ones
             double jointSpeed = Speed ??= this.SpeedJ;
             double jointAccel = Accel ??= this.AccelJ;
             double jointDecel = Decel ??= this.DecelJ;
+
+            if (ToolOffset is not null)
+            {
+                this.TargetPosition = ApplyToolOffset(TargetPosition, ToolOffset);
+            }
+            else
+            {
+                // Copy the Command Position to the Target Position
+                this.TargetPosition = TargetPosition;
+            }
 
             // Calculate the joint positions for the target position and the current tooling
             this.TargetJoints = TBotKinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
@@ -491,21 +512,25 @@ namespace Controller.RobotControl
 
         
 
-        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel)
+        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)
         {
             if (IsMoving)
                 return;
-
-            // Copy the Command Position to the Target Position
-            this.TargetPosition = TargetPosition;
 
             // Gather the commands motion params if there specified otherwise default to the last set ones
             double lineSpeed = Speed ??= this.SpeedS;
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
 
-            // Copy the Command position to the TargetPosition
-            this.TargetPosition = TargetPosition;
+            if (ToolOffset is not null)
+            {
+                this.TargetPosition = ApplyToolOffset(TargetPosition, ToolOffset);
+            }
+            else
+            {
+                // Copy the Command Position to the Target Position
+                this.TargetPosition = TargetPosition;
+            }
 
             // Generate a new linear motion profiler for this move
             linearMotionProfiler = new(CurrentPosition, this.TargetPosition, lineSpeed, lineAccel, lineDecel);
@@ -530,6 +555,47 @@ namespace Controller.RobotControl
             double lineDecel = Decel ??= this.DecelS;
 
             joggingMotionProfiler.Jog(jogDirection, lineSpeed, lineAccel, lineDecel);
+        }
+
+        public void JogTool(Vector6 jogDirection, double? Speed, double? Accel, double? Decel)
+        {
+            // Gather the commands motion params if there specified otherwise default to the last set ones
+            double lineSpeed = Speed ??= this.SpeedS;
+            double lineAccel = Accel ??= this.AccelS;
+            double lineDecel = Decel ??= this.DecelS;
+
+            toolJoggingMotionProfiler.Jog(jogDirection, lineSpeed, lineAccel, lineDecel);
+        }
+
+        /// <summary>
+        /// Offsets a pose in its own tool frame by the given offset Vector6.
+        /// The linear offset (X/Y/Z) is rotated into world space using the pose's current orientation,
+        /// then added to the pose's position. The rotation offset (RX/RY/RZ) is applied after translation.
+        /// </summary>
+        public static Vector6 ApplyToolOffset(Vector6 pose, Vector6 offset)
+        {
+            float rx = (float)(pose.RX * Math.PI / 180.0);
+            float ry = (float)(pose.RY * Math.PI / 180.0);
+            float rz = (float)(pose.RZ * Math.PI / 180.0);
+
+            Matrix4x4 rot =
+                Matrix4x4.CreateRotationZ(rz) *
+                Matrix4x4.CreateRotationY(ry) *
+                Matrix4x4.CreateRotationX(rx);
+
+            Vector3 worldOffset = Vector3.Transform(
+                new Vector3((float)offset.X, (float)offset.Y, (float)offset.Z),
+                rot
+            );
+
+            return new Vector6(
+                pose.X  + worldOffset.X,
+                pose.Y  + worldOffset.Y,
+                pose.Z  + worldOffset.Z,
+                pose.RX + offset.RX,
+                pose.RY + offset.RY,
+                pose.RZ + offset.RZ
+            );
         }
 
         public static T LoadParams<T>(CommandMessage msg)
