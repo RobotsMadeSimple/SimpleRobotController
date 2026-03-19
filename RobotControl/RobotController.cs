@@ -197,6 +197,16 @@ namespace Controller.RobotControl
                     stb.Reset();
                     break;
 
+                case "HardStop":
+                    HardStop();
+                    break;
+
+                case "StopJog":
+                    joggingMotionProfiler.StopJog();
+                    jointJoggingProfiler.StopJog();
+                    toolJoggingMotionProfiler.StopJog();
+                    break;
+
                 case "GetPoints":
                     payload = new
                     {
@@ -382,6 +392,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input2)
                     {
+                        HardStop();
                         homingState = "WaitVerticalMoveComplete";
                     }
                     break;
@@ -397,7 +408,7 @@ namespace Controller.RobotControl
                     TBot.CurrentJoint2.Cartesian = (TBot.CurrentJoint2.Cartesian.x, verticalHomed);
 
                     CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, Vector6.Zero);
 
                     // Have the robot update its joints
                     TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
@@ -412,6 +423,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(new(0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input3)
                     {
+                        HardStop();
                         homingState = "WaitHorizontalMoveComplete";
                     }
                     break;
@@ -429,7 +441,7 @@ namespace Controller.RobotControl
                     TBot.CurrentJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
 
                     CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, Vector6.Zero);
 
                     // Have the robot update its joints
                     TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
@@ -445,6 +457,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 10000000, 0.001);
                     if (stb.Input1)
                     {
+                        HardStop();
                         homingState = "WaitJ1MoveComplete";
                     }
                     break;
@@ -462,12 +475,12 @@ namespace Controller.RobotControl
                     TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
 
                     CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, Vector6.Zero);
 
                     // Have the robot update its joints
                     TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
 
-                    // Drive the motors to the target
+                    // Set the motors to the target
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
 
                     homingState = "HomingComplete";
@@ -481,6 +494,16 @@ namespace Controller.RobotControl
                 default:
                     break;
             }
+        }
+
+        public void HardStop()
+        {
+            linearMotionProfiler = null;
+            jointMotionProfiler = null;
+            joggingMotionProfiler.ForceStop();
+            jointJoggingProfiler.ForceStop();
+            toolJoggingMotionProfiler.ForceStop();
+            QueuedCommands.Clear();
         }
 
         public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)
