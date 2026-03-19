@@ -22,10 +22,11 @@ namespace Controller.RobotControl.MotionProfilers
         private double speed;
         private double accel;
         private double decel;
+        private bool _stopRequested = false;
 
         public Vector6 Update(Vector6 currentPosition)
         {
-            bool enabled = !IsFinished && autoResetSw.Elapsed.TotalSeconds < resetTime;
+            bool enabled = !IsFinished && !_stopRequested && autoResetSw.Elapsed.TotalSeconds < resetTime;
 
             double dt = GetDtSec();
             if (dt <= 0) return currentPosition;
@@ -64,6 +65,7 @@ namespace Controller.RobotControl.MotionProfilers
                 _vel = Vector6.Zero;
                 IsFinished = true;
                 _started = false;
+                _stopRequested = false;
                 return currentPosition;
             }
 
@@ -94,6 +96,7 @@ namespace Controller.RobotControl.MotionProfilers
             this.speed = speed;
             this.accel = accel;
             this.decel = decel;
+            _stopRequested = false;
             autoResetSw.Restart();
 
             if (IsFinished)
@@ -102,6 +105,15 @@ namespace Controller.RobotControl.MotionProfilers
                 _vel = Vector6.Zero;
             }
             IsFinished = false;
+        }
+
+        public void StopJog() => _stopRequested = true;
+
+        public void ForceStop()
+        {
+            _vel = Vector6.Zero;
+            IsFinished = true;
+            _started = false;
         }
 
         private double GetDtSec()

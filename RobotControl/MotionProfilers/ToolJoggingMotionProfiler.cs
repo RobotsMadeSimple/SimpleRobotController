@@ -25,10 +25,11 @@ namespace Controller.RobotControl.MotionProfilers
         private Vector6 _capturedDir = Vector6.Zero;
         private bool _hasCapturedDir = false;
         private Vector6 _lockedJogAxis = Vector6.Zero;
+        private bool _stopRequested = false;
 
         public Vector6 Update(Vector6 currentPosition)
         {
-            bool enabled = !IsFinished && autoResetSw.Elapsed.TotalSeconds < resetTime;
+            bool enabled = !IsFinished && !_stopRequested && autoResetSw.Elapsed.TotalSeconds < resetTime;
 
             double dt = GetDtSec();
             if (dt <= 0) return currentPosition;
@@ -81,6 +82,7 @@ namespace Controller.RobotControl.MotionProfilers
                 _started = false;
                 _hasCapturedDir = false;
                 _lockedJogAxis = Vector6.Zero;
+                _stopRequested = false;
                 return currentPosition;
             }
 
@@ -122,8 +124,20 @@ namespace Controller.RobotControl.MotionProfilers
             this.speed = speed;
             this.accel = accel;
             this.decel = decel;
+            _stopRequested = false;
 
             autoResetSw.Restart();
+        }
+
+        public void StopJog() => _stopRequested = true;
+
+        public void ForceStop()
+        {
+            _speed = 0;
+            IsFinished = true;
+            _started = false;
+            _hasCapturedDir = false;
+            _lockedJogAxis = Vector6.Zero;
         }
 
         private static Vector6 Normalize6(Vector6 v)
