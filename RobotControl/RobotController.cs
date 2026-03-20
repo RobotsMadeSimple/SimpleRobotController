@@ -214,8 +214,18 @@ namespace Controller.RobotControl
                     };
                     break;
 
-                case "Teach":
-                    pointRepo.SavePoint("Name", CurrentPosition);
+                case "TeachPoint":
+                    {
+                        var tp = LoadParams<TeachPointParams>(command);
+                        pointRepo.SavePoint(tp.Name, CurrentPosition);
+                    }
+                    break;
+
+                case "DeletePoint":
+                    {
+                        var dp = LoadParams<TeachPointParams>(command);
+                        pointRepo.DeletePoint(dp.Name);
+                    }
                     break;
 
                 case "GetStatus":
@@ -302,7 +312,10 @@ namespace Controller.RobotControl
             switch (CommandType)
             {
                 case "MoveL":
-                    MoveL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
+                    {
+                        Vector6 target = ResolveVector(Command);
+                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
+                    }
                     break;
 
                 case "OffsetL":
@@ -311,7 +324,10 @@ namespace Controller.RobotControl
                     break;
 
                 case "MoveJ":
-                    MoveJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
+                    {
+                        Vector6 target = ResolveVector(Command);
+                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
+                    }
                     break;
 
                 case "SetTool":
@@ -627,6 +643,19 @@ namespace Controller.RobotControl
                 throw new InvalidOperationException("Command has no params");
 
             return msg.Params.Value.Deserialize<T>()!;
+        }
+
+        private Vector6 ResolveVector(RobotCommand command)
+        {
+            if (!string.IsNullOrWhiteSpace(command.Name))
+            {
+                if (!pointRepo.Points.TryGetValue(command.Name, out var point))
+                    throw new InvalidOperationException($"Point '{command.Name}' not found");
+
+                return new Vector6(point.X, point.Y, point.Z, point.RX, point.RY, point.RZ);
+            }
+
+            return command.Vector6;
         }
         
     }

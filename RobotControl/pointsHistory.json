@@ -158,5 +158,76 @@
         "RZ": 5.128388467721269
       }
     }
+  ],
+  "Home": [
+    {
+      "TimestampUnixMs": 1773963750967,
+      "Point": {
+        "Name": "Home",
+        "LastUpdatedUnixMs": 1773963750966,
+        "X": 0,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1773963578609,
+      "Point": {
+        "Name": "Home",
+        "LastUpdatedUnixMs": 1773963578609,
+        "X": 15.138934927448359,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1773963570362,
+      "Point": {
+        "Name": "Home",
+        "LastUpdatedUnixMs": 1773963570362,
+        "X": 15.138934927448359,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    }
+  ],
+  "New Point": [
+    {
+      "TimestampUnixMs": 1773964278202,
+      "Point": {
+        "Name": "New Point",
+        "LastUpdatedUnixMs": 1773964278201,
+        "X": 318.7861708819665,
+        "Y": 306.1621709305157,
+        "Z": 300,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    }
+  ],
+  "New Point 3": [
+    {
+      "TimestampUnixMs": 1773964988373,
+      "Point": {
+        "Name": "New Point 3",
+        "LastUpdatedUnixMs": 1773964988371,
+        "X": 59.313995178738494,
+        "Y": 1.7179213838182519,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    }
   ]
 }

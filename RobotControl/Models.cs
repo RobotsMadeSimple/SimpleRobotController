@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 public class CommandMessage
 {
@@ -180,6 +181,10 @@ class ArcSegment : PathSegment
 public class RobotCommand
 {
     public string? CommandType { get; set; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
     public double? X { get; set; }
     public double? Y { get; set; }
     public double? Z { get; set; }
@@ -213,6 +218,12 @@ public class Point: Vector6
     public long LastUpdatedUnixMs { get; set; }
 
 }
+public class TeachPointParams
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = default!;
+}
+
 public class PointHistoryEntry
 {
     public long TimestampUnixMs { get; set; }
