@@ -13,6 +13,9 @@ namespace Controller.RobotControl
         public ScalarMotionProfiler mp = new();
         public TBotKinematics TBot = new();
 
+        // Hard-stop flag — set from any thread, consumed exclusively on the control loop thread
+        private volatile bool _hardStopRequested;
+
         // Joint motion profiler
         private Vector6MotionProfiler? jointMotionProfiler;
         private Vector6 TargetJoints = new();
@@ -91,9 +94,13 @@ namespace Controller.RobotControl
         {
             while (true)
             {
+                // Consume hard-stop flag before anything else touches the profilers
+                if (_hardStopRequested)
+                    ExecuteHardStop();
+
                 // Execute pending robot commands
                 RunCommands();
-                
+
                 // Run the robot motion control
                 RunMotion();
 
@@ -124,18 +131,18 @@ namespace Controller.RobotControl
             }
             else if (jointMotionProfiler is not null)
             {
+                // Always update first (matches linear pattern)
+                CurrentJointTargets = jointMotionProfiler.Update();
+
                 if (jointMotionProfiler.IsFinished)
                 {
-                    // Set the joint targets to the final target position
+                    // Snap to exact target joints on the same iteration the profiler finishes,
+                    // so the motors are commanded to the precise endpoint rather than whatever
+                    // floating-point value the profiler's last step returned
                     CurrentJointTargets.Copy(TargetJoints);
 
                     // Destroy the profiler
                     jointMotionProfiler = null;
-                }
-                else
-                {
-                    // Calculate the new joint angles for the next interpolated joint movement
-                    CurrentJointTargets = jointMotionProfiler.Update();
                 }
 
                 // Update the joint angles with the new calculated ones
@@ -228,6 +235,21 @@ namespace Controller.RobotControl
                     }
                     break;
 
+                case "EditPoint":
+                    {
+                        var ep = LoadParams<EditPointParams>(command);
+                        var values = new Dictionary<string, object?>();
+                        if (ep.NewName != null)   values["Name"] = ep.NewName;
+                        if (ep.X.HasValue)        values["X"]    = ep.X.Value;
+                        if (ep.Y.HasValue)        values["Y"]    = ep.Y.Value;
+                        if (ep.Z.HasValue)        values["Z"]    = ep.Z.Value;
+                        if (ep.RX.HasValue)       values["RX"]   = ep.RX.Value;
+                        if (ep.RY.HasValue)       values["RY"]   = ep.RY.Value;
+                        if (ep.RZ.HasValue)       values["RZ"]   = ep.RZ.Value;
+                        pointRepo.EditPoint(ep.Name, values);
+                    }
+                    break;
+
                 case "GetStatus":
                     {
                         Vector6 pose = TBot.GetVisualRobotPose(CurrentPosition, CurrentTool);
@@ -237,6 +259,7 @@ namespace Controller.RobotControl
                             moving = IsMoving,
                             wasHomed = homed,
                             homingState = this.homingState,
+                            isHoming = this.homingState != "WaitingForStart",
                             lastPointUpdate = pointRepo.LastUpdatedUnixMs,
                             driverConnected = stb.connected,
 
@@ -300,7 +323,8 @@ namespace Controller.RobotControl
                 return;
 
             RobotCommand? Command = QueuedCommands[0];
-            
+            Vector6? target = null;
+
             if (Command is null)
                 return;
 
@@ -313,7 +337,7 @@ namespace Controller.RobotControl
             {
                 case "MoveL":
                     {
-                        Vector6 target = ResolveVector(Command);
+                        target = ResolveVector(Command);
                         MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
                     }
                     break;
@@ -325,7 +349,7 @@ namespace Controller.RobotControl
 
                 case "MoveJ":
                     {
-                        Vector6 target = ResolveVector(Command);
+                        target = ResolveVector(Command);
                         MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
                     }
                     break;
@@ -408,7 +432,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input2)
                     {
-                        HardStop();
+                        ExecuteHardStop();
                         homingState = "WaitVerticalMoveComplete";
                     }
                     break;
@@ -439,7 +463,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(new(0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input3)
                     {
-                        HardStop();
+                        ExecuteHardStop();
                         homingState = "WaitHorizontalMoveComplete";
                     }
                     break;
@@ -473,7 +497,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 10000000, 0.001);
                     if (stb.Input1)
                     {
-                        HardStop();
+                        ExecuteHardStop();
                         homingState = "WaitJ1MoveComplete";
                     }
                     break;
@@ -512,14 +536,30 @@ namespace Controller.RobotControl
             }
         }
 
+        /// <summary>
+        /// Thread-safe: sets a flag that is consumed at the top of the next control loop iteration.
+        /// Never touches the profilers directly from outside the loop thread.
+        /// </summary>
         public void HardStop()
         {
+            _hardStopRequested = true;
+        }
+
+        /// <summary>
+        /// Must only be called from the control loop thread.
+        /// Clears all motion state immediately and safely.
+        /// </summary>
+        private void ExecuteHardStop()
+        {
+            _hardStopRequested = false;
             linearMotionProfiler = null;
             jointMotionProfiler = null;
             joggingMotionProfiler.ForceStop();
             jointJoggingProfiler.ForceStop();
             toolJoggingMotionProfiler.ForceStop();
             QueuedCommands.Clear();
+            startHoming = false;
+            homingState = "WaitingForStart";
         }
 
         public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)

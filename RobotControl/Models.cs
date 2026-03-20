@@ -224,6 +224,33 @@ public class TeachPointParams
     public string Name { get; set; } = default!;
 }
 
+public class EditPointParams
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = default!;
+
+    [JsonPropertyName("newName")]
+    public string? NewName { get; set; }
+
+    [JsonPropertyName("x")]
+    public double? X { get; set; }
+
+    [JsonPropertyName("y")]
+    public double? Y { get; set; }
+
+    [JsonPropertyName("z")]
+    public double? Z { get; set; }
+
+    [JsonPropertyName("rx")]
+    public double? RX { get; set; }
+
+    [JsonPropertyName("ry")]
+    public double? RY { get; set; }
+
+    [JsonPropertyName("rz")]
+    public double? RZ { get; set; }
+}
+
 public class PointHistoryEntry
 {
     public long TimestampUnixMs { get; set; }
