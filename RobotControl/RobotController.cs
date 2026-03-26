@@ -3,15 +3,30 @@ using Controller.RobotControl.Robots.TBot;
 using System.Diagnostics;
 using System.Numerics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Controller.RobotControl
 {
     internal class RobotController
     {
-        public PointRepository pointRepo = new();
+        public PointRepository       pointRepo       = new();
+        public ToolRepository        toolRepo        = new();
+        public BuiltProgramRepository builtProgramRepo = new();
         public STB4100 stb = new();
         public ScalarMotionProfiler mp = new();
         public TBotKinematics TBot = new();
+        private readonly ProgramCycleManager programManager = new();
+        private ProgramExecutor? programExecutor;
+
+        // Shared deserialisation options — handles string enums and camelCase from the client
+        private static readonly JsonSerializerOptions _jsonOptions = new()
+        {
+            Converters = { new JsonStringEnumConverter() },
+            PropertyNameCaseInsensitive = true
+        };
+
+        // Hard-stop flag — set from any thread, consumed exclusively on the control loop thread
+        private volatile bool _hardStopRequested;
 
         // Joint motion profiler
         private Vector6MotionProfiler? jointMotionProfiler;
@@ -34,6 +49,9 @@ namespace Controller.RobotControl
         public Vector6 CurrentTool = new(0, 0, 0);
         // Current Pose Of the Joints
         private Vector6 CurrentJointTargets = new();
+
+        // Active tool name — "" means no tool (origin Vector6)
+        private string activeTool = "";
 
         // If the Robot was homed from startup
         private bool homed = false;
@@ -59,6 +77,8 @@ namespace Controller.RobotControl
 
             stb.Motor3.InvertDirection = true;
             stb.Motor4.InvertDirection = true;
+
+            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo);
 
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
@@ -91,9 +111,16 @@ namespace Controller.RobotControl
         {
             while (true)
             {
+                // Consume hard-stop flag before anything else touches the profilers
+                if (_hardStopRequested)
+                    ExecuteHardStop();
+
                 // Execute pending robot commands
                 RunCommands();
-                
+
+                // Step through any active built program
+                programExecutor?.Update();
+
                 // Run the robot motion control
                 RunMotion();
 
@@ -124,18 +151,18 @@ namespace Controller.RobotControl
             }
             else if (jointMotionProfiler is not null)
             {
+                // Always update first (matches linear pattern)
+                CurrentJointTargets = jointMotionProfiler.Update();
+
                 if (jointMotionProfiler.IsFinished)
                 {
-                    // Set the joint targets to the final target position
+                    // Snap to exact target joints on the same iteration the profiler finishes,
+                    // so the motors are commanded to the precise endpoint rather than whatever
+                    // floating-point value the profiler's last step returned
                     CurrentJointTargets.Copy(TargetJoints);
 
                     // Destroy the profiler
                     jointMotionProfiler = null;
-                }
-                else
-                {
-                    // Calculate the new joint angles for the next interpolated joint movement
-                    CurrentJointTargets = jointMotionProfiler.Update();
                 }
 
                 // Update the joint angles with the new calculated ones
@@ -228,6 +255,21 @@ namespace Controller.RobotControl
                     }
                     break;
 
+                case "EditPoint":
+                    {
+                        var ep = LoadParams<EditPointParams>(command);
+                        var values = new Dictionary<string, object?>();
+                        if (ep.NewName != null)   values["Name"] = ep.NewName;
+                        if (ep.X.HasValue)        values["X"]    = ep.X.Value;
+                        if (ep.Y.HasValue)        values["Y"]    = ep.Y.Value;
+                        if (ep.Z.HasValue)        values["Z"]    = ep.Z.Value;
+                        if (ep.RX.HasValue)       values["RX"]   = ep.RX.Value;
+                        if (ep.RY.HasValue)       values["RY"]   = ep.RY.Value;
+                        if (ep.RZ.HasValue)       values["RZ"]   = ep.RZ.Value;
+                        pointRepo.EditPoint(ep.Name, values);
+                    }
+                    break;
+
                 case "GetStatus":
                     {
                         Vector6 pose = TBot.GetVisualRobotPose(CurrentPosition, CurrentTool);
@@ -237,6 +279,7 @@ namespace Controller.RobotControl
                             moving = IsMoving,
                             wasHomed = homed,
                             homingState = this.homingState,
+                            isHoming = this.homingState != "WaitingForStart",
                             lastPointUpdate = pointRepo.LastUpdatedUnixMs,
                             driverConnected = stb.connected,
 
@@ -278,9 +321,258 @@ namespace Controller.RobotControl
                             input2 = stb.Input2,
                             input3 = stb.Input3,
                             input4 = stb.Input4,
+
+                            // Program cycle — summary only (no logs / images)
+                            programs = programManager.GetProgramsSummary(),
+
+                            // Tool repository
+                            lastToolUpdate = toolRepo.LastUpdatedUnixMs,
+                            activeTool     = this.activeTool,
+
+                            // Built program repository
+                            lastBuiltProgramUpdate = builtProgramRepo.LastUpdatedUnixMs,
                         };
                         break;
                     }
+
+                // ── Program cycle ─────────────────────────────────────────
+
+                case "SetAvailablePrograms":
+                    {
+                        var p = LoadParams<SetAvailableProgramsParams>(command);
+                        programManager.SetAvailablePrograms(p.Programs);
+                    }
+                    break;
+
+                case "SetProgramStatus":
+                    {
+                        var update = LoadParams<ProgramCycleUpdate>(command);
+                        programManager.ApplyStatusUpdate(update);
+                    }
+                    break;
+
+                case "GetProgramImages":
+                    {
+                        // Merge live in-memory images (Python/external) with persisted images
+                        // for built programs so idle built programs still show their image.
+                        var merged = programManager.GetAllImages();
+                        foreach (var kv in builtProgramRepo.GetAllImages())
+                            if (kv.Value != null) merged[kv.Key] = kv.Value;
+                        payload = new { images = merged };
+                    }
+                    break;
+
+                case "GetProgramLogs":
+                    {
+                        var p = LoadParams<GetProgramLogsParams>(command);
+                        var logs = programManager.GetProgramLogs(p.ProgramName, p.Start, p.End);
+                        payload = new
+                        {
+                            programName = p.ProgramName,
+                            totalCount  = programManager.GetLogCount(p.ProgramName),
+                            start       = p.Start ?? 0,
+                            logs
+                        };
+                    }
+                    break;
+
+                case "StartProgram":
+                    {
+                        var p     = LoadParams<ProgramActionParams>(command);
+                        var built = builtProgramRepo.Get(p.ProgramName);
+                        if (built != null)
+                            programExecutor?.Start(built);
+                        else
+                            programManager.SetFlag(p.ProgramName, "Start");
+                    }
+                    break;
+
+                case "StopProgram":
+                    {
+                        var p     = LoadParams<ProgramActionParams>(command);
+                        var built = builtProgramRepo.Get(p.ProgramName);
+                        if (built != null)
+                            programExecutor?.Stop();
+                        else
+                            programManager.SetFlag(p.ProgramName, "Stop");
+                    }
+                    break;
+
+                case "ResetProgram":
+                    {
+                        var p     = LoadParams<ProgramActionParams>(command);
+                        var built = builtProgramRepo.Get(p.ProgramName);
+                        if (built != null)
+                        {
+                            programExecutor?.Reset();
+                            programManager.ResetToReady(p.ProgramName,
+                                ProgramExecutor.CountSteps(built.Steps));
+                        }
+                        else
+                        {
+                            programManager.SetFlag(p.ProgramName, "Reset");
+                        }
+                    }
+                    break;
+
+                case "AbortProgram":
+                    {
+                        var p     = LoadParams<ProgramActionParams>(command);
+                        var built = builtProgramRepo.Get(p.ProgramName);
+                        if (built != null)
+                        {
+                            // Abort for built programs = full reset to Ready (program persists in the list)
+                            programExecutor?.Reset();
+                            programManager.ResetToReady(p.ProgramName,
+                                ProgramExecutor.CountSteps(built.Steps));
+                        }
+                        else
+                        {
+                            programManager.SetFlag(p.ProgramName, "Abort");
+                        }
+                    }
+                    break;
+
+                case "ClearProgramActions":
+                    {
+                        var p = LoadParams<ProgramActionParams>(command);
+                        programManager.ClearActions(p.ProgramName);
+                    }
+                    break;
+
+                // ── Tool repository ───────────────────────────────────────
+
+                case "GetTools":
+                    payload = new { tools = toolRepo.toolsJson };
+                    break;
+
+                case "CreateTool":
+                    {
+                        var ep = LoadParams<EditToolParams>(command);
+                        var v  = new Vector6(ep.X ?? 0, ep.Y ?? 0, ep.Z ?? 0,
+                                             ep.RX ?? 0, ep.RY ?? 0, ep.RZ ?? 0);
+                        var tool = toolRepo.SaveTool(ep.Name, v);
+                        if (!string.IsNullOrEmpty(ep.Description))
+                        {
+                            toolRepo.EditTool(ep.Name, new()
+                            {
+                                ["Description"] = ep.Description
+                            });
+                        }
+                    }
+                    break;
+
+                case "EditTool":
+                    {
+                        var ep     = LoadParams<EditToolParams>(command);
+                        var values = new Dictionary<string, object?>();
+                        if (ep.NewName      != null) values["Name"]        = ep.NewName;
+                        if (ep.Description  != null) values["Description"] = ep.Description;
+                        if (ep.X.HasValue)           values["X"]           = ep.X.Value;
+                        if (ep.Y.HasValue)           values["Y"]           = ep.Y.Value;
+                        if (ep.Z.HasValue)           values["Z"]           = ep.Z.Value;
+                        if (ep.RX.HasValue)          values["RX"]          = ep.RX.Value;
+                        if (ep.RY.HasValue)          values["RY"]          = ep.RY.Value;
+                        if (ep.RZ.HasValue)          values["RZ"]          = ep.RZ.Value;
+                        toolRepo.EditTool(ep.Name, values);
+
+                        // Keep activeTool name in sync after a rename
+                        if (ep.NewName != null && activeTool == ep.Name)
+                            activeTool = ep.NewName;
+                    }
+                    break;
+
+                case "DeleteTool":
+                    {
+                        var tp = LoadParams<ToolNameParams>(command);
+                        toolRepo.DeleteTool(tp.Name);
+                        // Clear active tool if the deleted one was active
+                        if (activeTool == tp.Name)
+                        {
+                            activeTool   = "";
+                            CurrentTool  = Vector6.Zero;
+                        }
+                    }
+                    break;
+
+                // ── Built program repository ──────────────────────────────
+
+                case "SaveBuiltProgram":
+                    {
+                        var p = LoadParams<SaveBuiltProgramParams>(command);
+                        builtProgramRepo.Save(new BuiltProgram
+                        {
+                            Name        = p.Name,
+                            Description = p.Description,
+                            Steps       = p.Steps,
+                        });
+                    }
+                    break;
+
+                case "DeleteBuiltProgram":
+                    {
+                        var p = LoadParams<BuiltProgramNameParams>(command);
+                        builtProgramRepo.Delete(p.Name);
+                    }
+                    break;
+
+                case "SaveBuiltProgramImage":
+                    {
+                        var p = LoadParams<SaveBuiltProgramImageParams>(command);
+                        var bytes = Convert.FromBase64String(p.Image);
+                        builtProgramRepo.SaveImage(p.Name, bytes);
+                    }
+                    break;
+
+                case "GetBuiltPrograms":
+                    {
+                        var list = builtProgramRepo.GetAll();
+                        var json = System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions
+                        {
+                            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+                            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                        });
+                        payload = new { programs = json };
+                    }
+                    break;
+
+                case "ExecuteBuiltProgram":
+                    {
+                        var p    = LoadParams<BuiltProgramNameParams>(command);
+                        var prog = builtProgramRepo.Get(p.Name);
+                        if (prog != null)
+                        {
+                            // Register image in ProgramCycleManager so the monitor shows it while running
+                            var imgBytes = builtProgramRepo.GetImage(p.Name);
+                            programExecutor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null);
+                        }
+                    }
+                    break;
+
+                case "StopBuiltProgram":
+                    programExecutor?.Stop();
+                    break;
+
+                case "SetActiveTool":
+                    {
+                        var tp = LoadParams<ToolNameParams>(command);
+                        if (string.IsNullOrEmpty(tp.Name) || tp.Name == "None")
+                        {
+                            activeTool  = "";
+                            CurrentTool = Vector6.Zero;
+                        }
+                        else
+                        {
+                            var tool = toolRepo.Get(tp.Name);
+                            if (tool != null)
+                            {
+                                activeTool  = tp.Name;
+                                CurrentTool = new Vector6(tool.X, tool.Y, tool.Z,
+                                                          tool.RX, tool.RY, tool.RZ);
+                            }
+                        }
+                    }
+                    break;
 
                 default:
                     RobotCommand NewCommand = LoadParams<RobotCommand>(command);
@@ -300,7 +592,8 @@ namespace Controller.RobotControl
                 return;
 
             RobotCommand? Command = QueuedCommands[0];
-            
+            Vector6? target = null;
+
             if (Command is null)
                 return;
 
@@ -309,11 +602,15 @@ namespace Controller.RobotControl
             if (IsMoving && !CommandType.Contains("Jog"))
                 return;
 
+            // Apply any status update that was attached to this command at send-time
+            if (Command.StatusUpdate != null)
+                programManager.ApplyStatusUpdate(Command.StatusUpdate);
+
             switch (CommandType)
             {
                 case "MoveL":
                     {
-                        Vector6 target = ResolveVector(Command);
+                        target = ResolveVector(Command);
                         MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
                     }
                     break;
@@ -325,7 +622,7 @@ namespace Controller.RobotControl
 
                 case "MoveJ":
                     {
-                        Vector6 target = ResolveVector(Command);
+                        target = ResolveVector(Command);
                         MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
                     }
                     break;
@@ -408,7 +705,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input2)
                     {
-                        HardStop();
+                        ExecuteHardStop();
                         homingState = "WaitVerticalMoveComplete";
                     }
                     break;
@@ -439,7 +736,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(new(0, 1), 20, 100, 10000000, 0.001);
                     if (stb.Input3)
                     {
-                        HardStop();
+                        ExecuteHardStop();
                         homingState = "WaitHorizontalMoveComplete";
                     }
                     break;
@@ -473,7 +770,7 @@ namespace Controller.RobotControl
                     jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 10000000, 0.001);
                     if (stb.Input1)
                     {
-                        HardStop();
+                        ExecuteHardStop();
                         homingState = "WaitJ1MoveComplete";
                     }
                     break;
@@ -505,6 +802,7 @@ namespace Controller.RobotControl
                 case "HomingComplete":
                     startHoming = false;
                     homingState = "WaitingForStart";
+                    homed = true;
                     break;
 
                 default:
@@ -512,14 +810,30 @@ namespace Controller.RobotControl
             }
         }
 
+        /// <summary>
+        /// Thread-safe: sets a flag that is consumed at the top of the next control loop iteration.
+        /// Never touches the profilers directly from outside the loop thread.
+        /// </summary>
         public void HardStop()
         {
+            _hardStopRequested = true;
+        }
+
+        /// <summary>
+        /// Must only be called from the control loop thread.
+        /// Clears all motion state immediately and safely.
+        /// </summary>
+        private void ExecuteHardStop()
+        {
+            _hardStopRequested = false;
             linearMotionProfiler = null;
             jointMotionProfiler = null;
             joggingMotionProfiler.ForceStop();
             jointJoggingProfiler.ForceStop();
             toolJoggingMotionProfiler.ForceStop();
             QueuedCommands.Clear();
+            startHoming = false;
+            homingState = "WaitingForStart";
         }
 
         public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)
@@ -642,7 +956,7 @@ namespace Controller.RobotControl
             if (msg.Params == null)
                 throw new InvalidOperationException("Command has no params");
 
-            return msg.Params.Value.Deserialize<T>()!;
+            return msg.Params.Value.Deserialize<T>(_jsonOptions)!;
         }
 
         private Vector6 ResolveVector(RobotCommand command)

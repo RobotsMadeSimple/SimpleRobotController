@@ -27,139 +27,46 @@
       }
     }
   ],
-  "Name": [
-    {
-      "TimestampUnixMs": 1772356104195,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 1772356104195,
-        "X": 18.410075276069744,
-        "Y": 0,
-        "Z": 0,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 0
-      }
-    },
-    {
-      "TimestampUnixMs": 1772356103661,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 1772356103661,
-        "X": 18.410075276069744,
-        "Y": 0,
-        "Z": 0,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 0
-      }
-    },
-    {
-      "TimestampUnixMs": 1772356101861,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 1772356101861,
-        "X": 14.4421516677734,
-        "Y": 0,
-        "Z": 0,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 0
-      }
-    },
-    {
-      "TimestampUnixMs": 1772356100338,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 1772356100338,
-        "X": 14.4421516677734,
-        "Y": 0,
-        "Z": 0,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 0
-      }
-    },
-    {
-      "TimestampUnixMs": 1772356095923,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 1772356095922,
-        "X": 14.4421516677734,
-        "Y": 0,
-        "Z": 0,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 0
-      }
-    },
-    {
-      "TimestampUnixMs": 1772356057970,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 0,
-        "X": 34.715171129757884,
-        "Y": -0.3027668624064906,
-        "Z": 4.4278958099361585,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 5.128388467721269
-      }
-    },
-    {
-      "TimestampUnixMs": 1772356046244,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 0,
-        "X": 34.715171129757884,
-        "Y": -0.3027668624064906,
-        "Z": 4.4278958099361585,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 5.128388467721269
-      }
-    },
-    {
-      "TimestampUnixMs": 1772356040576,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 0,
-        "X": 34.715171129757884,
-        "Y": -0.3027668624064906,
-        "Z": 4.4278958099361585,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 5.128388467721269
-      }
-    },
-    {
-      "TimestampUnixMs": 1772355725247,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 0,
-        "X": 34.715171129757884,
-        "Y": -0.3027668624064906,
-        "Z": 4.4278958099361585,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 5.128388467721269
-      }
-    },
-    {
-      "TimestampUnixMs": 1772355718046,
-      "Point": {
-        "Name": "Name",
-        "LastUpdatedUnixMs": 0,
-        "X": 34.715171129757884,
-        "Y": -0.3027668624064906,
-        "Z": 0,
-        "RX": 0,
-        "RY": 0,
-        "RZ": 5.128388467721269
-      }
-    }
-  ],
   "Home": [
+    {
+      "TimestampUnixMs": 1774205852292,
+      "Point": {
+        "Name": "Home",
+        "LastUpdatedUnixMs": 1774205852291,
+        "X": 50,
+        "Y": 50,
+        "Z": 50,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1773970460840,
+      "Point": {
+        "Name": "Home",
+        "LastUpdatedUnixMs": 1773970460840,
+        "X": 0,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
+    {
+      "TimestampUnixMs": 1773970456387,
+      "Point": {
+        "Name": "Home",
+        "LastUpdatedUnixMs": 1773970456386,
+        "X": 300,
+        "Y": 0,
+        "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    },
     {
       "TimestampUnixMs": 1773963750967,
       "Point": {
@@ -224,6 +131,36 @@
         "X": 59.313995178738494,
         "Y": 1.7179213838182519,
         "Z": 0,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    }
+  ],
+  "Point3": [
+    {
+      "TimestampUnixMs": 1773973906400,
+      "Point": {
+        "Name": "Point3",
+        "LastUpdatedUnixMs": 1773973906399,
+        "X": 300,
+        "Y": 300,
+        "Z": 300,
+        "RX": 0,
+        "RY": 0,
+        "RZ": 0
+      }
+    }
+  ],
+  "Point1": [
+    {
+      "TimestampUnixMs": 1773973913519,
+      "Point": {
+        "Name": "Point1",
+        "LastUpdatedUnixMs": 1773973913519,
+        "X": 300,
+        "Y": 300,
+        "Z": 300,
         "RX": 0,
         "RY": 0,
         "RZ": 0
