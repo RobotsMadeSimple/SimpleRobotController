@@ -58,7 +58,7 @@ namespace Controller.RobotControl
         private bool homed = false;
         private bool startHoming = false;
         private String homingState = "WaitingForStart";
-        private double homedJointDeg = -11; // J1 when homed is at 0
+        private double homedJointDeg = -5; // J1 when homed is at 0
         private double verticalHomed = 445; // Z Height when homed
         private double horizontalHomed = 413; // Horizontal distance when homed
 
