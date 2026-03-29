@@ -850,7 +850,7 @@ namespace Controller.RobotControl
                     TBot.CurrentJoint2.Cartesian = (TBot.CurrentJoint2.Cartesian.x, verticalHomed);
 
                     CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, Vector6.Zero);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
 
                     // Have the robot update its joints
                     TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
@@ -883,7 +883,7 @@ namespace Controller.RobotControl
                     TBot.CurrentJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
 
                     CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, Vector6.Zero);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
 
                     // Have the robot update its joints
                     TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
@@ -917,7 +917,7 @@ namespace Controller.RobotControl
                     TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
 
                     CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, Vector6.Zero);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
 
                     // Have the robot update its joints
                     TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
