@@ -416,3 +416,11 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Runtime data files — generated at runtime, machine-specific, not for source control
+RobotControl/points.json
+RobotControl/pointsHistory.json
+RobotControl/tools.json
+RobotControl/toolsHistory.json
+RobotControl/builtPrograms.json
+RobotControl/identity.json
