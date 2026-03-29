@@ -576,6 +576,7 @@ namespace Controller.RobotControl
                     {
                         var p = LoadParams<BuiltProgramNameParams>(command);
                         builtProgramRepo.Delete(p.Name);
+                        programManager.RemoveProgram(p.Name);
                     }
                     break;
 
