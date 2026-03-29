@@ -550,8 +550,10 @@ namespace Controller.RobotControl
                         // Clear active tool if the deleted one was active
                         if (activeTool == tp.Name)
                         {
-                            activeTool   = "";
-                            CurrentTool  = Vector6.Zero;
+                            activeTool          = "";
+                            CurrentTool         = Vector6.Zero;
+                            CurrentPosition     = TBot.TcpPosition(CurrentTool);
+                            CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                         }
                     }
                     break;
@@ -632,6 +634,9 @@ namespace Controller.RobotControl
                                                           tool.RX, tool.RY, tool.RZ);
                             }
                         }
+                        // Recalculate position with new tool offset
+                        CurrentPosition     = TBot.TcpPosition(CurrentTool);
+                        CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                     }
                     break;
 
@@ -750,7 +755,9 @@ namespace Controller.RobotControl
                     break;
 
                 case "SetTool":
-                    this.CurrentTool = Command.Vector6;
+                    this.CurrentTool    = Command.Vector6;
+                    CurrentPosition     = TBot.TcpPosition(CurrentTool);
+                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                     break;
 
                 case "SpeedS":
