@@ -1,4 +1,5 @@
 ﻿using Controller.RobotControl.MotionProfilers;
+using Controller.RobotControl.Nano;
 using Controller.RobotControl.Robots.TBot;
 using System.Diagnostics;
 using System.Numerics;
@@ -71,8 +72,15 @@ namespace Controller.RobotControl
 
         public List<RobotCommand> QueuedCommands = new();
 
+        // ── Nano IO ───────────────────────────────────────────────────────────
+        public NanoManager NanoManager { get; private set; } = null!;
+        private long _lastStatusLightMs = 0;
+
         public RobotController()
         {
+            NanoManager = new NanoManager("nano_config.json");
+            NanoManager.Start();
+
             stb.Start();
 
             stb.Motor3.InvertDirection = true;
@@ -129,7 +137,54 @@ namespace Controller.RobotControl
 
                 // Let the stepper motor drive towards the new targets
                 stb.moving = IsMoving;
+
+                // Update the status-light neopixel strip at ~2 Hz
+                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (nowMs - _lastStatusLightMs >= 500)
+                {
+                    _lastStatusLightMs = nowMs;
+                    UpdateStatusLight();
+                }
             }
+        }
+
+        /// <summary>
+        /// Sets all pixels on the first configured Neopixel strip to a colour that
+        /// reflects the current robot state.  Colours:
+        ///   Purple  — Nano not connected
+        ///   Red     — Motor driver not connected
+        ///   Yellow  — Homing in progress
+        ///   Orange  — Not yet homed
+        ///   Blue    — Moving
+        ///   Green   — Idle and ready
+        /// </summary>
+        private void UpdateStatusLight()
+        {
+            var neoResult = NanoManager.FindFirstNeopixel();
+            if (neoResult == null) return;
+
+            var (device, neoPin) = neoResult.Value;
+
+            NeoPixelColor color;
+
+            if (!device.Connected)
+                color = NeoPixelColor.Purple;
+            else if (!stb.connected)
+                color = NeoPixelColor.Red;
+            else if (startHoming || homingState != "WaitingForStart")
+                color = NeoPixelColor.Yellow;
+            else if (!homed)
+                color = NeoPixelColor.Orange;
+            else if (IsMoving)
+                color = NeoPixelColor.Blue;
+            else
+                color = NeoPixelColor.Green;
+
+            var colors = new NeoPixelColor[neoPin.PixelCount];
+            for (int i = 0; i < colors.Length; i++)
+                colors[i] = color;
+
+            NanoManager.SetNeoPixel(device.Id, neoPin.Pin, colors);
         }
 
         public void RunMotion()
@@ -316,11 +371,17 @@ namespace Controller.RobotControl
                             accelJ = AccelJ,
                             decelJ = DecelJ,
 
-                            // STB Axis Limits
+                            // STB digital inputs
                             input1 = stb.Input1,
                             input2 = stb.Input2,
                             input3 = stb.Input3,
                             input4 = stb.Input4,
+
+                            // STB digital outputs
+                            output1 = stb.Output1,
+                            output2 = stb.Output2,
+                            output3 = stb.Output3,
+                            output4 = stb.Output4,
 
                             // Program cycle — summary only (no logs / images)
                             programs = programManager.GetProgramsSummary(),
@@ -571,6 +632,67 @@ namespace Controller.RobotControl
                                                           tool.RX, tool.RY, tool.RZ);
                             }
                         }
+                    }
+                    break;
+
+                // ── STB4100 IO ────────────────────────────────────────────────
+
+                case "SetSTBOutput":
+                    {
+                        var p = LoadParams<SetNanoOutputParams>(command); // reuse same params shape
+                        stb.SetOutput(p.Pin, p.Value);
+                    }
+                    break;
+
+                // ── Nano IO ───────────────────────────────────────────────────
+
+                case "GetIO":
+                    {
+                        var states = NanoManager.GetAllStates();
+                        var json   = JsonSerializer.Serialize(states, new JsonSerializerOptions
+                        {
+                            Converters           = { new JsonStringEnumConverter() },
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        });
+                        payload = new { nanos = json };
+                    }
+                    break;
+
+                case "SetNanoOutput":
+                    {
+                        var p = LoadParams<SetNanoOutputParams>(command);
+                        NanoManager.SetOutput(p.NanoId, p.Pin, p.Value);
+                    }
+                    break;
+
+                case "SetNeoPixel":
+                    {
+                        var p = LoadParams<SetNeoPixelParams>(command);
+                        var colors = p.Colors
+                            .Select(c => new NeoPixelColor(c.R, c.G, c.B))
+                            .ToArray();
+                        NanoManager.SetNeoPixel(p.NanoId, p.Pin, colors);
+                    }
+                    break;
+
+                case "RenameNanoPin":
+                    {
+                        var p = LoadParams<RenameNanoPinParams>(command);
+                        NanoManager.RenamePin(p.NanoId, p.Pin, p.Name);
+                    }
+                    break;
+
+                case "ConfigureNanoPin":
+                    {
+                        var p    = LoadParams<ConfigureNanoPinParams>(command);
+                        var type = p.Type switch
+                        {
+                            "Output"       => Nano.PinType.Output,
+                            "Neopixel"     => Nano.PinType.Neopixel,
+                            "Unconfigured" => Nano.PinType.Unconfigured,
+                            _              => Nano.PinType.Input,
+                        };
+                        NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount);
                     }
                     break;
 

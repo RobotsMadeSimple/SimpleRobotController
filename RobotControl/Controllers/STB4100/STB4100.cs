@@ -45,10 +45,31 @@ public class STB4100
 
     public bool moving;
 
-    public bool Input1 { get; private set; }
-    public bool Input2 { get; private set; }
-    public bool Input3 { get; private set; }
-    public bool Input4 { get; private set; }
+    public bool Input1  { get; private set; }
+    public bool Input2  { get; private set; }
+    public bool Input3  { get; private set; }
+    public bool Input4  { get; private set; }
+
+    public bool Output1 { get; private set; }
+    public bool Output2 { get; private set; }
+    public bool Output3 { get; private set; }
+    public bool Output4 { get; private set; }
+
+    private byte _outputsByte = 0;
+
+    public void SetOutput(int output, bool value)
+    {
+        int bit = output - 1; // output 1 = bit 0, etc.
+        if (bit < 0 || bit > 3) return;
+
+        if (value) _outputsByte |=  (byte)(1 << bit);
+        else       _outputsByte &= (byte)~(1 << bit);
+
+        Output1 = (_outputsByte & 1) != 0;
+        Output2 = (_outputsByte & 2) != 0;
+        Output3 = (_outputsByte & 4) != 0;
+        Output4 = (_outputsByte & 8) != 0;
+    }
 
     private readonly Stopwatch _statusTimer = Stopwatch.StartNew();
 
@@ -324,9 +345,9 @@ public class STB4100
         }
         else if (command == "Reset")
         {
-            send.AddRange([0, 0, 0, 0, 0, 0, 0, 0]);   // Bytes 5–12
-            send.AddRange([0, 0, 0, 100, 5]);         // Bytes 13–17
-            send.AddRange(BitTools.NumberToBytes(0, 9));              // Bytes 18–26
+            send.AddRange([0, 0, 0, 0, 0, 0, 0, 0]);   // Bytes 5ï¿½12
+            send.AddRange([0, 0, 0, 100, 5]);         // Bytes 13ï¿½17
+            send.AddRange(BitTools.NumberToBytes(0, 9));              // Bytes 18ï¿½26
         }
         if (_stream is null)
             return;
@@ -345,7 +366,7 @@ public class STB4100
         };
 
         send.AddRange(BitTools.NumberToBytes(_commandCount++, 2));
-        send.Add(0); // Outputs Byte
+        send.Add(_outputsByte); // Outputs Byte (bits 0-3 = Output1-4)
         send.Add(0); // Padding?
         if (command == 14)
         {

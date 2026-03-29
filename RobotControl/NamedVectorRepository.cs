@@ -47,12 +47,21 @@ public abstract class NamedVectorRepository<TItem, TEntry>
     {
         if (!File.Exists(_itemsFile)) { SaveItems(); return; }
 
-        ItemsJson = File.ReadAllText(_itemsFile);
-        var list  = JsonSerializer.Deserialize<List<TItem>>(ItemsJson, _jsonOptions) ?? new();
+        try
+        {
+            ItemsJson = File.ReadAllText(_itemsFile);
+            var list  = JsonSerializer.Deserialize<List<TItem>>(ItemsJson, _jsonOptions) ?? new();
 
-        Items = list
-            .Where(i => !string.IsNullOrWhiteSpace(i.Name))
-            .ToDictionary(i => i.Name!, i => i);
+            Items = list
+                .Where(i => !string.IsNullOrWhiteSpace(i.Name))
+                .ToDictionary(i => i.Name!, i => i);
+        }
+        catch
+        {
+            // File exists but is corrupt or invalid — start fresh
+            Items = new();
+            SaveItems();
+        }
     }
 
     protected void SaveItems()
@@ -66,8 +75,17 @@ public abstract class NamedVectorRepository<TItem, TEntry>
     {
         if (!File.Exists(_historyFile)) { SaveHistory(); return; }
 
-        var json = File.ReadAllText(_historyFile);
-        _history = JsonSerializer.Deserialize<Dictionary<string, List<TEntry>>>(json, _jsonOptions) ?? new();
+        try
+        {
+            var json = File.ReadAllText(_historyFile);
+            _history = JsonSerializer.Deserialize<Dictionary<string, List<TEntry>>>(json, _jsonOptions) ?? new();
+        }
+        catch
+        {
+            // File exists but is corrupt or invalid — start fresh
+            _history = new();
+            SaveHistory();
+        }
     }
 
     private void SaveHistory()

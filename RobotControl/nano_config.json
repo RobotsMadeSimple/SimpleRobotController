@@ -1,0 +1,118 @@
+{
+  "nanos": [
+    {
+      "id": "ROBOT_NANO_001",
+      "name": "Main IO Board",
+      "pins": [
+        {
+          "pin": 2,
+          "type": "Input",
+          "name": "D2",
+          "pixelCount": 1
+        },
+        {
+          "pin": 3,
+          "type": "Input",
+          "name": "D3",
+          "pixelCount": 1
+        },
+        {
+          "pin": 4,
+          "type": "Input",
+          "name": "Input 3",
+          "pixelCount": 1
+        },
+        {
+          "pin": 5,
+          "type": "Input",
+          "name": "Input 4",
+          "pixelCount": 1
+        },
+        {
+          "pin": 7,
+          "type": "Output",
+          "name": "Output 1",
+          "pixelCount": 1
+        },
+        {
+          "pin": 8,
+          "type": "Output",
+          "name": "Output 2",
+          "pixelCount": 1
+        },
+        {
+          "pin": 6,
+          "type": "Neopixel",
+          "name": "Status Light",
+          "pixelCount": 12
+        },
+        {
+          "pin": 9,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 10,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 11,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 12,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 13,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 14,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 15,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 16,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 17,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 18,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        },
+        {
+          "pin": 19,
+          "type": "Input",
+          "name": "",
+          "pixelCount": 8
+        }
+      ]
+    }
+  ]
+}
