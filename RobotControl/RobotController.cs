@@ -896,7 +896,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeJ1":
-                    Vector6 J1JogDirection = new(1);
+                    Vector6 J1JogDirection = new(-1);
                     jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 10000000, 0.001);
                     if (stb.Input1)
                     {
