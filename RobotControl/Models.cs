@@ -148,9 +148,13 @@ public class ProgramStep
     [JsonPropertyName("offsetRY")] public double? OffsetRY { get; set; }
     [JsonPropertyName("offsetRZ")] public double? OffsetRZ { get; set; }
 
-    // Optional tool to apply as a TCP offset (looked up from ToolRepository at execution time)
-    [JsonPropertyName("toolName")]
-    public string? ToolName { get; set; }
+    // Local tool offset applied at execution time (mm / deg)
+    [JsonPropertyName("toolOffsetX")]  public double? ToolOffsetX  { get; set; }
+    [JsonPropertyName("toolOffsetY")]  public double? ToolOffsetY  { get; set; }
+    [JsonPropertyName("toolOffsetZ")]  public double? ToolOffsetZ  { get; set; }
+    [JsonPropertyName("toolOffsetRX")] public double? ToolOffsetRX { get; set; }
+    [JsonPropertyName("toolOffsetRY")] public double? ToolOffsetRY { get; set; }
+    [JsonPropertyName("toolOffsetRZ")] public double? ToolOffsetRZ { get; set; }
 
     // SetOutput
     [JsonPropertyName("outputNumber")]

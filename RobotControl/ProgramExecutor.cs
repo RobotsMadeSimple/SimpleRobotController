@@ -199,8 +199,9 @@ namespace Controller.RobotControl
                 return;
             }
 
-            // Resolve optional tool offset
-            Tool? tool = string.IsNullOrEmpty(step.ToolName) ? null : _toolRepo.Get(step.ToolName);
+            // Determine if a local tool offset is set on this step
+            bool hasToolOffset = step.ToolOffsetX.HasValue || step.ToolOffsetY.HasValue || step.ToolOffsetZ.HasValue
+                               || step.ToolOffsetRX.HasValue || step.ToolOffsetRY.HasValue || step.ToolOffsetRZ.HasValue;
 
             var cmd = new RobotCommand
             {
@@ -212,13 +213,13 @@ namespace Controller.RobotControl
                 RX = point.RX + (step.OffsetRX ?? 0),
                 RY = point.RY + (step.OffsetRY ?? 0),
                 RZ = point.RZ + (step.OffsetRZ ?? 0),
-                // Optional tool TCP offset
-                TX  = tool?.X,
-                TY  = tool?.Y,
-                TZ  = tool?.Z,
-                TRX = tool?.RX,
-                TRY = tool?.RY,
-                TRZ = tool?.RZ,
+                // Optional local tool offset applied on top of the active tool
+                TX  = hasToolOffset ? step.ToolOffsetX  ?? 0 : null,
+                TY  = hasToolOffset ? step.ToolOffsetY  ?? 0 : null,
+                TZ  = hasToolOffset ? step.ToolOffsetZ  ?? 0 : null,
+                TRX = hasToolOffset ? step.ToolOffsetRX ?? 0 : null,
+                TRY = hasToolOffset ? step.ToolOffsetRY ?? 0 : null,
+                TRZ = hasToolOffset ? step.ToolOffsetRZ ?? 0 : null,
                 Speed = step.Speed,
                 Accel = step.Accel,
                 Decel = step.Decel,
