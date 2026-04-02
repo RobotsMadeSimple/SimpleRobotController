@@ -47,5 +47,7 @@ jobs:
     name: Trigger Release
     needs: tag
     uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
     with:
       tag: ${{ needs.tag.outputs.new_tag }}
