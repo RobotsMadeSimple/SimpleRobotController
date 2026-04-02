@@ -21,6 +21,11 @@ namespace Controller.RobotControl
         /// For existing programs only non-null fields are overwritten so that
         /// live status is not clobbered when the external program re-registers.
         /// </summary>
+        public void RemoveProgram(string name)
+        {
+            lock (_lock) { _programs.Remove(name); }
+        }
+
         public void SetAvailablePrograms(List<ProgramUpdateParams> programs)
         {
             lock (_lock)

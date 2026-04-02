@@ -14,6 +14,7 @@ namespace Controller.RobotControl
         public ToolRepository        toolRepo        = new();
         public BuiltProgramRepository builtProgramRepo = new();
         public STB4100 stb = new();
+        private RobotIdentity _identity = new();
         public ScalarMotionProfiler mp = new();
         public TBotKinematics TBot = new();
         private readonly ProgramCycleManager programManager = new();
@@ -58,7 +59,7 @@ namespace Controller.RobotControl
         private bool homed = false;
         private bool startHoming = false;
         private String homingState = "WaitingForStart";
-        private double homedJointDeg = -11; // J1 when homed is at 0
+        private double homedJointDeg = -17; // J1 when homed is at 0
         private double verticalHomed = 445; // Z Height when homed
         private double horizontalHomed = 413; // Horizontal distance when homed
 
@@ -261,12 +262,26 @@ namespace Controller.RobotControl
             stb.SetMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
         }
 
+        public void SetIdentity(RobotIdentity identity)
+        {
+            _identity = identity;
+        }
+
         public Task<object> AddCommand(CommandMessage command)
         {
             object? payload = null;
 
             switch (command.Command)
             {
+                case "GetRobotInfo":
+                    payload = new
+                    {
+                        robotName    = _identity.RobotName,
+                        robotType    = _identity.RobotType,
+                        serialNumber = _identity.SerialNumber,
+                    };
+                    break;
+
                 case "Home":
                     startHoming = true;
                     break;
@@ -576,6 +591,7 @@ namespace Controller.RobotControl
                     {
                         var p = LoadParams<BuiltProgramNameParams>(command);
                         builtProgramRepo.Delete(p.Name);
+                        programManager.RemoveProgram(p.Name);
                     }
                     break;
 
@@ -895,7 +911,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeJ1":
-                    Vector6 J1JogDirection = new(1);
+                    Vector6 J1JogDirection = new(-1);
                     jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 10000000, 0.001);
                     if (stb.Input1)
                     {

@@ -39,13 +39,24 @@ public class RobotWebSocketServer
     private async Task HandleClient(WebSocket socket)
     {
         var buffer = new byte[4096];
+        var ms     = new MemoryStream();
 
         while (socket.State == WebSocketState.Open)
         {
-            var result = await socket.ReceiveAsync(buffer, CancellationToken.None);
-            if (result.Count > 0)
+            ms.SetLength(0);
+            WebSocketReceiveResult result;
+
+            // Accumulate all fragments until EndOfMessage
+            do
             {
-                var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                ms.Write(buffer, 0, result.Count);
+            }
+            while (!result.EndOfMessage && socket.State == WebSocketState.Open);
+
+            if (ms.Length > 0)
+            {
+                var json = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
                 await HandleMessage(socket, json);
             }
         }
