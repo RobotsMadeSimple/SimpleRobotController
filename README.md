@@ -1,12 +1,12 @@
-# RobotController
+# SimpleRobotController
 
-The core control platform for **Tibert** — an open-source, workbench-sized 4-axis robot arm built for pick and place, machine tending, and small business automation. Part of the [Robots Made Simple](https://github.com/RobotsMadeSimple) ecosystem.
+The core control platform for **ASTRO** — an open-source, workbench-sized 4-axis robot arm built for pick and place, machine tending, and small business automation. Part of the [Robots Made Simple](https://github.com/RobotsMadeSimple) ecosystem.
 
 ---
 
 ## What It Does
 
-RobotController is a C# ASP.NET Core WebSocket server that runs on the robot's onboard computer. It handles:
+SimpleRobotController is a C# ASP.NET Core WebSocket server that runs on the robot's onboard computer. It handles:
 
 - **Motion control** — jogging, homing, teaching points, running programs
 - **IO management** — Arduino Nano edge devices, STB4100 IO board
@@ -23,19 +23,19 @@ All robots, workstations, and tooling in the Robots Made Simple ecosystem share 
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Linux, Windows, or macOS
-- A compatible robot (Tibert) or a supported IO device
+- A compatible robot (ASTRO) or a supported IO device
 
 ---
 
 ## Getting Started
 
 ```bash
-git clone https://github.com/RobotsMadeSimple/RobotController.git
-cd RobotController/RobotControl
+git clone https://github.com/RobotsMadeSimple/SimpleRobotController.git
+cd SimpleRobotController/RobotControl
 dotnet run
 ```
 
-The server starts on port `9000`. Connect using [RobotReact](https://github.com/RobotsMadeSimple/RobotReact) or any WebSocket client.
+The server starts on port `9000`. Connect using [SimpleRobotApp](https://github.com/RobotsMadeSimple/SimpleRobotApp) or any WebSocket client.
 
 ---
 
@@ -83,7 +83,7 @@ All communication is line-based JSON over WebSocket on port `9000`.
 
 | Device | Description |
 |---|---|
-| Tibert Robot Arm | 4-axis, 400mm cylindrical envelope |
+| ASTRO Robot Arm | 4-axis, 400mm cylindrical envelope |
 | Arduino Nano | Edge IO device — configurable inputs, outputs, NeoPixel |
 | STB4100 | Robot IO board — 4 inputs, 4 outputs |
 
@@ -91,9 +91,9 @@ All communication is line-based JSON over WebSocket on port `9000`.
 
 ## Ecosystem
 
-Robots Made Simple is a fully open-source automation ecosystem. RobotController is the shared platform across all devices:
+Robots Made Simple is a fully open-source automation ecosystem. SimpleRobotController is the shared platform across all devices:
 
-- **[RobotReact](https://github.com/RobotsMadeSimple/RobotReact)** — Mobile and web app for controlling the robot
+- **[SimpleRobotApp](https://github.com/RobotsMadeSimple/SimpleRobotApp)** — Mobile and web app for controlling the robot
 - **[ArduinoNano](https://github.com/RobotsMadeSimple/ArduinoNano)** — Edge device firmware
 - Workstations, tooling, and more — coming soon
 

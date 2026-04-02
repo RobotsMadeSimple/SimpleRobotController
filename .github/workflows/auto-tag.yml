@@ -39,4 +39,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag ${{ steps.new_tag.outputs.tag }}
-          git push origin ${{ steps.new_tag.outputs.tag }}
+          git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }} ${{ steps.new_tag.outputs.tag }}
