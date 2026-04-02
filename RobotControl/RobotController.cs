@@ -14,6 +14,7 @@ namespace Controller.RobotControl
         public ToolRepository        toolRepo        = new();
         public BuiltProgramRepository builtProgramRepo = new();
         public STB4100 stb = new();
+        private RobotIdentity _identity = new();
         public ScalarMotionProfiler mp = new();
         public TBotKinematics TBot = new();
         private readonly ProgramCycleManager programManager = new();
@@ -261,12 +262,26 @@ namespace Controller.RobotControl
             stb.SetMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
         }
 
+        public void SetIdentity(RobotIdentity identity)
+        {
+            _identity = identity;
+        }
+
         public Task<object> AddCommand(CommandMessage command)
         {
             object? payload = null;
 
             switch (command.Command)
             {
+                case "GetRobotInfo":
+                    payload = new
+                    {
+                        robotName    = _identity.RobotName,
+                        robotType    = _identity.RobotType,
+                        serialNumber = _identity.SerialNumber,
+                    };
+                    break;
+
                 case "Home":
                     startHoming = true;
                     break;

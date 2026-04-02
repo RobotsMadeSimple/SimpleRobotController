@@ -11,6 +11,7 @@ class Program
         var identity = RobotIdentityService.Load();
 
         var robotController = new Controller.RobotControl.RobotController();
+        robotController.SetIdentity(identity);
 
         // ---- Web server ----
         var builder = WebApplication.CreateBuilder(args);
