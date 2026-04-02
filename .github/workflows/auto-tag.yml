@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      new_tag: ${{ steps.new_tag.outputs.tag }}
 
     steps:
       - name: Checkout
@@ -40,3 +42,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag ${{ steps.new_tag.outputs.tag }}
           git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }} ${{ steps.new_tag.outputs.tag }}
+
+  release:
+    name: Trigger Release
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.new_tag }}
