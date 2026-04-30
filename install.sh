@@ -8,6 +8,12 @@ DOWNLOAD_URL="https://github.com/RobotsMadeSimple/SimpleRobotController/releases
 
 echo "Installing Robot Controller..."
 
+# Ensure curl is available
+if ! command -v curl &> /dev/null; then
+    echo "curl not found, installing..."
+    apt-get install -y curl
+fi
+
 # Download the latest binary
 curl -sSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/$BINARY_NAME"
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
