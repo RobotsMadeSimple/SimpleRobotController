@@ -27,11 +27,34 @@ All robots, workstations, and tooling in the Robots Made Simple ecosystem share 
 
 ---
 
-## Getting Started
+## Installation
+
+### Linux (recommended for onboard computer)
+
+Run the install script to download the latest release, install it, and set it up as a systemd service that starts automatically on boot:
 
 ```bash
-git clone https://github.com/RobotsMadeSimple/SimpleRobotController.git
-cd SimpleRobotController/RobotControl
+curl -sSL https://raw.githubusercontent.com/lucas-polodna/RobotController/main/install.sh | sudo bash
+```
+
+Once installed:
+
+| Command | Description |
+|---|---|
+| `sudo systemctl status robot-controller` | Check if running |
+| `sudo journalctl -u robot-controller -f` | View live logs |
+| `sudo systemctl stop robot-controller` | Stop the controller |
+| `sudo systemctl restart robot-controller` | Restart the controller |
+
+### Windows
+
+Download the latest `Controller.exe` from the [Releases](https://github.com/lucas-polodna/RobotController/releases/latest) page and run it directly — no installation needed.
+
+### From Source
+
+```bash
+git clone https://github.com/lucas-polodna/RobotController.git
+cd RobotController/RobotControl
 dotnet run
 ```
 

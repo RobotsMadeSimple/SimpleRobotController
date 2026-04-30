@@ -49,5 +49,6 @@ jobs:
     uses: ./.github/workflows/release.yml
     permissions:
       contents: write
+    secrets: inherit
     with:
       tag: ${{ needs.tag.outputs.new_tag }}
