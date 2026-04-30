@@ -34,7 +34,7 @@ All robots, workstations, and tooling in the Robots Made Simple ecosystem share 
 Run the install script to download the latest release, install it, and set it up as a systemd service that starts automatically on boot:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/lucas-polodna/RobotController/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/RobotsMadeSimple/SimpleRobotController/main/install.sh | sudo bash
 ```
 
 Once installed:
@@ -48,12 +48,12 @@ Once installed:
 
 ### Windows
 
-Download the latest `Controller.exe` from the [Releases](https://github.com/lucas-polodna/RobotController/releases/latest) page and run it directly — no installation needed.
+Download the latest `Controller.exe` from the [Releases](https://github.com/RobotsMadeSimple/SimpleRobotController/releases/latest) page and run it directly — no installation needed.
 
 ### From Source
 
 ```bash
-git clone https://github.com/lucas-polodna/RobotController.git
+git clone https://github.com/RobotsMadeSimple/SimpleRobotController.git
 cd RobotController/RobotControl
 dotnet run
 ```
