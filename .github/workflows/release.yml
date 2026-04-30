@@ -11,7 +11,7 @@ on:
         type: string
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     permissions:
       contents: write
@@ -35,11 +35,38 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true
           -o publish
 
-      - name: List publish output
-        run: ls publish
-
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: publish/*.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish self-contained Linux binary
+        run: >
+          dotnet publish RobotControl/Controller.csproj
+          -c Release
+          -r linux-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: publish/SimpleRobotController
