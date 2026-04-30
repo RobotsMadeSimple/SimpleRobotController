@@ -54,7 +54,7 @@ Download the latest `Controller.exe` from the [Releases](https://github.com/Robo
 
 ```bash
 git clone https://github.com/RobotsMadeSimple/SimpleRobotController.git
-cd RobotController/RobotControl
+cd SimpleRobotController/RobotControl
 dotnet run
 ```
 
