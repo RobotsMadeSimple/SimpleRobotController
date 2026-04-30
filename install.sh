@@ -3,8 +3,8 @@ set -e
 
 INSTALL_DIR="/usr/local/bin"
 SERVICE_NAME="robot-controller"
-BINARY_NAME="Controller"
-DOWNLOAD_URL="https://github.com/RobotsMadeSimple/SimpleRobotController/releases/latest/download/Controller"
+BINARY_NAME="SimpleRobotController"
+DOWNLOAD_URL="https://github.com/RobotsMadeSimple/SimpleRobotController/releases/latest/download/SimpleRobotController"
 
 echo "Installing Robot Controller..."
 
