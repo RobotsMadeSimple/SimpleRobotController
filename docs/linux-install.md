@@ -1,6 +1,6 @@
 # Linux Installation Guide
 
-This guide walks you through installing SimpleRobotController on a Linux computer — the recommended setup for running the controller on your robot's onboard computer.
+This guide walks you through installing SimpleRobotController on a Linux computer.
 
 ---
 

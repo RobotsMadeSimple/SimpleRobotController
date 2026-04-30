@@ -29,7 +29,7 @@ All robots, workstations, and tooling in the Robots Made Simple ecosystem share 
 
 ## Installation
 
-### Linux (recommended for onboard computer)
+### Linux
 
 Run the install script to download the latest release, install it, and set it up as a systemd service that starts automatically on boot:
 
