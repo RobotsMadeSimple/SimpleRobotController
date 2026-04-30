@@ -33,11 +33,22 @@ All robots, workstations, and tooling in the Robots Made Simple ecosystem share 
 
 Run the install script to download the latest release, install it, and set it up as a systemd service that starts automatically on boot:
 
+**1. Download and run the install script:**
 ```bash
 curl -sSL https://raw.githubusercontent.com/RobotsMadeSimple/SimpleRobotController/main/install.sh | sudo bash
 ```
 
-Once installed:
+**2. Verify it's running:**
+```bash
+sudo systemctl status robot-controller
+```
+
+**3. Check the logs:**
+```bash
+sudo journalctl -u robot-controller -f
+```
+
+Once installed the controller will start automatically on every boot. Useful commands:
 
 | Command | Description |
 |---|---|
@@ -48,7 +59,7 @@ Once installed:
 
 ### Windows
 
-Download the latest `Controller.exe` from the [Releases](https://github.com/RobotsMadeSimple/SimpleRobotController/releases/latest) page and run it directly — no installation needed.
+Download the latest `SimpleRobotController.exe` from the [Releases](https://github.com/RobotsMadeSimple/SimpleRobotController/releases/latest) page and run it directly — no installation needed.
 
 ### From Source
 
