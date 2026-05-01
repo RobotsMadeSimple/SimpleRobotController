@@ -424,3 +424,4 @@ RobotControl/tools.json
 RobotControl/toolsHistory.json
 RobotControl/builtPrograms.json
 RobotControl/identity.json
+RobotControl/programImages/*
