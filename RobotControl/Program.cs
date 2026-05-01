@@ -26,17 +26,43 @@ class Program
             }
         );
 
-        // Use serial number as the mDNS instance name so each robot is addressable uniquely
-        var service = new ServiceProfile(identity.SerialNumber, "_robot._tcp", 9000);
-        service.AddProperty("ControlEndpoint", "/control");
-        service.AddProperty("SerialNumber",    identity.SerialNumber);
-        service.AddProperty("RobotType",       identity.RobotType);
-        service.AddProperty("RobotName",       identity.RobotName);
+        ServiceProfile BuildProfile(RobotIdentity id)
+        {
+            var p = new ServiceProfile(id.SerialNumber, "_robot._tcp", 9000);
+            p.AddProperty("ControlEndpoint", "/control");
+            p.AddProperty("SerialNumber",    id.SerialNumber);
+            p.AddProperty("RobotType",       id.RobotType);
+            p.AddProperty("RobotName",       id.RobotName);
+            return p;
+        }
+
         var sd = new ServiceDiscovery();
+        var service = BuildProfile(identity);
         sd.Advertise(service);
 
         Console.WriteLine($"[mDNS] Advertising as '{identity.SerialNumber}._robot._tcp' " +
                           $"(Type: '{identity.RobotType}', Name: '{identity.RobotName}')");
+
+        robotController.OnIdentityChanged = updated =>
+        {
+            _ = Task.Run(async () =>
+            {
+                sd.Unadvertise(service);
+                await Task.Delay(250);
+                service = BuildProfile(updated);
+                sd.Advertise(service);
+                Console.WriteLine($"[mDNS] Re-advertising with Type: '{updated.RobotType}', Name: '{updated.RobotName}'");
+            });
+        };
+
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                await Task.Delay(3000);
+                try { sd.Announce(service); } catch { }
+            }
+        });
 
         wsServer.Map(app);
 

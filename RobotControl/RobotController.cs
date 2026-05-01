@@ -1,6 +1,6 @@
 ﻿using Controller.RobotControl.MotionProfilers;
 using Controller.RobotControl.Nano;
-using Controller.RobotControl.Robots.TBot;
+using Controller.RobotControl.Robots.ASTRO;
 using System.Diagnostics;
 using System.Numerics;
 using System.Text.Json;
@@ -15,8 +15,9 @@ namespace Controller.RobotControl
         public BuiltProgramRepository builtProgramRepo = new();
         public STB4100 stb = new();
         private RobotIdentity _identity = new();
+        public Action<RobotIdentity>? OnIdentityChanged;
         public ScalarMotionProfiler mp = new();
-        public TBotKinematics TBot = new();
+        public ASTROKinematics ASTRO = new();
         private readonly ProgramCycleManager programManager = new();
         private ProgramExecutor? programExecutor;
 
@@ -202,7 +203,7 @@ namespace Controller.RobotControl
                 }
 
                 // Calculate IK to get the joint targets for the next interpolated linear movement
-                CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
             }
             else if (jointMotionProfiler is not null)
@@ -225,13 +226,13 @@ namespace Controller.RobotControl
                 UpdateJointTargets();
 
                 // Recalculate the Cartesian Coordinate position to keep it current
-                CurrentPosition = TBot.TcpPosition(CurrentTool);
+                CurrentPosition = ASTRO.TcpPosition(CurrentTool);
             }
             else if (IsJogging)
             {
                 CurrentPosition = joggingMotionProfiler.Update(CurrentPosition);
                 // Calculate IK to get the joint targets for the next Jog movement
-                CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
             }
             else if (IsJointJogging)
@@ -243,20 +244,20 @@ namespace Controller.RobotControl
                 UpdateJointTargets();
 
                 // Recalculate the Cartesian Coordinate position to keep it current
-                CurrentPosition = TBot.TcpPosition(CurrentTool);
+                CurrentPosition = ASTRO.TcpPosition(CurrentTool);
             }
             else if (IsToolJogging)
             {
                 CurrentPosition = toolJoggingMotionProfiler.Update(CurrentPosition);
                 // Calculate IK to get the joint targets for the next Jog movement
-                CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
             }
         }
         public void UpdateJointTargets()
         {
             // Have the robot update its joints
-            TBot.UpdateJointTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
+            ASTRO.UpdateJointTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
 
             // Drive the motors to the target
             stb.SetMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
@@ -281,6 +282,28 @@ namespace Controller.RobotControl
                         serialNumber = _identity.SerialNumber,
                     };
                     break;
+
+                case "RestartController":
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(500);
+                        var exe = Environment.ProcessPath;
+                        if (exe != null)
+                            System.Diagnostics.Process.Start(exe);
+                        Environment.Exit(0);
+                    });
+                    break;
+
+                case "SetRobotIdentity":
+                {
+                    var p = JsonSerializer.Deserialize<SetRobotIdentityParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    if (p.RobotName != null) _identity.RobotName = p.RobotName;
+                    if (p.RobotType != null) _identity.RobotType = p.RobotType;
+                    RobotIdentityService.Save(_identity);
+                    OnIdentityChanged?.Invoke(_identity);
+                    break;
+                }
 
                 case "Home":
                     startHoming = true;
@@ -342,7 +365,7 @@ namespace Controller.RobotControl
 
                 case "GetStatus":
                     {
-                        Vector6 pose = TBot.GetVisualRobotPose(CurrentPosition, CurrentTool);
+                        Vector6 pose = ASTRO.GetVisualRobotPose(CurrentPosition, CurrentTool);
 
                         payload = new
                         {
@@ -367,9 +390,9 @@ namespace Controller.RobotControl
                             targetRY = this.TargetPosition.RY,
                             targetRZ = this.TargetPosition.RZ,
 
-                            joint1Angle = this.TBot.CurrentJoint1.JointAngleDeg,
-                            joint2X = this.TBot.CurrentJoint2.Cartesian.x,
-                            joint2Z = this.TBot.CurrentJoint2.Cartesian.z,
+                            joint1Angle = this.ASTRO.CurrentJoint1.JointAngleDeg,
+                            joint2X = this.ASTRO.CurrentJoint2.Cartesian.x,
+                            joint2Z = this.ASTRO.CurrentJoint2.Cartesian.z,
 
                             poseX = pose.X,
                             poseY = pose.Y,
@@ -567,8 +590,8 @@ namespace Controller.RobotControl
                         {
                             activeTool          = "";
                             CurrentTool         = Vector6.Zero;
-                            CurrentPosition     = TBot.TcpPosition(CurrentTool);
-                            CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                            CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
+                            CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                         }
                     }
                     break;
@@ -651,8 +674,8 @@ namespace Controller.RobotControl
                             }
                         }
                         // Recalculate position with new tool offset
-                        CurrentPosition     = TBot.TcpPosition(CurrentTool);
-                        CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                        CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
+                        CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                     }
                     break;
 
@@ -772,8 +795,8 @@ namespace Controller.RobotControl
 
                 case "SetTool":
                     this.CurrentTool    = Command.Vector6;
-                    CurrentPosition     = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
+                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                     break;
 
                 case "SpeedS":
@@ -818,19 +841,19 @@ namespace Controller.RobotControl
         {
             double m1Deg, m2Deg, m3Deg, m4Deg;
             // Offset the current joint angle
-            TBot.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
-            TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
-            TBot.InterpolatedJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
-            TBot.CurrentJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
-            TBot.InterpolatedJoint2.Cartesian = (TBot.InterpolatedJoint2.Cartesian.x, verticalHomed);
-            TBot.CurrentJoint2.Cartesian = (TBot.CurrentJoint2.Cartesian.x, verticalHomed);
+            ASTRO.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
+            ASTRO.CurrentJoint1.JointAngleDeg = homedJointDeg;
+            ASTRO.InterpolatedJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
+            ASTRO.CurrentJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
+            ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, verticalHomed);
+            ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, verticalHomed);
 
             // Recalculate the position and joint targets
-            CurrentPosition = TBot.TcpPosition(CurrentTool);
-            CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+            CurrentPosition = ASTRO.TcpPosition(CurrentTool);
+            CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
 
             // Have the robot update its joints
-            TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+            ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
 
             // Drive the motors to the target
             stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
@@ -862,14 +885,14 @@ namespace Controller.RobotControl
 
                 case "SetVerticalHomed":
                     // Offset the current joint angle
-                    TBot.InterpolatedJoint2.Cartesian = (TBot.InterpolatedJoint2.Cartesian.x, verticalHomed);
-                    TBot.CurrentJoint2.Cartesian = (TBot.CurrentJoint2.Cartesian.x, verticalHomed);
+                    ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, verticalHomed);
+                    ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, verticalHomed);
 
-                    CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
+                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
 
                     // Have the robot update its joints
-                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
 
                     // Drive the motors to the target
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
@@ -895,14 +918,14 @@ namespace Controller.RobotControl
 
                 case "SetHorizontalHomed":
                     // Offset the current joint angle
-                    TBot.InterpolatedJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
-                    TBot.CurrentJoint2.Cartesian = (horizontalHomed, TBot.InterpolatedJoint2.Cartesian.z);
+                    ASTRO.InterpolatedJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
+                    ASTRO.CurrentJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
 
-                    CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
+                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
 
                     // Have the robot update its joints
-                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
 
                     // Drive the motors to the target
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
@@ -929,14 +952,14 @@ namespace Controller.RobotControl
 
                 case "SetJ1MotorHomed":
                     // Offset the current joint angle
-                    TBot.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
-                    TBot.CurrentJoint1.JointAngleDeg = homedJointDeg;
+                    ASTRO.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
+                    ASTRO.CurrentJoint1.JointAngleDeg = homedJointDeg;
 
-                    CurrentPosition = TBot.TcpPosition(CurrentTool);
-                    CurrentJointTargets = TBotKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
+                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
 
                     // Have the robot update its joints
-                    TBot.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
 
                     // Set the motors to the target
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
@@ -1002,7 +1025,7 @@ namespace Controller.RobotControl
             }
 
             // Calculate the joint positions for the target position and the current tooling
-            this.TargetJoints = TBotKinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
+            this.TargetJoints = ASTROKinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
 
             // Generate a joint motion profile using the current and target joint positions
             jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, jointSpeed, jointAccel, jointDecel);
