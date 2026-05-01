@@ -211,6 +211,12 @@ public class SaveBuiltProgramImageParams
     [JsonPropertyName("image")] public string Image { get; set; } = ""; // base64-encoded JPEG bytes
 }
 
+public class SetRobotIdentityParams
+{
+    [JsonPropertyName("robotName")] public string? RobotName { get; set; }
+    [JsonPropertyName("robotType")] public string? RobotType { get; set; }
+}
+
 public class CommandMessage
 {
     public string Type { get; set; } = default!;

@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Numerics;
 
-namespace Controller.RobotControl.Robots.TBot
+namespace Controller.RobotControl.Robots.ASTRO
 {
-    internal class TBotKinematics
+    internal class ASTROKinematics
     {
         private static readonly double pulley30tPcd = 19.099;
 
@@ -26,7 +26,7 @@ namespace Controller.RobotControl.Robots.TBot
         public CoreXYStage CurrentJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
         public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(10.0);
 
-        public TBotKinematics() { }
+        public ASTROKinematics() { }
 
         // ============================================================
         // FORWARD KINEMATICS

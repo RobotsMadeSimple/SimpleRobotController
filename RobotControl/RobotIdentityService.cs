@@ -47,8 +47,8 @@ namespace Controller.RobotControl
             var newIdentity = new RobotIdentity
             {
                 SerialNumber = GenerateSerialNumber(),
-                RobotType    = string.Empty,
-                RobotName    = string.Empty
+                RobotType    = "ASTRO",
+                RobotName    = "ASTRO"
             };
 
             Save(newIdentity);
@@ -56,7 +56,7 @@ namespace Controller.RobotControl
             return newIdentity;
         }
 
-        private static void Save(RobotIdentity identity)
+        public static void Save(RobotIdentity identity)
         {
             try
             {
