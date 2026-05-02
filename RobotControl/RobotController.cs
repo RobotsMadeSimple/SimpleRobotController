@@ -56,13 +56,13 @@ namespace Controller.RobotControl
         // Active tool name — "" means no tool (origin Vector6)
         private string activeTool = "";
 
+        // Robot configuration (homing offsets, speeds, etc.)
+        private RobotConfig _config = new();
+
         // If the Robot was homed from startup
         private bool homed = false;
         private bool startHoming = false;
         private String homingState = "WaitingForStart";
-        private double homedJointDeg = -17; // J1 when homed is at 0
-        private double verticalHomed = 445; // Z Height when homed
-        private double horizontalHomed = 413; // Horizontal distance when homed
 
         private JoggingMotionProfiler joggingMotionProfiler = new();
         private JoggingMotionProfiler jointJoggingProfiler = new();
@@ -268,6 +268,11 @@ namespace Controller.RobotControl
             _identity = identity;
         }
 
+        public void SetConfig(RobotConfig config)
+        {
+            _config = config;
+        }
+
         public Task<object> AddCommand(CommandMessage command)
         {
             object? payload = null;
@@ -302,6 +307,28 @@ namespace Controller.RobotControl
                     if (p.RobotType != null) _identity.RobotType = p.RobotType;
                     RobotIdentityService.Save(_identity);
                     OnIdentityChanged?.Invoke(_identity);
+                    break;
+                }
+
+                case "GetRobotConfig":
+                    payload = new
+                    {
+                        homingSpeed            = _config.HomingSpeed,
+                        j1HomeOffsetDeg        = _config.J1HomeOffsetDeg,
+                        verticalHomePosition   = _config.VerticalHomePosition,
+                        horizontalHomePosition = _config.HorizontalHomePosition,
+                    };
+                    break;
+
+                case "SetRobotConfig":
+                {
+                    var p = JsonSerializer.Deserialize<SetRobotConfigParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    if (p.HomingSpeed.HasValue)             _config.HomingSpeed             = p.HomingSpeed.Value;
+                    if (p.J1HomeOffsetDeg.HasValue)         _config.J1HomeOffsetDeg         = p.J1HomeOffsetDeg.Value;
+                    if (p.VerticalHomePosition.HasValue)    _config.VerticalHomePosition    = p.VerticalHomePosition.Value;
+                    if (p.HorizontalHomePosition.HasValue)  _config.HorizontalHomePosition  = p.HorizontalHomePosition.Value;
+                    RobotConfigService.Save(_config);
                     break;
                 }
 
@@ -841,12 +868,12 @@ namespace Controller.RobotControl
         {
             double m1Deg, m2Deg, m3Deg, m4Deg;
             // Offset the current joint angle
-            ASTRO.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
-            ASTRO.CurrentJoint1.JointAngleDeg = homedJointDeg;
-            ASTRO.InterpolatedJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
-            ASTRO.CurrentJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
-            ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, verticalHomed);
-            ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, verticalHomed);
+            ASTRO.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
+            ASTRO.CurrentJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
+            ASTRO.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
+            ASTRO.CurrentJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
+            ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
+            ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, _config.VerticalHomePosition);
 
             // Recalculate the position and joint targets
             CurrentPosition = ASTRO.TcpPosition(CurrentTool);
@@ -870,7 +897,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeVertical":
-                    jointJoggingProfiler.Jog(new(0, 0, 1), 20, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, 0, 1), _config.HomingSpeed, 100, 10000000, 0.001);
                     if (stb.Input2)
                     {
                         ExecuteHardStop();
@@ -885,8 +912,8 @@ namespace Controller.RobotControl
 
                 case "SetVerticalHomed":
                     // Offset the current joint angle
-                    ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, verticalHomed);
-                    ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, verticalHomed);
+                    ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
+                    ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, _config.VerticalHomePosition);
 
                     CurrentPosition = ASTRO.TcpPosition(CurrentTool);
                     CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
@@ -901,7 +928,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeHorizontal":
-                    jointJoggingProfiler.Jog(new(0, 1), 20, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, 1), _config.HomingSpeed, 100, 10000000, 0.001);
                     if (stb.Input3)
                     {
                         ExecuteHardStop();
@@ -918,8 +945,8 @@ namespace Controller.RobotControl
 
                 case "SetHorizontalHomed":
                     // Offset the current joint angle
-                    ASTRO.InterpolatedJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
-                    ASTRO.CurrentJoint2.Cartesian = (horizontalHomed, ASTRO.InterpolatedJoint2.Cartesian.z);
+                    ASTRO.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
+                    ASTRO.CurrentJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
 
                     CurrentPosition = ASTRO.TcpPosition(CurrentTool);
                     CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
@@ -935,7 +962,7 @@ namespace Controller.RobotControl
 
                 case "HomeJ1":
                     Vector6 J1JogDirection = new(-1);
-                    jointJoggingProfiler.Jog(J1JogDirection, 20, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(J1JogDirection, _config.HomingSpeed, 100, 10000000, 0.001);
                     if (stb.Input1)
                     {
                         ExecuteHardStop();
@@ -952,8 +979,8 @@ namespace Controller.RobotControl
 
                 case "SetJ1MotorHomed":
                     // Offset the current joint angle
-                    ASTRO.InterpolatedJoint1.JointAngleDeg = homedJointDeg;
-                    ASTRO.CurrentJoint1.JointAngleDeg = homedJointDeg;
+                    ASTRO.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
+                    ASTRO.CurrentJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
 
                     CurrentPosition = ASTRO.TcpPosition(CurrentTool);
                     CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);

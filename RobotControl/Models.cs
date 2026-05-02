@@ -217,6 +217,14 @@ public class SetRobotIdentityParams
     [JsonPropertyName("robotType")] public string? RobotType { get; set; }
 }
 
+public class SetRobotConfigParams
+{
+    [JsonPropertyName("homingSpeed")]             public double? HomingSpeed             { get; set; }
+    [JsonPropertyName("j1HomeOffsetDeg")]         public double? J1HomeOffsetDeg         { get; set; }
+    [JsonPropertyName("verticalHomePosition")]    public double? VerticalHomePosition    { get; set; }
+    [JsonPropertyName("horizontalHomePosition")]  public double? HorizontalHomePosition  { get; set; }
+}
+
 public class CommandMessage
 {
     public string Type { get; set; } = default!;

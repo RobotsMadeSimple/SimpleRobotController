@@ -9,9 +9,11 @@ class Program
     static void Main(string[] args)
     {
         var identity = RobotIdentityService.Load();
+        var config   = RobotConfigService.Load();
 
         var robotController = new Controller.RobotControl.RobotController();
         robotController.SetIdentity(identity);
+        robotController.SetConfig(config);
 
         // ---- Web server ----
         var builder = WebApplication.CreateBuilder(args);
