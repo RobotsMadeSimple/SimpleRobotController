@@ -227,10 +227,13 @@ public class SetRobotIdentityParams
 
 public class SetRobotConfigParams
 {
-    [JsonPropertyName("homingSpeed")]             public double? HomingSpeed             { get; set; }
-    [JsonPropertyName("j1HomeOffsetDeg")]         public double? J1HomeOffsetDeg         { get; set; }
-    [JsonPropertyName("verticalHomePosition")]    public double? VerticalHomePosition    { get; set; }
-    [JsonPropertyName("horizontalHomePosition")]  public double? HorizontalHomePosition  { get; set; }
+    [JsonPropertyName("homingSpeed")]               public double? HomingSpeed               { get; set; }
+    [JsonPropertyName("j1HomeOffsetDeg")]           public double? J1HomeOffsetDeg           { get; set; }
+    [JsonPropertyName("verticalHomePosition")]      public double? VerticalHomePosition      { get; set; }
+    [JsonPropertyName("horizontalHomePosition")]    public double? HorizontalHomePosition    { get; set; }
+    [JsonPropertyName("verticalHomingDirection")]   public int?    VerticalHomingDirection   { get; set; }
+    [JsonPropertyName("horizontalHomingDirection")] public int?    HorizontalHomingDirection { get; set; }
+    [JsonPropertyName("j1HomingDirection")]         public int?    J1HomingDirection         { get; set; }
 }
 
 public class CommandMessage
