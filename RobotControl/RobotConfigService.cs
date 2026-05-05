@@ -22,6 +22,18 @@ namespace Controller.RobotControl
         /// <summary>Horizontal distance (mm) applied once the horizontal limit switch is hit.</summary>
         [JsonPropertyName("horizontalHomePosition")]
         public double HorizontalHomePosition { get; set; } = 413;
+
+        /// <summary>Direction to jog during vertical homing (1 = positive Z, -1 = negative Z).</summary>
+        [JsonPropertyName("verticalHomingDirection")]
+        public int VerticalHomingDirection { get; set; } = 1;
+
+        /// <summary>Direction to jog during horizontal homing (1 = positive Y, -1 = negative Y).</summary>
+        [JsonPropertyName("horizontalHomingDirection")]
+        public int HorizontalHomingDirection { get; set; } = 1;
+
+        /// <summary>Direction to jog during J1 homing (1 = positive, -1 = negative).</summary>
+        [JsonPropertyName("j1HomingDirection")]
+        public int J1HomingDirection { get; set; } = -1;
     }
 
     public static class RobotConfigService

@@ -313,10 +313,13 @@ namespace Controller.RobotControl
                 case "GetRobotConfig":
                     payload = new
                     {
-                        homingSpeed            = _config.HomingSpeed,
-                        j1HomeOffsetDeg        = _config.J1HomeOffsetDeg,
-                        verticalHomePosition   = _config.VerticalHomePosition,
-                        horizontalHomePosition = _config.HorizontalHomePosition,
+                        homingSpeed               = _config.HomingSpeed,
+                        j1HomeOffsetDeg           = _config.J1HomeOffsetDeg,
+                        verticalHomePosition      = _config.VerticalHomePosition,
+                        horizontalHomePosition    = _config.HorizontalHomePosition,
+                        verticalHomingDirection   = _config.VerticalHomingDirection,
+                        horizontalHomingDirection = _config.HorizontalHomingDirection,
+                        j1HomingDirection         = _config.J1HomingDirection,
                     };
                     break;
 
@@ -324,10 +327,13 @@ namespace Controller.RobotControl
                 {
                     var p = JsonSerializer.Deserialize<SetRobotConfigParams>(
                         command.Params!.Value.GetRawText(), _jsonOptions)!;
-                    if (p.HomingSpeed.HasValue)             _config.HomingSpeed             = p.HomingSpeed.Value;
-                    if (p.J1HomeOffsetDeg.HasValue)         _config.J1HomeOffsetDeg         = p.J1HomeOffsetDeg.Value;
-                    if (p.VerticalHomePosition.HasValue)    _config.VerticalHomePosition    = p.VerticalHomePosition.Value;
-                    if (p.HorizontalHomePosition.HasValue)  _config.HorizontalHomePosition  = p.HorizontalHomePosition.Value;
+                    if (p.HomingSpeed.HasValue)               _config.HomingSpeed               = p.HomingSpeed.Value;
+                    if (p.J1HomeOffsetDeg.HasValue)           _config.J1HomeOffsetDeg           = p.J1HomeOffsetDeg.Value;
+                    if (p.VerticalHomePosition.HasValue)      _config.VerticalHomePosition      = p.VerticalHomePosition.Value;
+                    if (p.HorizontalHomePosition.HasValue)    _config.HorizontalHomePosition    = p.HorizontalHomePosition.Value;
+                    if (p.VerticalHomingDirection.HasValue)   _config.VerticalHomingDirection   = p.VerticalHomingDirection.Value;
+                    if (p.HorizontalHomingDirection.HasValue) _config.HorizontalHomingDirection = p.HorizontalHomingDirection.Value;
+                    if (p.J1HomingDirection.HasValue)         _config.J1HomingDirection         = p.J1HomingDirection.Value;
                     RobotConfigService.Save(_config);
                     break;
                 }
@@ -898,7 +904,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeVertical":
-                    jointJoggingProfiler.Jog(new(0, 0, 1), _config.HomingSpeed, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
                     if (stb.Input2)
                     {
                         ExecuteHardStop();
@@ -929,7 +935,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeHorizontal":
-                    jointJoggingProfiler.Jog(new(0, 1), _config.HomingSpeed, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
                     if (stb.Input3)
                     {
                         ExecuteHardStop();
@@ -962,7 +968,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeJ1":
-                    Vector6 J1JogDirection = new(-1);
+                    Vector6 J1JogDirection = new(_config.J1HomingDirection);
                     jointJoggingProfiler.Jog(J1JogDirection, _config.HomingSpeed, 100, 10000000, 0.001);
                     if (stb.Input1)
                     {
