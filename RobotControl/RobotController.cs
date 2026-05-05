@@ -88,7 +88,7 @@ namespace Controller.RobotControl
             stb.Motor3.InvertDirection = true;
             stb.Motor4.InvertDirection = true;
 
-            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo);
+            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, builtProgramRepo);
 
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
@@ -633,6 +633,7 @@ namespace Controller.RobotControl
                             Name        = p.Name,
                             Description = p.Description,
                             Steps       = p.Steps,
+                            IsRoutine   = p.IsRoutine,
                         });
                     }
                     break;
