@@ -117,7 +117,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate }
+public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine }
 
 public class ProgramStep
 {
@@ -179,6 +179,10 @@ public class ProgramStep
     public string? StatusWarning { get; set; }
     [JsonPropertyName("statusError")]
     public string? StatusError { get; set; }
+
+    // CallRoutine
+    [JsonPropertyName("routineName")]
+    public string? RoutineName { get; set; }
 }
 
 public class BuiltProgram
@@ -191,6 +195,9 @@ public class BuiltProgram
     public List<ProgramStep> Steps { get; set; } = new();
     [JsonPropertyName("lastUpdatedUnixMs")]
     public long LastUpdatedUnixMs { get; set; }
+    /// <summary>Routines are hidden from the program list and can only be called from a program step.</summary>
+    [JsonPropertyName("isRoutine")]
+    public bool IsRoutine { get; set; } = false;
 }
 
 public class SaveBuiltProgramParams
@@ -198,6 +205,7 @@ public class SaveBuiltProgramParams
     [JsonPropertyName("name")]        public string Name        { get; set; } = "";
     [JsonPropertyName("description")] public string Description { get; set; } = "";
     [JsonPropertyName("steps")]       public List<ProgramStep> Steps { get; set; } = new();
+    [JsonPropertyName("isRoutine")]   public bool IsRoutine     { get; set; } = false;
 }
 
 public class BuiltProgramNameParams

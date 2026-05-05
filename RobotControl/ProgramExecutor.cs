@@ -14,6 +14,7 @@ namespace Controller.RobotControl
         private readonly ProgramCycleManager      _programManager;
         private readonly PointRepository          _pointRepo;
         private readonly ToolRepository           _toolRepo;
+        private readonly BuiltProgramRepository   _builtProgramRepo;
 
         // ── Execution state ──────────────────────────────────────────────────
         private BuiltProgram?   _program;
@@ -35,12 +36,13 @@ namespace Controller.RobotControl
 
         public bool IsRunning => _running;
 
-        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo)
+        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo)
         {
-            _controller     = controller;
-            _programManager = programManager;
-            _pointRepo      = pointRepo;
-            _toolRepo       = toolRepo;
+            _controller       = controller;
+            _programManager   = programManager;
+            _pointRepo        = pointRepo;
+            _toolRepo         = toolRepo;
+            _builtProgramRepo = builtProgramRepo;
         }
 
         // ── Public control ───────────────────────────────────────────────────
@@ -185,6 +187,10 @@ namespace Controller.RobotControl
                 case StepType.StatusUpdate:
                     ExecuteStatusUpdate(step, frame);
                     break;
+
+                case StepType.CallRoutine:
+                    ExecuteCallRoutine(step, frame);
+                    break;
             }
         }
 
@@ -269,6 +275,23 @@ namespace Controller.RobotControl
             }
         }
 
+        private void ExecuteCallRoutine(ProgramStep step, StepListFrame frame)
+        {
+            var routine = _builtProgramRepo.Get(step.RoutineName ?? "");
+            if (routine is null)
+            {
+                Finish(global::ProgramStatus.Error, $"Routine not found: {step.RoutineName}");
+                return;
+            }
+            if (routine.Steps.Count == 0) { frame.Index++; ReportStepCompleted(step); return; }
+
+            ReportStepCompleted(step); // the call step itself counts as done; routine steps count separately
+            frame.Index++;
+
+            // Push the routine's steps as a plain (non-loop) frame
+            _frameStack.Push(new StepListFrame(routine.Steps, 0));
+        }
+
         private void ExecuteLoop(ProgramStep step, StepListFrame frame)
         {
             var innerSteps = step.LoopSteps ?? new();
@@ -348,19 +371,25 @@ namespace Controller.RobotControl
                 StepType.Wait         => $"Wait {step.WaitMs} ms",
                 StepType.Loop         => $"Loop ×{(step.LoopCount == 0 ? "∞" : step.LoopCount)}",
                 StepType.StatusUpdate => step.StatusMessage ?? "Status update",
+                StepType.CallRoutine  => $"Routine → {step.RoutineName}",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
         }
 
-        internal static int CountSteps(List<ProgramStep> steps)
+        internal static int CountSteps(List<ProgramStep> steps, BuiltProgramRepository? repo = null)
         {
             int count = 0;
             foreach (var s in steps)
             {
                 count++;
                 if (s.Type == StepType.Loop && s.LoopSteps != null)
-                    count += CountSteps(s.LoopSteps) * Math.Max(s.LoopCount ?? 1, 1);
+                    count += CountSteps(s.LoopSteps, repo) * Math.Max(s.LoopCount ?? 1, 1);
+                else if (s.Type == StepType.CallRoutine && repo != null)
+                {
+                    var routine = repo.Get(s.RoutineName ?? "");
+                    if (routine != null) count += CountSteps(routine.Steps, repo);
+                }
             }
             return count;
         }

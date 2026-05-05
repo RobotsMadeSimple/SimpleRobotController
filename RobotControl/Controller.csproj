@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>SimpleRobotController</AssemblyName>
+    <ApplicationIcon>..\Simple Robot Controller Icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
