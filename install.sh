@@ -14,6 +14,9 @@ if ! command -v curl &> /dev/null; then
     apt-get install -y curl
 fi
 
+# Stop the service if it is already running (update scenario)
+systemctl stop $SERVICE_NAME 2>/dev/null || true
+
 # Download the latest binary
 curl -sSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/$BINARY_NAME"
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
@@ -36,7 +39,7 @@ EOF
 
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
-systemctl start $SERVICE_NAME
+systemctl restart $SERVICE_NAME
 
 echo ""
 echo "Robot Controller installed and running!"
