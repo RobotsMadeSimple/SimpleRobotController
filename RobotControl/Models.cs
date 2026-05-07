@@ -260,6 +260,7 @@ public class SetRobotConfigParams
     [JsonPropertyName("verticalHomingDirection")]   public int?    VerticalHomingDirection   { get; set; }
     [JsonPropertyName("horizontalHomingDirection")] public int?    HorizontalHomingDirection { get; set; }
     [JsonPropertyName("j1HomingDirection")]         public int?    J1HomingDirection         { get; set; }
+    [JsonPropertyName("j4HomeOffsetDeg")]           public double? J4HomeOffsetDeg           { get; set; }
 }
 
 public class CommandMessage

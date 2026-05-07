@@ -93,6 +93,11 @@ namespace Controller.RobotControl
             _awaitingMove = false;
             _pendingStep  = null;
 
+            // Hard-stop any active motion profiler so IsMoving clears immediately.
+            // Without this, a stuck profiler (e.g. zero-speed) would leave the
+            // controller in a permanent "moving" state even after the program stops.
+            _controller.HardStop();
+
             // Emit Stopped status immediately rather than waiting for the next Update() tick.
             Finish(global::ProgramStatus.Stopped, "Stopped by user");
         }

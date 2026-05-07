@@ -320,6 +320,7 @@ namespace Controller.RobotControl
                         verticalHomingDirection   = _config.VerticalHomingDirection,
                         horizontalHomingDirection = _config.HorizontalHomingDirection,
                         j1HomingDirection         = _config.J1HomingDirection,
+                        j4HomeOffsetDeg           = _config.J4HomeOffsetDeg,
                     };
                     break;
 
@@ -334,6 +335,7 @@ namespace Controller.RobotControl
                     if (p.VerticalHomingDirection.HasValue)   _config.VerticalHomingDirection   = p.VerticalHomingDirection.Value;
                     if (p.HorizontalHomingDirection.HasValue) _config.HorizontalHomingDirection = p.HorizontalHomingDirection.Value;
                     if (p.J1HomingDirection.HasValue)         _config.J1HomingDirection         = p.J1HomingDirection.Value;
+                    if (p.J4HomeOffsetDeg.HasValue)           _config.J4HomeOffsetDeg           = p.J4HomeOffsetDeg.Value;
                     RobotConfigService.Save(_config);
                     break;
                 }
@@ -998,6 +1000,42 @@ namespace Controller.RobotControl
                     ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
 
                     // Set the motors to the target
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+
+                    homingState = "HomeJ4";
+                    break;
+
+                case "HomeJ4":
+                {
+                    // Drive J4 to 0° (mechanical zero) using a joint motion profile.
+                    // J1/J2/J3 stay at their current positions; only RZ (J4) changes.
+                    var j4Target = new Vector6(
+                        CurrentJointTargets.X,
+                        CurrentJointTargets.Y,
+                        CurrentJointTargets.Z,
+                        CurrentJointTargets.RX,
+                        CurrentJointTargets.RY,
+                        0  // J4 → 0 degrees
+                    );
+                    jointMotionProfiler = new(CurrentJointTargets, j4Target, _config.HomingSpeed, 100, 200);
+                    homingState = "WaitJ4MoveComplete";
+                    break;
+                }
+
+                case "WaitJ4MoveComplete":
+                    if (!IsMoving)
+                        homingState = "SetJ4Homed";
+                    break;
+
+                case "SetJ4Homed":
+                    // Apply the configured J4 home offset now that the axis is at mechanical zero
+                    ASTRO.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
+                    ASTRO.CurrentJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
+
+                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
+                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+
+                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
 
                     homingState = "HomingComplete";

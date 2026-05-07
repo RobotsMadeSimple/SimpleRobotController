@@ -34,6 +34,10 @@ namespace Controller.RobotControl
         /// <summary>Direction to jog during J1 homing (1 = positive, -1 = negative).</summary>
         [JsonPropertyName("j1HomingDirection")]
         public int J1HomingDirection { get; set; } = -1;
+
+        /// <summary>J4 angle (degrees) applied once J4 has driven to its mechanical zero and stopped.</summary>
+        [JsonPropertyName("j4HomeOffsetDeg")]
+        public double J4HomeOffsetDeg { get; set; } = 0;
     }
 
     public static class RobotConfigService
