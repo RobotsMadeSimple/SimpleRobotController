@@ -117,7 +117,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ }
+public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable }
 
 public class ProgramStep
 {
@@ -183,6 +183,29 @@ public class ProgramStep
     // CallRoutine
     [JsonPropertyName("routineName")]
     public string? RoutineName { get; set; }
+
+    // SetVariable
+    [JsonPropertyName("variableName")]
+    public string? VariableName { get; set; }
+    [JsonPropertyName("variableExpr")]
+    public string? VariableExpr { get; set; }
+
+    // Variable expressions — overrides any literal numeric field with a math expression.
+    // Keys match JSON property names (camelCase). Evaluated at execution time.
+    [JsonPropertyName("expressions")]
+    public Dictionary<string, string>? Expressions { get; set; }
+}
+
+public class ProgramVariable
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+    [JsonPropertyName("value")]
+    public double Value { get; set; }
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
 }
 
 public class BuiltProgram
@@ -193,6 +216,8 @@ public class BuiltProgram
     public string Description { get; set; } = "";
     [JsonPropertyName("steps")]
     public List<ProgramStep> Steps { get; set; } = new();
+    [JsonPropertyName("variables")]
+    public List<ProgramVariable>? Variables { get; set; }
     [JsonPropertyName("lastUpdatedUnixMs")]
     public long LastUpdatedUnixMs { get; set; }
     /// <summary>Routines are hidden from the program list and can only be called from a program step.</summary>
@@ -205,6 +230,7 @@ public class SaveBuiltProgramParams
     [JsonPropertyName("name")]        public string Name        { get; set; } = "";
     [JsonPropertyName("description")] public string Description { get; set; } = "";
     [JsonPropertyName("steps")]       public List<ProgramStep> Steps { get; set; } = new();
+    [JsonPropertyName("variables")]   public List<ProgramVariable>? Variables { get; set; }
     [JsonPropertyName("isRoutine")]   public bool IsRoutine     { get; set; } = false;
 }
 

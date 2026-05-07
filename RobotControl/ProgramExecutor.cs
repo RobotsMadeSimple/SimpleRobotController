@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace Controller.RobotControl
@@ -34,6 +35,9 @@ namespace Controller.RobotControl
         // Step that was dispatched asynchronously; reported complete when the move finishes
         private ProgramStep? _pendingStep;
 
+        // Program variables — initialised from BuiltProgram.Variables on Start(), mutated by SetVariable steps
+        private readonly Dictionary<string, double> _variables = new();
+
         public bool IsRunning => _running;
 
         public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo)
@@ -68,6 +72,11 @@ namespace Controller.RobotControl
             _frameStack.Clear();
             _frameStack.Push(new StepListFrame(program.Steps, 0));
 
+            // Initialise variables from the program definition
+            _variables.Clear();
+            foreach (var v in program.Variables ?? [])
+                _variables[v.Name] = v.Value;
+
             _program = program;
             _stopRequested = false;
             _awaitingMove = false;
@@ -100,6 +109,7 @@ namespace Controller.RobotControl
             _pendingStep     = null;
             _globalStepIndex = 0;
             _frameStack.Clear();
+            _variables.Clear();
         }
 
         // ── Main update — called every control loop tick ──────────────────────
@@ -199,6 +209,10 @@ namespace Controller.RobotControl
                 case StepType.SetSpeedJ:
                     ExecuteSetSpeedJ(step, frame);
                     break;
+
+                case StepType.SetVariable:
+                    ExecuteSetVariable(step, frame);
+                    break;
             }
         }
 
@@ -221,22 +235,22 @@ namespace Controller.RobotControl
             {
                 CommandType = step.Type == StepType.MoveL ? "MoveL" : "MoveJ",
                 // Target point + optional position offset
-                X  = point.X  + (step.OffsetX  ?? 0),
-                Y  = point.Y  + (step.OffsetY  ?? 0),
-                Z  = point.Z  + (step.OffsetZ  ?? 0),
-                RX = point.RX + (step.OffsetRX ?? 0),
-                RY = point.RY + (step.OffsetRY ?? 0),
-                RZ = point.RZ + (step.OffsetRZ ?? 0),
+                X  = point.X  + EvalField(step, "offsetX",  step.OffsetX  ?? 0),
+                Y  = point.Y  + EvalField(step, "offsetY",  step.OffsetY  ?? 0),
+                Z  = point.Z  + EvalField(step, "offsetZ",  step.OffsetZ  ?? 0),
+                RX = point.RX + EvalField(step, "offsetRX", step.OffsetRX ?? 0),
+                RY = point.RY + EvalField(step, "offsetRY", step.OffsetRY ?? 0),
+                RZ = point.RZ + EvalField(step, "offsetRZ", step.OffsetRZ ?? 0),
                 // Optional local tool offset applied on top of the active tool
-                TX  = hasToolOffset ? step.ToolOffsetX  ?? 0 : null,
-                TY  = hasToolOffset ? step.ToolOffsetY  ?? 0 : null,
-                TZ  = hasToolOffset ? step.ToolOffsetZ  ?? 0 : null,
-                TRX = hasToolOffset ? step.ToolOffsetRX ?? 0 : null,
-                TRY = hasToolOffset ? step.ToolOffsetRY ?? 0 : null,
-                TRZ = hasToolOffset ? step.ToolOffsetRZ ?? 0 : null,
-                Speed = step.Speed,
-                Accel = step.Accel,
-                Decel = step.Decel,
+                TX  = hasToolOffset ? EvalField(step, "toolOffsetX",  step.ToolOffsetX  ?? 0) : null,
+                TY  = hasToolOffset ? EvalField(step, "toolOffsetY",  step.ToolOffsetY  ?? 0) : null,
+                TZ  = hasToolOffset ? EvalField(step, "toolOffsetZ",  step.ToolOffsetZ  ?? 0) : null,
+                TRX = hasToolOffset ? EvalField(step, "toolOffsetRX", step.ToolOffsetRX ?? 0) : null,
+                TRY = hasToolOffset ? EvalField(step, "toolOffsetRY", step.ToolOffsetRY ?? 0) : null,
+                TRZ = hasToolOffset ? EvalField(step, "toolOffsetRZ", step.ToolOffsetRZ ?? 0) : null,
+                Speed = step.Speed.HasValue ? EvalField(step, "speed", step.Speed.Value) : (double?)null,
+                Accel = step.Accel.HasValue ? EvalField(step, "accel", step.Accel.Value) : (double?)null,
+                Decel = step.Decel.HasValue ? EvalField(step, "decel", step.Decel.Value) : (double?)null,
             };
 
             _controller.QueuedCommands.Add(cmd);
@@ -275,7 +289,7 @@ namespace Controller.RobotControl
             }
 
             var elapsed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _waitStartMs;
-            if (elapsed >= (step.WaitMs ?? 0))
+            if (elapsed >= EvalField(step, "waitMs", step.WaitMs ?? 0))
             {
                 frame.WaitStarted = false;
                 frame.Index++;
@@ -305,7 +319,7 @@ namespace Controller.RobotControl
             var innerSteps = step.LoopSteps ?? new();
             if (innerSteps.Count == 0) { frame.Index++; ReportStepCompleted(step); return; }
 
-            int count     = step.LoopCount ?? 1;
+            int count     = (int)EvalField(step, "loopCount", step.LoopCount ?? 1);
             int remaining = count == 0 ? int.MaxValue : count; // 0 = infinite
 
             ReportStepCompleted(step); // the loop header itself is done; body steps count separately
@@ -318,9 +332,11 @@ namespace Controller.RobotControl
         private void ExecuteSetSpeedL(ProgramStep step, StepListFrame frame)
         {
             if (step.Speed.HasValue)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = step.Speed });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed.Value) });
             if (step.Accel.HasValue || step.Decel.HasValue)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelS", Accel = step.Accel, Decel = step.Decel });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelS",
+                    Accel = step.Accel.HasValue ? EvalField(step, "accel", step.Accel.Value) : (double?)null,
+                    Decel = step.Decel.HasValue ? EvalField(step, "decel", step.Decel.Value) : (double?)null });
             ReportStepCompleted(step);
             frame.Index++;
         }
@@ -328,14 +344,48 @@ namespace Controller.RobotControl
         private void ExecuteSetSpeedJ(ProgramStep step, StepListFrame frame)
         {
             if (step.Speed.HasValue)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = step.Speed });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed.Value) });
             if (step.Accel.HasValue || step.Decel.HasValue)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelJ", Accel = step.Accel, Decel = step.Decel });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelJ",
+                    Accel = step.Accel.HasValue ? EvalField(step, "accel", step.Accel.Value) : (double?)null,
+                    Decel = step.Decel.HasValue ? EvalField(step, "decel", step.Decel.Value) : (double?)null });
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
+        {
+            if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
+            {
+                try
+                {
+                    _variables[step.VariableName] = ExpressionEvaluator.Evaluate(step.VariableExpr, _variables);
+                }
+                catch
+                {
+                    // If expression fails, leave variable unchanged
+                }
+            }
             ReportStepCompleted(step);
             frame.Index++;
         }
 
         // ── Helpers ──────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Returns the evaluated value for a numeric field.
+        /// If the step has an expression keyed by <paramref name="fieldName"/>, that expression is
+        /// evaluated against the current variable dictionary; otherwise <paramref name="fallback"/> is returned.
+        /// </summary>
+        private double EvalField(ProgramStep step, string fieldName, double fallback)
+        {
+            if (step.Expressions != null && step.Expressions.TryGetValue(fieldName, out var expr))
+            {
+                try { return ExpressionEvaluator.Evaluate(expr, _variables); }
+                catch { /* fall through */ }
+            }
+            return fallback;
+        }
 
         private int _globalStepIndex = 0;
 
@@ -402,6 +452,7 @@ namespace Controller.RobotControl
                 StepType.CallRoutine  => $"Routine → {step.RoutineName}",
                 StepType.SetSpeedL    => $"Set Linear Speed → {step.Speed} mm/s",
                 StepType.SetSpeedJ    => $"Set Joint Speed → {step.Speed} mm/s",
+                StepType.SetVariable  => $"${step.VariableName} = {step.VariableExpr}",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
