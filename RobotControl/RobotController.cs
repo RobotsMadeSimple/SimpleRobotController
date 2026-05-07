@@ -426,6 +426,7 @@ namespace Controller.RobotControl
                             joint1Angle = this.ASTRO.CurrentJoint1.JointAngleDeg,
                             joint2X = this.ASTRO.CurrentJoint2.Cartesian.x,
                             joint2Z = this.ASTRO.CurrentJoint2.Cartesian.z,
+                            joint4Angle = this.ASTRO.CurrentJoint4.JointAngleDeg,
 
                             poseX = pose.X,
                             poseY = pose.Y,
