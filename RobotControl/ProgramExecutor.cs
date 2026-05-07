@@ -191,6 +191,14 @@ namespace Controller.RobotControl
                 case StepType.CallRoutine:
                     ExecuteCallRoutine(step, frame);
                     break;
+
+                case StepType.SetSpeedL:
+                    ExecuteSetSpeedL(step, frame);
+                    break;
+
+                case StepType.SetSpeedJ:
+                    ExecuteSetSpeedJ(step, frame);
+                    break;
             }
         }
 
@@ -307,6 +315,26 @@ namespace Controller.RobotControl
             _frameStack.Push(new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: remaining));
         }
 
+        private void ExecuteSetSpeedL(ProgramStep step, StepListFrame frame)
+        {
+            if (step.Speed.HasValue)
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = step.Speed });
+            if (step.Accel.HasValue || step.Decel.HasValue)
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelS", Accel = step.Accel, Decel = step.Decel });
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteSetSpeedJ(ProgramStep step, StepListFrame frame)
+        {
+            if (step.Speed.HasValue)
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = step.Speed });
+            if (step.Accel.HasValue || step.Decel.HasValue)
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelJ", Accel = step.Accel, Decel = step.Decel });
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
         // ── Helpers ──────────────────────────────────────────────────────────
 
         private int _globalStepIndex = 0;
@@ -372,6 +400,8 @@ namespace Controller.RobotControl
                 StepType.Loop         => $"Loop ×{(step.LoopCount == 0 ? "∞" : step.LoopCount)}",
                 StepType.StatusUpdate => step.StatusMessage ?? "Status update",
                 StepType.CallRoutine  => $"Routine → {step.RoutineName}",
+                StepType.SetSpeedL    => $"Set Linear Speed → {step.Speed} mm/s",
+                StepType.SetSpeedJ    => $"Set Joint Speed → {step.Speed} mm/s",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";

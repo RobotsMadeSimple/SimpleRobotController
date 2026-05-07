@@ -117,7 +117,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine }
+public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ }
 
 public class ProgramStep
 {
@@ -130,15 +130,15 @@ public class ProgramStep
     [JsonPropertyName("type")]
     public StepType Type { get; set; }
 
-    // MoveL / MoveJ
+    // MoveL / MoveJ / SetSpeedL / SetSpeedJ
     [JsonPropertyName("pointName")]
     public string? PointName { get; set; }
     [JsonPropertyName("speed")]
-    public double Speed { get; set; } = 100;
+    public double? Speed { get; set; }
     [JsonPropertyName("accel")]
-    public double Accel { get; set; } = 100;
+    public double? Accel { get; set; }
     [JsonPropertyName("decel")]
-    public double Decel { get; set; } = 100;
+    public double? Decel { get; set; }
 
     // Optional position offset added to the target point (mm / deg)
     [JsonPropertyName("offsetX")]  public double? OffsetX  { get; set; }
