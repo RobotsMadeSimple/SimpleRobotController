@@ -639,6 +639,7 @@ namespace Controller.RobotControl
                             Name        = p.Name,
                             Description = p.Description,
                             Steps       = p.Steps,
+                            Variables   = p.Variables,
                             IsRoutine   = p.IsRoutine,
                         });
                     }
