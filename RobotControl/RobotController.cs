@@ -1,6 +1,7 @@
 ﻿using Controller.RobotControl.MotionProfilers;
 using Controller.RobotControl.Nano;
 using Controller.RobotControl.Robots.ASTRO;
+using Controller.RobotControl.UsbRelay;
 using System.Diagnostics;
 using System.Numerics;
 using System.Text.Json;
@@ -78,10 +79,16 @@ namespace Controller.RobotControl
         public NanoManager NanoManager { get; private set; } = null!;
         private long _lastStatusLightMs = 0;
 
+        // ── USB Relay ─────────────────────────────────────────────────────────
+        public UsbRelayManager RelayManager { get; private set; } = null!;
+
         public RobotController()
         {
             NanoManager = new NanoManager("nano_config.json");
             NanoManager.Start();
+
+            RelayManager = new UsbRelayManager();
+            RelayManager.Start();
 
             stb.Start();
 
@@ -731,12 +738,25 @@ namespace Controller.RobotControl
                 case "GetIO":
                     {
                         var states = NanoManager.GetAllStates();
-                        var json   = JsonSerializer.Serialize(states, new JsonSerializerOptions
+                        var nanoJson = JsonSerializer.Serialize(states, new JsonSerializerOptions
                         {
                             Converters           = { new JsonStringEnumConverter() },
                             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                         });
-                        payload = new { nanos = json };
+
+                        var relayStates = RelayManager.GetRelayStates();
+                        var relayState  = new UsbRelayState
+                        {
+                            Connected = RelayManager.IsConnected,
+                            Serial    = RelayManager.GetSerial(),
+                            Relays    = relayStates,
+                        };
+                        var relayJson = JsonSerializer.Serialize(relayState, new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        });
+
+                        payload = new { nanos = nanoJson, relay = relayJson };
                     }
                     break;
 
@@ -775,6 +795,25 @@ namespace Controller.RobotControl
                             _              => Nano.PinType.Input,
                         };
                         NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount);
+                    }
+                    break;
+
+                case "SetRelay":
+                    {
+                        var p = LoadParams<SetRelayParams>(command);
+                        RelayManager.SetRelay(p.Relay, p.Value);
+                    }
+                    break;
+
+                case "GetRelayState":
+                    {
+                        var relayStates = RelayManager.GetRelayStates();
+                        payload = new UsbRelayState
+                        {
+                            Connected = RelayManager.IsConnected,
+                            Serial    = RelayManager.GetSerial(),
+                            Relays    = relayStates,
+                        };
                     }
                     break;
 

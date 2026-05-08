@@ -610,3 +610,19 @@ public class ConfigureNanoPinParams
     [JsonPropertyName("type")]       public string Type       { get; set; } = "Input";
     [JsonPropertyName("pixelCount")] public int    PixelCount { get; set; } = 8;
 }
+
+// ── USB Relay ─────────────────────────────────────────────────────────────────
+
+public class SetRelayParams
+{
+    [JsonPropertyName("relay")] public int  Relay { get; set; }  // 1–4
+    [JsonPropertyName("value")] public bool Value { get; set; }
+}
+
+/// <summary>Relay board state included in GetIO responses.</summary>
+public class UsbRelayState
+{
+    [JsonPropertyName("connected")] public bool     Connected { get; set; }
+    [JsonPropertyName("serial")]    public string?  Serial    { get; set; }
+    [JsonPropertyName("relays")]    public bool[]?  Relays    { get; set; }  // index 0 = relay 1
+}
