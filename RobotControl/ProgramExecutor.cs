@@ -276,8 +276,24 @@ namespace Controller.RobotControl
 
         private void ExecuteSetOutput(ProgramStep step, StepListFrame frame)
         {
-            // Placeholder — hardware output API not yet implemented in STB4100
-            // Step advances immediately so execution is not blocked
+            var card   = step.OutputCard ?? "stb";
+            var number = step.OutputNumber ?? 1;
+            var value  = step.OutputValue ?? false;
+
+            switch (card)
+            {
+                case "relay":
+                    _controller.RelayManager.SetRelay(number, value);
+                    break;
+                case "nano":
+                    if (!string.IsNullOrEmpty(step.OutputNanoId))
+                        _controller.NanoManager.SetOutput(step.OutputNanoId, number, value);
+                    break;
+                default: // "stb"
+                    _controller.stb.SetOutput(number, value);
+                    break;
+            }
+
             ReportStepCompleted(step);
             frame.Index++;
         }
@@ -450,7 +466,11 @@ namespace Controller.RobotControl
             {
                 StepType.MoveL        => $"MoveL → {step.PointName}",
                 StepType.MoveJ        => $"MoveJ → {step.PointName}",
-                StepType.SetOutput    => $"Output {step.OutputNumber} → {(step.OutputValue == true ? "ON" : "OFF")}",
+                StepType.SetOutput    => step.OutputCard switch {
+                    "relay" => $"Relay {step.OutputNumber} → {(step.OutputValue == true ? "ON" : "OFF")}",
+                    "nano"  => $"Nano Output {step.OutputNumber} → {(step.OutputValue == true ? "ON" : "OFF")}",
+                    _       => $"STB Output {step.OutputNumber} → {(step.OutputValue == true ? "ON" : "OFF")}",
+                },
                 StepType.Wait         => $"Wait {step.WaitMs} ms",
                 StepType.Loop         => $"Loop ×{(step.LoopCount == 0 ? "∞" : step.LoopCount)}",
                 StepType.StatusUpdate => step.StatusMessage ?? "Status update",

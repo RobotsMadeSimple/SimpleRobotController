@@ -161,6 +161,10 @@ public class ProgramStep
     public int? OutputNumber { get; set; }
     [JsonPropertyName("outputValue")]
     public bool? OutputValue { get; set; }
+    [JsonPropertyName("outputCard")]
+    public string? OutputCard { get; set; }
+    [JsonPropertyName("outputNanoId")]
+    public string? OutputNanoId { get; set; }
 
     // Wait
     [JsonPropertyName("waitMs")]
