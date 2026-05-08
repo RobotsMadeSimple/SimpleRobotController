@@ -939,6 +939,8 @@ namespace Controller.RobotControl
             ASTRO.CurrentJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
             ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
             ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, _config.VerticalHomePosition);
+            ASTRO.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
+            ASTRO.CurrentJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
 
             // Recalculate the position and joint targets
             CurrentPosition = ASTRO.TcpPosition(CurrentTool);
@@ -1071,6 +1073,11 @@ namespace Controller.RobotControl
                         CurrentJointTargets.RY,
                         0  // J4 → 0 degrees
                     );
+                    // TargetJoints must be set before creating the profiler — RunMotion snaps
+                    // CurrentJointTargets to TargetJoints on the tick the profiler finishes.
+                    // Without this, the snap would restore stale pre-homing joint values and
+                    // corrupt the home positions already set for J1/J2.
+                    this.TargetJoints = j4Target;
                     jointMotionProfiler = new(CurrentJointTargets, j4Target, _config.HomingSpeed, 100, 200);
                     homingState = "WaitJ4MoveComplete";
                     break;
