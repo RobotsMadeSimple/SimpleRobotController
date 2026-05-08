@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace Controller.RobotControl
 {
@@ -92,6 +93,11 @@ namespace Controller.RobotControl
             _controller.QueuedCommands.Clear();
             _awaitingMove = false;
             _pendingStep  = null;
+
+            // Hard-stop any active motion profiler so IsMoving clears immediately.
+            // Without this, a stuck profiler (e.g. zero-speed) would leave the
+            // controller in a permanent "moving" state even after the program stops.
+            _controller.HardStop();
 
             // Emit Stopped status immediately rather than waiting for the next Update() tick.
             Finish(global::ProgramStatus.Stopped, "Stopped by user");
@@ -271,10 +277,46 @@ namespace Controller.RobotControl
 
         private void ExecuteSetOutput(ProgramStep step, StepListFrame frame)
         {
-            // Placeholder — hardware output API not yet implemented in STB4100
-            // Step advances immediately so execution is not blocked
+            var card   = step.OutputCard ?? "stb";
+            var number = step.OutputNumber ?? 1;
+            var value  = step.OutputValue ?? false;
+            var pulse  = step.PulseMs ?? 0;
+
+            // Set to the requested state immediately
+            ApplyOutput(_controller, card, number, value, step.OutputNanoId);
+
+            // Non-blocking pulse: after the pulse duration, flip to the opposite state
+            if (pulse > 0)
+            {
+                var ctrl   = _controller;
+                var nanoId = step.OutputNanoId;
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(pulse);
+                    ApplyOutput(ctrl, card, number, !value, nanoId);
+                });
+            }
+
             ReportStepCompleted(step);
             frame.Index++;
+        }
+
+        /// <summary>Applies a single output state to the correct IO card.</summary>
+        private static void ApplyOutput(RobotController ctrl, string card, int number, bool value, string? nanoId)
+        {
+            switch (card)
+            {
+                case "relay":
+                    ctrl.RelayManager.SetRelay(number, value);
+                    break;
+                case "nano":
+                    if (!string.IsNullOrEmpty(nanoId))
+                        ctrl.NanoManager.SetOutput(nanoId, number, value);
+                    break;
+                default: // "stb"
+                    ctrl.stb.SetOutput(number, value);
+                    break;
+            }
         }
 
         private void ExecuteWait(ProgramStep step, StepListFrame frame)
@@ -445,7 +487,7 @@ namespace Controller.RobotControl
             {
                 StepType.MoveL        => $"MoveL → {step.PointName}",
                 StepType.MoveJ        => $"MoveJ → {step.PointName}",
-                StepType.SetOutput    => $"Output {step.OutputNumber} → {(step.OutputValue == true ? "ON" : "OFF")}",
+                StepType.SetOutput    => BuildSetOutputDescription(step),
                 StepType.Wait         => $"Wait {step.WaitMs} ms",
                 StepType.Loop         => $"Loop ×{(step.LoopCount == 0 ? "∞" : step.LoopCount)}",
                 StepType.StatusUpdate => step.StatusMessage ?? "Status update",
@@ -456,6 +498,17 @@ namespace Controller.RobotControl
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
+        }
+
+        private static string BuildSetOutputDescription(ProgramStep step)
+        {
+            var state = step.OutputValue == true ? "ON" : "OFF";
+            var base_ = step.OutputCard switch {
+                "relay" => $"Relay {step.OutputNumber} → {state}",
+                "nano"  => $"Nano Output {step.OutputNumber} → {state}",
+                _       => $"STB Output {step.OutputNumber} → {state}",
+            };
+            return (step.PulseMs ?? 0) > 0 ? $"{base_}  (pulse {step.PulseMs} ms)" : base_;
         }
 
         internal static int CountSteps(List<ProgramStep> steps, BuiltProgramRepository? repo = null)

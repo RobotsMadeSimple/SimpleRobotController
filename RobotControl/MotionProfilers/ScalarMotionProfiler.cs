@@ -38,6 +38,13 @@ namespace Controller.RobotControl.MotionProfilers
 
             IsFinished = false;
 
+            // Guard against degenerate inputs that produce infinite totalTime
+            if (this.maxSpeed <= 1e-9 || this.accel <= 1e-9 || this.decel <= 1e-9)
+            {
+                IsFinished = true;
+                return;
+            }
+
             double distance = 1.0;
             double v0 = Math.Min(this.startVelocity, this.maxSpeed);
 

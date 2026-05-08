@@ -33,9 +33,9 @@ namespace Controller.RobotControl.MotionProfilers
 
             pathLength = delta.Length();
 
-            if (pathLength <= 1e-9)
+            if (pathLength <= 1e-9 || speed <= 1e-9)
             {
-                // No motion needed
+                // No motion needed (zero distance or zero speed)
                 scalar = null;
                 stopwatch.Reset();
                 return;

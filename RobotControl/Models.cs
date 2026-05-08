@@ -161,6 +161,13 @@ public class ProgramStep
     public int? OutputNumber { get; set; }
     [JsonPropertyName("outputValue")]
     public bool? OutputValue { get; set; }
+    [JsonPropertyName("outputCard")]
+    public string? OutputCard { get; set; }
+    [JsonPropertyName("outputNanoId")]
+    public string? OutputNanoId { get; set; }
+    // Non-blocking pulse: set to OutputValue for PulseMs, then set to opposite. 0/null = hold.
+    [JsonPropertyName("pulseMs")]
+    public int? PulseMs { get; set; }
 
     // Wait
     [JsonPropertyName("waitMs")]
@@ -260,6 +267,10 @@ public class SetRobotConfigParams
     [JsonPropertyName("verticalHomingDirection")]   public int?    VerticalHomingDirection   { get; set; }
     [JsonPropertyName("horizontalHomingDirection")] public int?    HorizontalHomingDirection { get; set; }
     [JsonPropertyName("j1HomingDirection")]         public int?    J1HomingDirection         { get; set; }
+    [JsonPropertyName("j4HomeOffsetDeg")]           public double? J4HomeOffsetDeg           { get; set; }
+    [JsonPropertyName("enableStbCard")]             public bool?   EnableStbCard             { get; set; }
+    [JsonPropertyName("enableNanoCards")]           public bool?   EnableNanoCards           { get; set; }
+    [JsonPropertyName("enableRelayCard")]           public bool?   EnableRelayCard           { get; set; }
 }
 
 public class CommandMessage
@@ -608,4 +619,27 @@ public class ConfigureNanoPinParams
     [JsonPropertyName("pin")]        public int    Pin        { get; set; }
     [JsonPropertyName("type")]       public string Type       { get; set; } = "Input";
     [JsonPropertyName("pixelCount")] public int    PixelCount { get; set; } = 8;
+}
+
+// ── USB Relay ─────────────────────────────────────────────────────────────────
+
+public class SetRelayParams
+{
+    [JsonPropertyName("relay")] public int  Relay { get; set; }  // 1–4
+    [JsonPropertyName("value")] public bool Value { get; set; }
+}
+
+public class RenameRelayParams
+{
+    [JsonPropertyName("relay")] public int    Relay { get; set; }  // 1–4
+    [JsonPropertyName("name")]  public string Name  { get; set; } = "";
+}
+
+/// <summary>Relay board state included in GetIO responses.</summary>
+public class UsbRelayState
+{
+    [JsonPropertyName("connected")] public bool     Connected { get; set; }
+    [JsonPropertyName("serial")]    public string?  Serial    { get; set; }
+    [JsonPropertyName("relays")]    public bool[]?  Relays    { get; set; }  // index 0 = relay 1
+    [JsonPropertyName("names")]     public string[] Names     { get; set; } = [];
 }
