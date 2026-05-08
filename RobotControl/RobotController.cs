@@ -756,6 +756,7 @@ namespace Controller.RobotControl
                             Connected = RelayManager.IsConnected,
                             Serial    = RelayManager.GetSerial(),
                             Relays    = relayStates,
+                            Names     = RelayManager.GetRelayNames(),
                         };
                         var relayJson = JsonSerializer.Serialize(relayState, new JsonSerializerOptions
                         {
@@ -811,6 +812,13 @@ namespace Controller.RobotControl
                     }
                     break;
 
+                case "RenameRelay":
+                    {
+                        var p = LoadParams<RenameRelayParams>(command);
+                        RelayManager.RenameRelay(p.Relay, p.Name);
+                    }
+                    break;
+
                 case "GetRelayState":
                     {
                         var relayStates = RelayManager.GetRelayStates();
@@ -819,6 +827,7 @@ namespace Controller.RobotControl
                             Connected = RelayManager.IsConnected,
                             Serial    = RelayManager.GetSerial(),
                             Relays    = relayStates,
+                            Names     = RelayManager.GetRelayNames(),
                         };
                     }
                     break;

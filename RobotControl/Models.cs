@@ -622,10 +622,17 @@ public class SetRelayParams
     [JsonPropertyName("value")] public bool Value { get; set; }
 }
 
+public class RenameRelayParams
+{
+    [JsonPropertyName("relay")] public int    Relay { get; set; }  // 1–4
+    [JsonPropertyName("name")]  public string Name  { get; set; } = "";
+}
+
 /// <summary>Relay board state included in GetIO responses.</summary>
 public class UsbRelayState
 {
     [JsonPropertyName("connected")] public bool     Connected { get; set; }
     [JsonPropertyName("serial")]    public string?  Serial    { get; set; }
     [JsonPropertyName("relays")]    public bool[]?  Relays    { get; set; }  // index 0 = relay 1
+    [JsonPropertyName("names")]     public string[] Names     { get; set; } = [];
 }

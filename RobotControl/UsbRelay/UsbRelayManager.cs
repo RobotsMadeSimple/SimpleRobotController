@@ -12,6 +12,8 @@ namespace Controller.RobotControl.UsbRelay
         private readonly CancellationTokenSource _cts = new();
         private Thread? _reconnectThread;
 
+        private RelayConfig _config;
+
         /// <summary>Number of relay channels on the board.</summary>
         public int RelayCount => UsbRelayDevice.RelayCount;
 
@@ -19,6 +21,11 @@ namespace Controller.RobotControl.UsbRelay
         public bool IsConnected
         {
             get { lock (_lock) return _device != null; }
+        }
+
+        public UsbRelayManager()
+        {
+            _config = RelayConfigService.Load();
         }
 
         // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -97,6 +104,17 @@ namespace Controller.RobotControl.UsbRelay
         public string? GetSerial()
         {
             lock (_lock) return _device?.Serial;
+        }
+
+        /// <summary>Returns the display names for all 4 relay channels.</summary>
+        public string[] GetRelayNames() => _config.RelayNames.ToArray();
+
+        /// <summary>Renames a relay channel and persists to relay-config.json. relay: 1–4.</summary>
+        public void RenameRelay(int relay, string name)
+        {
+            if (relay < 1 || relay > RelayCount) return;
+            _config.RelayNames[relay - 1] = name;
+            RelayConfigService.Save(_config);
         }
 
         // ── Reconnect loop ─────────────────────────────────────────────────────
