@@ -38,6 +38,20 @@ namespace Controller.RobotControl
         /// <summary>J4 angle (degrees) applied once J4 has driven to its mechanical zero and stopped.</summary>
         [JsonPropertyName("j4HomeOffsetDeg")]
         public double J4HomeOffsetDeg { get; set; } = 0;
+
+        // ── IO card visibility ────────────────────────────────────────────────
+
+        /// <summary>Show the STB4100 robot IO board card in the app.</summary>
+        [JsonPropertyName("enableStbCard")]
+        public bool EnableStbCard { get; set; } = true;
+
+        /// <summary>Show Arduino Nano IO cards in the app.</summary>
+        [JsonPropertyName("enableNanoCards")]
+        public bool EnableNanoCards { get; set; } = true;
+
+        /// <summary>Show the USB relay board card in the app.</summary>
+        [JsonPropertyName("enableRelayCard")]
+        public bool EnableRelayCard { get; set; } = false;
     }
 
     public static class RobotConfigService

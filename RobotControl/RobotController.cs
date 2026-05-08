@@ -328,6 +328,9 @@ namespace Controller.RobotControl
                         horizontalHomingDirection = _config.HorizontalHomingDirection,
                         j1HomingDirection         = _config.J1HomingDirection,
                         j4HomeOffsetDeg           = _config.J4HomeOffsetDeg,
+                        enableStbCard             = _config.EnableStbCard,
+                        enableNanoCards           = _config.EnableNanoCards,
+                        enableRelayCard           = _config.EnableRelayCard,
                     };
                     break;
 
@@ -343,6 +346,9 @@ namespace Controller.RobotControl
                     if (p.HorizontalHomingDirection.HasValue) _config.HorizontalHomingDirection = p.HorizontalHomingDirection.Value;
                     if (p.J1HomingDirection.HasValue)         _config.J1HomingDirection         = p.J1HomingDirection.Value;
                     if (p.J4HomeOffsetDeg.HasValue)           _config.J4HomeOffsetDeg           = p.J4HomeOffsetDeg.Value;
+                    if (p.EnableStbCard.HasValue)             _config.EnableStbCard             = p.EnableStbCard.Value;
+                    if (p.EnableNanoCards.HasValue)           _config.EnableNanoCards           = p.EnableNanoCards.Value;
+                    if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
                     RobotConfigService.Save(_config);
                     break;
                 }
