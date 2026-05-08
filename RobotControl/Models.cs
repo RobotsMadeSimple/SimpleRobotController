@@ -165,6 +165,9 @@ public class ProgramStep
     public string? OutputCard { get; set; }
     [JsonPropertyName("outputNanoId")]
     public string? OutputNanoId { get; set; }
+    // Non-blocking pulse: set to OutputValue for PulseMs, then set to opposite. 0/null = hold.
+    [JsonPropertyName("pulseMs")]
+    public int? PulseMs { get; set; }
 
     // Wait
     [JsonPropertyName("waitMs")]
