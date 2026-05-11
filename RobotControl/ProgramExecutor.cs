@@ -40,6 +40,7 @@ namespace Controller.RobotControl
         private readonly Dictionary<string, double> _variables = new();
 
         public bool IsRunning => _running;
+        public string? CurrentProgramName => _program?.Name;
 
         public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo)
         {
@@ -61,6 +62,8 @@ namespace Controller.RobotControl
             });
 
             var totalSteps = CountSteps(program.Steps);
+            // Clear any terminal state so the incoming Running update is not blocked by the guard
+            _programManager.ResetToReady(program.Name, totalSteps);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = program.Name,
@@ -88,9 +91,9 @@ namespace Controller.RobotControl
         {
             if (!_running) return;
 
-            // Clear any move commands we may have queued so the robot doesn't
-            // start a new segment after the stop is acknowledged.
-            _controller.QueuedCommands.Clear();
+            // Request a queue drain on the control loop thread — calling Clear() directly
+            // here would race with RunCommands() which reads QueuedCommands on the loop thread.
+            _controller.RequestQueueDrain();
             _awaitingMove = false;
             _pendingStep  = null;
 
@@ -114,6 +117,7 @@ namespace Controller.RobotControl
             _awaitingMove    = false;
             _pendingStep     = null;
             _globalStepIndex = 0;
+            _loopDepth       = 0;
             _frameStack.Clear();
             _variables.Clear();
         }
@@ -162,6 +166,7 @@ namespace Controller.RobotControl
                     if (frame.LoopRemaining == 0)
                     {
                         // Loop finished; outer frame already advanced past the loop step
+                        _loopDepth--;
                     }
                     else
                     {
@@ -369,6 +374,7 @@ namespace Controller.RobotControl
 
             // Push a new frame for the loop body
             _frameStack.Push(new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: remaining));
+            _loopDepth++;
         }
 
         private void ExecuteSetSpeedL(ProgramStep step, StepListFrame frame)
@@ -430,25 +436,46 @@ namespace Controller.RobotControl
         }
 
         private int _globalStepIndex = 0;
+        private int _loopDepth       = 0;
 
         /// <summary>Emits a "step in progress" update — description shown but count not yet incremented.</summary>
         private void ReportStepStarted(ProgramStep step)
         {
+            var isMove = step.Type == StepType.MoveL || step.Type == StepType.MoveJ;
+
+            double? Off(string key, double? raw) =>
+                isMove && (raw.HasValue || (step.Expressions?.ContainsKey(key) == true))
+                    ? EvalField(step, key, raw ?? 0)
+                    : (double?)null;
+
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
-                ProgramName        = _program!.Name,
-                ProgramStatus      = global::ProgramStatus.Running,
-                CurrentStepNumber  = _globalStepIndex,
-                StepDescription    = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step),
-                WarningDescription = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
-                ErrorDescription   = string.IsNullOrEmpty(step.StatusError)   ? null : step.StatusError,
+                ProgramName          = _program!.Name,
+                ProgramStatus        = global::ProgramStatus.Running,
+                CurrentStepNumber    = _globalStepIndex,
+                StepDescription      = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step),
+                WarningDescription   = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
+                ErrorDescription     = string.IsNullOrEmpty(step.StatusError)   ? null : step.StatusError,
+                CurrentPointName     = isMove ? (step.PointName ?? "") : null,
+                CurrentOffsetX       = Off("offsetX",       step.OffsetX),
+                CurrentOffsetY       = Off("offsetY",       step.OffsetY),
+                CurrentOffsetZ       = Off("offsetZ",       step.OffsetZ),
+                CurrentOffsetRX      = Off("offsetRX",      step.OffsetRX),
+                CurrentOffsetRY      = Off("offsetRY",      step.OffsetRY),
+                CurrentOffsetRZ      = Off("offsetRZ",      step.OffsetRZ),
+                CurrentToolOffsetX   = Off("toolOffsetX",   step.ToolOffsetX),
+                CurrentToolOffsetY   = Off("toolOffsetY",   step.ToolOffsetY),
+                CurrentToolOffsetZ   = Off("toolOffsetZ",   step.ToolOffsetZ),
+                CurrentToolOffsetRX  = Off("toolOffsetRX",  step.ToolOffsetRX),
+                CurrentToolOffsetRY  = Off("toolOffsetRY",  step.ToolOffsetRY),
+                CurrentToolOffsetRZ  = Off("toolOffsetRZ",  step.ToolOffsetRZ),
             });
         }
 
         /// <summary>Increments the completed step count and emits the updated progress.</summary>
         private void ReportStepCompleted(ProgramStep step)
         {
-            _globalStepIndex++;
+            if (_loopDepth == 0) _globalStepIndex++;
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName        = _program!.Name,
@@ -471,14 +498,20 @@ namespace Controller.RobotControl
 
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
-                ProgramName       = _program!.Name,
-                ProgramStatus     = status,
-                CurrentStepNumber = _globalStepIndex,
-                StepDescription   = description,
-                ErrorDescription  = status == global::ProgramStatus.Error ? description : null,
+                ProgramName          = _program!.Name,
+                ProgramStatus        = status,
+                CurrentStepNumber    = _globalStepIndex,
+                StepDescription      = description,
+                ErrorDescription     = status == global::ProgramStatus.Error ? description : null,
+                CurrentPointName  = "",
+                CurrentOffsetX   = null, CurrentOffsetY  = null, CurrentOffsetZ  = null,
+                CurrentOffsetRX  = null, CurrentOffsetRY = null, CurrentOffsetRZ = null,
+                CurrentToolOffsetX  = null, CurrentToolOffsetY  = null, CurrentToolOffsetZ  = null,
+                CurrentToolOffsetRX = null, CurrentToolOffsetRY = null, CurrentToolOffsetRZ = null,
             });
 
             _globalStepIndex = 0;
+            _loopDepth       = 0;
         }
 
         private static string StepDescription(ProgramStep step)
@@ -517,9 +550,7 @@ namespace Controller.RobotControl
             foreach (var s in steps)
             {
                 count++;
-                if (s.Type == StepType.Loop && s.LoopSteps != null)
-                    count += CountSteps(s.LoopSteps, repo) * Math.Max(s.LoopCount ?? 1, 1);
-                else if (s.Type == StepType.CallRoutine && repo != null)
+                if (s.Type == StepType.CallRoutine && repo != null)
                 {
                     var routine = repo.Get(s.RoutineName ?? "");
                     if (routine != null) count += CountSteps(routine.Steps, repo);

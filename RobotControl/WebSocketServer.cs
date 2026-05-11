@@ -9,6 +9,7 @@ public class RobotWebSocketServer
 {
     private readonly PathString _path;
     private readonly Func<CommandMessage, Task<object?>> _commandHandler;
+    private CancellationToken _shutdownToken = CancellationToken.None;
 
     public RobotWebSocketServer(
         PathString path,
@@ -17,6 +18,12 @@ public class RobotWebSocketServer
         _path = path;
         _commandHandler = commandHandler;
     }
+
+    /// <summary>
+    /// Provide the host's ApplicationStopping token so that active receive loops
+    /// unblock immediately when the process begins shutting down.
+    /// </summary>
+    public void SetShutdownToken(CancellationToken token) => _shutdownToken = token;
 
     public void Map(IApplicationBuilder app)
     {
@@ -41,30 +48,47 @@ public class RobotWebSocketServer
         var buffer = new byte[4096];
         var ms     = new MemoryStream();
 
-        while (socket.State == WebSocketState.Open)
+        try
         {
-            ms.SetLength(0);
-            WebSocketReceiveResult result;
-
-            // Accumulate all fragments until EndOfMessage
-            do
+            while (socket.State == WebSocketState.Open)
             {
-                result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-                ms.Write(buffer, 0, result.Count);
-            }
-            while (!result.EndOfMessage && socket.State == WebSocketState.Open);
+                ms.SetLength(0);
+                WebSocketReceiveResult result;
 
-            if (ms.Length > 0)
-            {
-                var json = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
-                await HandleMessage(socket, json);
+                do
+                {
+                    result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), _shutdownToken);
+                    ms.Write(buffer, 0, result.Count);
+                }
+                while (!result.EndOfMessage && socket.State == WebSocketState.Open);
+
+                if (result.MessageType == WebSocketMessageType.Close)
+                    break;
+
+                if (ms.Length > 0)
+                {
+                    var json = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+                    await HandleMessage(socket, json);
+                }
             }
         }
+        catch (OperationCanceledException) { /* shutdown triggered — fall through to close */ }
+        catch (WebSocketException)         { return; /* client disconnected abruptly */ }
 
-        await socket.CloseAsync(
-            WebSocketCloseStatus.NormalClosure,
-            "Closing",
-            CancellationToken.None);
+        if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+        {
+            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try
+            {
+                await socket.CloseAsync(
+                    socket.State == WebSocketState.CloseReceived
+                        ? WebSocketCloseStatus.NormalClosure
+                        : WebSocketCloseStatus.EndpointUnavailable,
+                    "Server shutting down",
+                    closeCts.Token);
+            }
+            catch { socket.Abort(); }
+        }
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new()

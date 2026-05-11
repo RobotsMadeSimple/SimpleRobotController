@@ -64,11 +64,39 @@ namespace Controller.RobotControl
                 if (!_programs.TryGetValue(update.ProgramName, out var program))
                     return;
 
-                if (update.ProgramStatus.HasValue)     program.Status               = update.ProgramStatus.Value;
+                if (update.ProgramStatus.HasValue)
+                {
+                    var incoming        = update.ProgramStatus.Value;
+                    var isProgressOnly  = incoming == ProgramStatus.Running || incoming == ProgramStatus.Starting || incoming == ProgramStatus.Finishing;
+                    var isTerminal      = program.Status == ProgramStatus.Stopped || program.Status == ProgramStatus.Complete || program.Status == ProgramStatus.Error;
+                    if (!isProgressOnly || !isTerminal)
+                        program.Status  = incoming;
+                }
                 if (update.CurrentStepNumber.HasValue) program.CurrentStepNumber    = update.CurrentStepNumber.Value;
                 if (update.MaxStepCount.HasValue)      program.MaxStepCount         = update.MaxStepCount.Value;
-                if (update.ErrorDescription   != null) program.ErrorDescription     = update.ErrorDescription;
-                if (update.WarningDescription != null) program.WarningDescription   = update.WarningDescription;
+                if (update.ErrorDescription      != null)  program.ErrorDescription     = update.ErrorDescription;
+                if (update.WarningDescription    != null)  program.WarningDescription   = update.WarningDescription;
+                if (update.CurrentPointName != null)
+                {
+                    program.CurrentPointName = update.CurrentPointName;
+                    // Clear all offsets so the new move starts clean — HasValue checks below re-apply any that are configured
+                    program.CurrentOffsetX = program.CurrentOffsetY = program.CurrentOffsetZ = null;
+                    program.CurrentOffsetRX = program.CurrentOffsetRY = program.CurrentOffsetRZ = null;
+                    program.CurrentToolOffsetX = program.CurrentToolOffsetY = program.CurrentToolOffsetZ = null;
+                    program.CurrentToolOffsetRX = program.CurrentToolOffsetRY = program.CurrentToolOffsetRZ = null;
+                }
+                if (update.CurrentOffsetX     .HasValue) program.CurrentOffsetX    = update.CurrentOffsetX;
+                if (update.CurrentOffsetY     .HasValue) program.CurrentOffsetY    = update.CurrentOffsetY;
+                if (update.CurrentOffsetZ     .HasValue) program.CurrentOffsetZ    = update.CurrentOffsetZ;
+                if (update.CurrentOffsetRX    .HasValue) program.CurrentOffsetRX   = update.CurrentOffsetRX;
+                if (update.CurrentOffsetRY    .HasValue) program.CurrentOffsetRY   = update.CurrentOffsetRY;
+                if (update.CurrentOffsetRZ    .HasValue) program.CurrentOffsetRZ   = update.CurrentOffsetRZ;
+                if (update.CurrentToolOffsetX .HasValue) program.CurrentToolOffsetX  = update.CurrentToolOffsetX;
+                if (update.CurrentToolOffsetY .HasValue) program.CurrentToolOffsetY  = update.CurrentToolOffsetY;
+                if (update.CurrentToolOffsetZ .HasValue) program.CurrentToolOffsetZ  = update.CurrentToolOffsetZ;
+                if (update.CurrentToolOffsetRX.HasValue) program.CurrentToolOffsetRX = update.CurrentToolOffsetRX;
+                if (update.CurrentToolOffsetRY.HasValue) program.CurrentToolOffsetRY = update.CurrentToolOffsetRY;
+                if (update.CurrentToolOffsetRZ.HasValue) program.CurrentToolOffsetRZ = update.CurrentToolOffsetRZ;
 
                 if (!string.IsNullOrEmpty(update.StepDescription))
                 {
@@ -127,6 +155,30 @@ namespace Controller.RobotControl
         }
 
         /// <summary>
+        /// Resets any programs in the supplied list that are Stopped or Complete back to Ready.
+        /// Programs that are actively Running/Starting are left untouched.
+        /// Called when a new built program starts so stale terminal states are cleared.
+        /// </summary>
+        public void ResetTerminatedToReady(IEnumerable<(string name, int maxStepCount)> programs)
+        {
+            lock (_lock)
+            {
+                foreach (var (name, maxSteps) in programs)
+                {
+                    if (!_programs.TryGetValue(name, out var p)) continue;
+                    if (p.Status != ProgramStatus.Stopped && p.Status != ProgramStatus.Complete) continue;
+
+                    p.Status                 = ProgramStatus.Ready;
+                    p.CurrentStepNumber      = 0;
+                    p.MaxStepCount           = maxSteps;
+                    p.CurrentStepDescription = "";
+                    p.ErrorDescription       = "";
+                    p.WarningDescription     = "";
+                }
+            }
+        }
+
+        /// <summary>
         /// Clears all four action flags on the named program so the external
         /// control program can signal it has consumed them.
         /// </summary>
@@ -164,6 +216,19 @@ namespace Controller.RobotControl
                     maxStepCount           = p.MaxStepCount,
                     errorDescription       = p.ErrorDescription,
                     warningDescription     = p.WarningDescription,
+                    currentPointName    = p.CurrentPointName,
+                    currentOffsetX      = p.CurrentOffsetX,
+                    currentOffsetY      = p.CurrentOffsetY,
+                    currentOffsetZ      = p.CurrentOffsetZ,
+                    currentOffsetRX     = p.CurrentOffsetRX,
+                    currentOffsetRY     = p.CurrentOffsetRY,
+                    currentOffsetRZ     = p.CurrentOffsetRZ,
+                    currentToolOffsetX  = p.CurrentToolOffsetX,
+                    currentToolOffsetY  = p.CurrentToolOffsetY,
+                    currentToolOffsetZ  = p.CurrentToolOffsetZ,
+                    currentToolOffsetRX = p.CurrentToolOffsetRX,
+                    currentToolOffsetRY = p.CurrentToolOffsetRY,
+                    currentToolOffsetRZ = p.CurrentToolOffsetRZ,
                     start                  = p.Start,
                     stop                   = p.Stop,
                     reset                  = p.Reset,

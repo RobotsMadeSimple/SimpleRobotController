@@ -44,9 +44,7 @@ namespace Controller.RobotControl.Nano
             foreach (var nanoCfg in _config.Nanos)
             {
                 var device = new NanoDevice(nanoCfg);
-                device.InputChanged      += state   => InputChanged?.Invoke(device.Id, state);
-                device.ConnectionChanged += connected =>
-                    Console.WriteLine($"[NanoManager] {device.Id} {(connected ? "connected" : "disconnected")}");
+                device.InputChanged += state => InputChanged?.Invoke(device.Id, state);
                 _devices.Add(device);
             }
         }
