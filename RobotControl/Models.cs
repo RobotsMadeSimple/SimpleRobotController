@@ -32,6 +32,19 @@ public class ProgramModel
     public int          MaxStepCount           { get; set; } = 0;
     public string       ErrorDescription       { get; set; } = "";
     public string       WarningDescription     { get; set; } = "";
+    public string  CurrentPointName  { get; set; } = "";
+    public double? CurrentOffsetX   { get; set; }
+    public double? CurrentOffsetY   { get; set; }
+    public double? CurrentOffsetZ   { get; set; }
+    public double? CurrentOffsetRX  { get; set; }
+    public double? CurrentOffsetRY  { get; set; }
+    public double? CurrentOffsetRZ  { get; set; }
+    public double? CurrentToolOffsetX  { get; set; }
+    public double? CurrentToolOffsetY  { get; set; }
+    public double? CurrentToolOffsetZ  { get; set; }
+    public double? CurrentToolOffsetRX { get; set; }
+    public double? CurrentToolOffsetRY { get; set; }
+    public double? CurrentToolOffsetRZ { get; set; }
 
     // Action flags — set by the mobile app; consumed by the external program
     public bool Start { get; set; } = false;
@@ -63,6 +76,20 @@ public class ProgramCycleUpdate
 
     [JsonPropertyName("warningDescription")]
     public string? WarningDescription { get; set; }
+
+    [JsonPropertyName("currentPointName")]     public string? CurrentPointName    { get; set; }
+    [JsonPropertyName("currentOffsetX")]       public double? CurrentOffsetX      { get; set; }
+    [JsonPropertyName("currentOffsetY")]       public double? CurrentOffsetY      { get; set; }
+    [JsonPropertyName("currentOffsetZ")]       public double? CurrentOffsetZ      { get; set; }
+    [JsonPropertyName("currentOffsetRX")]      public double? CurrentOffsetRX     { get; set; }
+    [JsonPropertyName("currentOffsetRY")]      public double? CurrentOffsetRY     { get; set; }
+    [JsonPropertyName("currentOffsetRZ")]      public double? CurrentOffsetRZ     { get; set; }
+    [JsonPropertyName("currentToolOffsetX")]   public double? CurrentToolOffsetX  { get; set; }
+    [JsonPropertyName("currentToolOffsetY")]   public double? CurrentToolOffsetY  { get; set; }
+    [JsonPropertyName("currentToolOffsetZ")]   public double? CurrentToolOffsetZ  { get; set; }
+    [JsonPropertyName("currentToolOffsetRX")]  public double? CurrentToolOffsetRX { get; set; }
+    [JsonPropertyName("currentToolOffsetRY")]  public double? CurrentToolOffsetRY { get; set; }
+    [JsonPropertyName("currentToolOffsetRZ")]  public double? CurrentToolOffsetRZ { get; set; }
 
     /// <summary>
     /// When true, StepDescription is also appended to the program's persistent log.

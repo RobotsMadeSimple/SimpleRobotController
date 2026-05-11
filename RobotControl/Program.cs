@@ -57,13 +57,31 @@ class Program
             });
         };
 
+        var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+
+        // Wire shutdown token so active WebSocket receive loops unblock immediately
+        wsServer.SetShutdownToken(lifetime.ApplicationStopping);
+
+        // On shutdown: unadvertise mDNS so peers stop seeing this robot instantly
+        lifetime.ApplicationStopping.Register(() =>
+        {
+            Console.WriteLine("[mDNS] Unadvertising on shutdown…");
+            try { sd.Unadvertise(service); } catch { }
+            try { sd.Dispose(); } catch { }
+        });
+
+        // Periodic re-announce — exits cleanly when ApplicationStopping fires
         _ = Task.Run(async () =>
         {
-            while (true)
+            try
             {
-                await Task.Delay(3000);
-                try { sd.Announce(service); } catch { }
+                while (true)
+                {
+                    await Task.Delay(3000, lifetime.ApplicationStopping);
+                    try { sd.Announce(service); } catch { }
+                }
             }
+            catch (OperationCanceledException) { }
         });
 
         wsServer.Map(app);

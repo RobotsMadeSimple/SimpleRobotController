@@ -111,7 +111,7 @@ namespace Controller.RobotControl.Nano
             string[] ports = SerialPort.GetPortNames();
             if (ports.Length == 0) return null;
 
-            Console.WriteLine($"[Nano:{_config.Id}] Scanning {ports.Length} port(s): {string.Join(", ", ports)}");
+            //Console.WriteLine($"[Nano:{_config.Id}] Scanning {ports.Length} port(s): {string.Join(", ", ports)}");
 
             foreach (string portName in ports)
             {
@@ -134,18 +134,15 @@ namespace Controller.RobotControl.Nano
                     Thread.Sleep(100);
 
                     string line = probe.ReadLine().Trim();
-                    Console.WriteLine($"[Nano:{_config.Id}] {portName} → \"{line}\"");
+                    //Console.WriteLine($"[Nano:{_config.Id}] {portName} → \"{line}\"");
 
                     if (line == $"ID:{_config.Id}")
                     {
-                        Console.WriteLine($"[Nano:{_config.Id}] Matched on {portName}");
+                        //Console.WriteLine($"[Nano:{_config.Id}] Matched on {portName}");
                         return portName;
                     }
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Nano:{_config.Id}] {portName}: {ex.Message}");
-                }
+                catch { }
             }
 
             return null;

@@ -32,6 +32,9 @@ namespace Controller.RobotControl
         // Hard-stop flag — set from any thread, consumed exclusively on the control loop thread
         private volatile bool _hardStopRequested;
 
+        // Drain-queue flag — set from any thread, consumed exclusively on the control loop thread in RunCommands()
+        private volatile bool _drainQueueRequested;
+
         // Joint motion profiler
         private Vector6MotionProfiler? jointMotionProfiler;
         private Vector6 TargetJoints = new();
@@ -529,7 +532,10 @@ namespace Controller.RobotControl
                         var p     = LoadParams<ProgramActionParams>(command);
                         var built = builtProgramRepo.Get(p.ProgramName);
                         if (built != null)
+                        {
+                            DisplaceRunningBuiltProgram(p.ProgramName);
                             programExecutor?.Start(built);
+                        }
                         else
                             programManager.SetFlag(p.ProgramName, "Start");
                     }
@@ -540,7 +546,10 @@ namespace Controller.RobotControl
                         var p     = LoadParams<ProgramActionParams>(command);
                         var built = builtProgramRepo.Get(p.ProgramName);
                         if (built != null)
-                            programExecutor?.Stop();
+                        {
+                            if (programExecutor?.CurrentProgramName == p.ProgramName)
+                                programExecutor.Stop();
+                        }
                         else
                             programManager.SetFlag(p.ProgramName, "Stop");
                     }
@@ -552,7 +561,8 @@ namespace Controller.RobotControl
                         var built = builtProgramRepo.Get(p.ProgramName);
                         if (built != null)
                         {
-                            programExecutor?.Reset();
+                            if (programExecutor?.CurrentProgramName == p.ProgramName)
+                                programExecutor.Reset();
                             programManager.ResetToReady(p.ProgramName,
                                 ProgramExecutor.CountSteps(built.Steps));
                         }
@@ -569,8 +579,8 @@ namespace Controller.RobotControl
                         var built = builtProgramRepo.Get(p.ProgramName);
                         if (built != null)
                         {
-                            // Abort for built programs = full reset to Ready (program persists in the list)
-                            programExecutor?.Reset();
+                            if (programExecutor?.CurrentProgramName == p.ProgramName)
+                                programExecutor.Reset();
                             programManager.ResetToReady(p.ProgramName,
                                 ProgramExecutor.CountSteps(built.Steps));
                         }
@@ -695,7 +705,7 @@ namespace Controller.RobotControl
                         var prog = builtProgramRepo.Get(p.Name);
                         if (prog != null)
                         {
-                            // Register image in ProgramCycleManager so the monitor shows it while running
+                            DisplaceRunningBuiltProgram(p.Name);
                             var imgBytes = builtProgramRepo.GetImage(p.Name);
                             programExecutor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null);
                         }
@@ -846,6 +856,13 @@ namespace Controller.RobotControl
         }
         public void RunCommands()
         {
+            if (_drainQueueRequested)
+            {
+                QueuedCommands.Clear();
+                _drainQueueRequested = false;
+                return;
+            }
+
             if (QueuedCommands.Count == 0)
                 return;
 
@@ -892,7 +909,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "SpeedS":
-                    this.SpeedS = Command.Speed ??= this.SpeedS;
+                    this.SpeedS = Math.Max(1.0, Command.Speed ?? this.SpeedS);
                     break;
 
                 case "AccelS":
@@ -901,7 +918,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "SpeedJ":
-                    this.SpeedJ = Command.Speed ?? this.SpeedJ;
+                    this.SpeedJ = Math.Max(1.0, Command.Speed ?? this.SpeedJ);
                     break;
 
                 case "AccelJ":
@@ -1120,6 +1137,39 @@ namespace Controller.RobotControl
         public void HardStop()
         {
             _hardStopRequested = true;
+        }
+
+        /// <summary>
+        /// Thread-safe: queues a QueuedCommands.Clear() to run on the control loop thread.
+        /// Direct List mutation from outside the loop thread would race with RunCommands().
+        /// </summary>
+        public void RequestQueueDrain()
+        {
+            _drainQueueRequested = true;
+        }
+
+        /// <summary>
+        /// If a different built program is currently running in the executor, stops it and
+        /// resets its status to Ready so the UI returns to the Start button state.
+        /// Call this before starting a new built program.
+        /// </summary>
+        private void DisplaceRunningBuiltProgram(string incomingProgramName)
+        {
+            // Stop active execution if a different built program is running
+            var currentName = programExecutor?.CurrentProgramName;
+            if (currentName != null && currentName != incomingProgramName && programExecutor?.IsRunning == true)
+            {
+                programExecutor.Stop();
+                var currentBuilt = builtProgramRepo.Get(currentName);
+                if (currentBuilt != null)
+                    programManager.ResetToReady(currentName, ProgramExecutor.CountSteps(currentBuilt.Steps));
+            }
+
+            // Reset any other built programs that are Stopped or Complete back to Ready
+            var others = builtProgramRepo.GetAll()
+                .Where(bp => bp.Name != incomingProgramName)
+                .Select(bp => (bp.Name, ProgramExecutor.CountSteps(bp.Steps)));
+            programManager.ResetTerminatedToReady(others);
         }
 
         /// <summary>
