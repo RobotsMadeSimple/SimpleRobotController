@@ -259,9 +259,9 @@ namespace Controller.RobotControl
                 TRX = hasToolOffset ? EvalField(step, "toolOffsetRX", step.ToolOffsetRX ?? 0) : null,
                 TRY = hasToolOffset ? EvalField(step, "toolOffsetRY", step.ToolOffsetRY ?? 0) : null,
                 TRZ = hasToolOffset ? EvalField(step, "toolOffsetRZ", step.ToolOffsetRZ ?? 0) : null,
-                Speed = step.Speed.HasValue ? EvalField(step, "speed", step.Speed.Value) : (double?)null,
-                Accel = step.Accel.HasValue ? EvalField(step, "accel", step.Accel.Value) : (double?)null,
-                Decel = step.Decel.HasValue ? EvalField(step, "decel", step.Decel.Value) : (double?)null,
+                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null,
+                Accel = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
+                Decel = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null,
             };
 
             _controller.QueuedCommands.Add(cmd);
@@ -379,24 +379,30 @@ namespace Controller.RobotControl
 
         private void ExecuteSetSpeedL(ProgramStep step, StepListFrame frame)
         {
-            if (step.Speed.HasValue)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed.Value) });
-            if (step.Accel.HasValue || step.Decel.HasValue)
+            bool hasSpeed = step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true;
+            bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
+            bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
+            if (hasSpeed)
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) });
+            if (hasAccel || hasDecel)
                 _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelS",
-                    Accel = step.Accel.HasValue ? EvalField(step, "accel", step.Accel.Value) : (double?)null,
-                    Decel = step.Decel.HasValue ? EvalField(step, "decel", step.Decel.Value) : (double?)null });
+                    Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
+                    Decel = hasDecel ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null });
             ReportStepCompleted(step);
             frame.Index++;
         }
 
         private void ExecuteSetSpeedJ(ProgramStep step, StepListFrame frame)
         {
-            if (step.Speed.HasValue)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed.Value) });
-            if (step.Accel.HasValue || step.Decel.HasValue)
+            bool hasSpeed = step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true;
+            bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
+            bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
+            if (hasSpeed)
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) });
+            if (hasAccel || hasDecel)
                 _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelJ",
-                    Accel = step.Accel.HasValue ? EvalField(step, "accel", step.Accel.Value) : (double?)null,
-                    Decel = step.Decel.HasValue ? EvalField(step, "decel", step.Decel.Value) : (double?)null });
+                    Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
+                    Decel = hasDecel ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null });
             ReportStepCompleted(step);
             frame.Index++;
         }

@@ -8,6 +8,9 @@ class Program
 {
     static void Main(string[] args)
     {
+        // Ensure relative file paths work when running as a Windows Service
+        Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+
         var identity = RobotIdentityService.Load();
         var config   = RobotConfigService.Load();
 
@@ -17,6 +20,7 @@ class Program
 
         // ---- Web server ----
         var builder = WebApplication.CreateBuilder(args);
+        builder.Host.UseWindowsService();
         var app = builder.Build();
         app.UseWebSockets();
 
