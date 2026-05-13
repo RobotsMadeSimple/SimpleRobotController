@@ -2,7 +2,6 @@
 #define MyAppVersion   "1.0.0"
 #define MyAppPublisher "RobotsMadeSimple"
 #define MyAppExeName   "SimpleRobotController.exe"
-#define MyServiceName  "SimpleRobotController"
 #define MyFirewallRule "Simple Robot Controller"
 
 [Setup]
@@ -23,36 +22,46 @@ CloseApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Tasks]
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"
+
 [Files]
 Source: "..\publish\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
+[Icons]
+; Starts automatically with Windows
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+; Optional desktop shortcut
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
 [Run]
-; Remove old service registration (handles upgrade; silent if not present)
-Filename: "{sys}\sc.exe"; Parameters: "delete {#MyServiceName}"; Flags: runhidden waituntilterminated; StatusMsg: "Removing old service registration..."
-; Register as Windows service with auto-start
-Filename: "{sys}\sc.exe"; Parameters: "create {#MyServiceName} binPath= ""{app}\{#MyAppExeName}"" start= auto DisplayName= ""{#MyAppName}"""; Flags: runhidden waituntilterminated; StatusMsg: "Registering Windows service..."
-; Set service description
-Filename: "{sys}\sc.exe"; Parameters: "description {#MyServiceName} ""Robot motion controller WebSocket server (port 9000)"""; Flags: runhidden waituntilterminated
-; Remove any existing firewall rule then add fresh one
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyFirewallRule}"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""{#MyFirewallRule}"" dir=in action=allow protocol=TCP localport=9000"; Flags: runhidden waituntilterminated; StatusMsg: "Adding firewall rule for port 9000..."
-; Start the service
-Filename: "{sys}\sc.exe"; Parameters: "start {#MyServiceName}"; Flags: runhidden waituntilterminated; StatusMsg: "Starting service..."
-
-[UninstallRun]
-Filename: "{sys}\sc.exe"; Parameters: "stop {#MyServiceName}"; Flags: runhidden waituntilterminated
-Filename: "{sys}\sc.exe"; Parameters: "delete {#MyServiceName}"; Flags: runhidden waituntilterminated
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyFirewallRule}"""; Flags: runhidden waituntilterminated
+; Offer to launch immediately after install
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-procedure CurStepChanged(CurStep: TSetupStep);
+procedure KillAppIfRunning;
 var
   ResultCode: Integer;
 begin
+  Exec('taskkill.exe', '/F /IM {#MyAppExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // Kill any running instance before overwriting the exe
   if CurStep = ssPreInstall then
+    KillAppIfRunning;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then
   begin
-    // Stop the service before copying the new binary (it would be file-locked otherwise)
-    Exec(ExpandConstant('{sys}\sc.exe'), 'stop {#MyServiceName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(2000);
+    KillAppIfRunning;
+    Exec(ExpandConstant('{sys}\netsh.exe'), 'advfirewall firewall delete rule name="{#MyFirewallRule}"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
 end;
