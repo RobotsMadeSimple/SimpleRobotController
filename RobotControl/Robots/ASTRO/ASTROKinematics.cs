@@ -213,10 +213,10 @@ namespace Controller.RobotControl.Robots.ASTRO
             m4Deg = InterpolatedJoint4.MotorAngleDeg;
 
             // Update current states
-            CurrentJoint1.MotorAngleDeg = m1Deg;
+            CurrentJoint1.MotorAngleDeg  = m1Deg;
             CurrentJoint2.Motor1AngleDeg = m2Deg;
             CurrentJoint2.Motor2AngleDeg = m3Deg;
-            CurrentJoint4.MotorAngleDeg = m4Deg;
+            CurrentJoint4.MotorAngleDeg  = m4Deg;
         }
 
         public Vector6 GetVisualRobotPose(Vector6 currentTcp, Vector6 toolOffset)

@@ -39,6 +39,24 @@ namespace Controller.RobotControl
         [JsonPropertyName("j4HomeOffsetDeg")]
         public double J4HomeOffsetDeg { get; set; } = 0;
 
+        // ── Motor directions ─────────────────────────────────────────────────────
+
+        /// <summary>Physical inversion for M1 (J1 rotation motor). 1 = normal, -1 = inverted.</summary>
+        [JsonPropertyName("m1Direction")]
+        public int M1Direction { get; set; } = 1;
+
+        /// <summary>Physical inversion for M2 (CoreXY motor A). 1 = normal, -1 = inverted.</summary>
+        [JsonPropertyName("m2Direction")]
+        public int M2Direction { get; set; } = 1;
+
+        /// <summary>Physical inversion for M3 (CoreXY motor B). 1 = normal, -1 = inverted.</summary>
+        [JsonPropertyName("m3Direction")]
+        public int M3Direction { get; set; } = -1;
+
+        /// <summary>Physical inversion for M4 (J4 rotation motor). 1 = normal, -1 = inverted.</summary>
+        [JsonPropertyName("m4Direction")]
+        public int M4Direction { get; set; } = -1;
+
         // ── IO card visibility ────────────────────────────────────────────────
 
         /// <summary>Show the STB4100 robot IO board card in the app.</summary>
