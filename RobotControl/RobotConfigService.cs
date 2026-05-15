@@ -59,10 +59,6 @@ namespace Controller.RobotControl
 
         // ── IO card visibility ────────────────────────────────────────────────
 
-        /// <summary>Show the STB4100 robot IO board card in the app.</summary>
-        [JsonPropertyName("enableStbCard")]
-        public bool EnableStbCard { get; set; } = true;
-
         /// <summary>Show Arduino Nano IO cards in the app.</summary>
         [JsonPropertyName("enableNanoCards")]
         public bool EnableNanoCards { get; set; } = true;

@@ -342,7 +342,6 @@ namespace Controller.RobotControl
                         m2Direction               = _config.M2Direction,
                         m3Direction               = _config.M3Direction,
                         m4Direction               = _config.M4Direction,
-                        enableStbCard             = _config.EnableStbCard,
                         enableNanoCards           = _config.EnableNanoCards,
                         enableRelayCard           = _config.EnableRelayCard,
                     };
@@ -364,7 +363,6 @@ namespace Controller.RobotControl
                     if (p.M2Direction.HasValue)               { _config.M2Direction             = p.M2Direction.Value;   ApplyMotorDirections(); }
                     if (p.M3Direction.HasValue)               { _config.M3Direction             = p.M3Direction.Value;   ApplyMotorDirections(); }
                     if (p.M4Direction.HasValue)               { _config.M4Direction             = p.M4Direction.Value;   ApplyMotorDirections(); }
-                    if (p.EnableStbCard.HasValue)             _config.EnableStbCard             = p.EnableStbCard.Value;
                     if (p.EnableNanoCards.HasValue)           _config.EnableNanoCards           = p.EnableNanoCards.Value;
                     if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
                     RobotConfigService.Save(_config);
