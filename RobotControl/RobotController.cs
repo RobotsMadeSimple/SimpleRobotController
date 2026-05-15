@@ -95,8 +95,6 @@ namespace Controller.RobotControl
 
             stb.Start();
 
-            stb.Motor3.InvertDirection = true;
-            stb.Motor4.InvertDirection = true;
 
             programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, builtProgramRepo);
 
@@ -281,6 +279,15 @@ namespace Controller.RobotControl
         public void SetConfig(RobotConfig config)
         {
             _config = config;
+            ApplyMotorDirections();
+        }
+
+        private void ApplyMotorDirections()
+        {
+            stb.Motor1.InvertDirection = _config.M1Direction == -1;
+            stb.Motor2.InvertDirection = _config.M2Direction == -1;
+            stb.Motor3.InvertDirection = _config.M3Direction == -1;
+            stb.Motor4.InvertDirection = _config.M4Direction == -1;
         }
 
         public Task<object> AddCommand(CommandMessage command)
@@ -331,7 +338,10 @@ namespace Controller.RobotControl
                         horizontalHomingDirection = _config.HorizontalHomingDirection,
                         j1HomingDirection         = _config.J1HomingDirection,
                         j4HomeOffsetDeg           = _config.J4HomeOffsetDeg,
-                        enableStbCard             = _config.EnableStbCard,
+                        m1Direction               = _config.M1Direction,
+                        m2Direction               = _config.M2Direction,
+                        m3Direction               = _config.M3Direction,
+                        m4Direction               = _config.M4Direction,
                         enableNanoCards           = _config.EnableNanoCards,
                         enableRelayCard           = _config.EnableRelayCard,
                     };
@@ -349,7 +359,10 @@ namespace Controller.RobotControl
                     if (p.HorizontalHomingDirection.HasValue) _config.HorizontalHomingDirection = p.HorizontalHomingDirection.Value;
                     if (p.J1HomingDirection.HasValue)         _config.J1HomingDirection         = p.J1HomingDirection.Value;
                     if (p.J4HomeOffsetDeg.HasValue)           _config.J4HomeOffsetDeg           = p.J4HomeOffsetDeg.Value;
-                    if (p.EnableStbCard.HasValue)             _config.EnableStbCard             = p.EnableStbCard.Value;
+                    if (p.M1Direction.HasValue)               { _config.M1Direction             = p.M1Direction.Value;   ApplyMotorDirections(); }
+                    if (p.M2Direction.HasValue)               { _config.M2Direction             = p.M2Direction.Value;   ApplyMotorDirections(); }
+                    if (p.M3Direction.HasValue)               { _config.M3Direction             = p.M3Direction.Value;   ApplyMotorDirections(); }
+                    if (p.M4Direction.HasValue)               { _config.M4Direction             = p.M4Direction.Value;   ApplyMotorDirections(); }
                     if (p.EnableNanoCards.HasValue)           _config.EnableNanoCards           = p.EnableNanoCards.Value;
                     if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
                     RobotConfigService.Save(_config);

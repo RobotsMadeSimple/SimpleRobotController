@@ -295,7 +295,10 @@ public class SetRobotConfigParams
     [JsonPropertyName("horizontalHomingDirection")] public int?    HorizontalHomingDirection { get; set; }
     [JsonPropertyName("j1HomingDirection")]         public int?    J1HomingDirection         { get; set; }
     [JsonPropertyName("j4HomeOffsetDeg")]           public double? J4HomeOffsetDeg           { get; set; }
-    [JsonPropertyName("enableStbCard")]             public bool?   EnableStbCard             { get; set; }
+    [JsonPropertyName("m1Direction")]               public int?    M1Direction               { get; set; }
+    [JsonPropertyName("m2Direction")]               public int?    M2Direction               { get; set; }
+    [JsonPropertyName("m3Direction")]               public int?    M3Direction               { get; set; }
+    [JsonPropertyName("m4Direction")]               public int?    M4Direction               { get; set; }
     [JsonPropertyName("enableNanoCards")]           public bool?   EnableNanoCards           { get; set; }
     [JsonPropertyName("enableRelayCard")]           public bool?   EnableRelayCard           { get; set; }
 }
