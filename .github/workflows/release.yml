@@ -26,14 +26,17 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Publish self-contained Windows exe
-        run: >
-          dotnet publish RobotControl/Controller.csproj
-          -c Release
-          -r win-x64
-          --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -o publish
+        shell: pwsh
+        run: |
+          $version = ("${{ inputs.tag || github.ref_name }}").TrimStart('v')
+          dotnet publish RobotControl/Controller.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            "-p:Version=$version" `
+            -o publish
 
       - name: Build installer
         shell: pwsh
@@ -64,14 +67,16 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Publish self-contained Linux binary
-        run: >
-          dotnet publish RobotControl/Controller.csproj
-          -c Release
-          -r linux-x64
-          --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -o publish
+        run: |
+          VERSION=$(echo "${{ inputs.tag || github.ref_name }}" | sed 's/^v//')
+          dotnet publish RobotControl/Controller.csproj \
+            -c Release \
+            -r linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            "-p:Version=$VERSION" \
+            -o publish
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
