@@ -33,8 +33,9 @@ namespace Controller.RobotControl
 
         private static string GetAssemblyVersion()
         {
-            var info = System.Reflection.Assembly.GetExecutingAssembly()
-                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            var info = System.Reflection.CustomAttributeExtensions
+                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(asm)
                 ?.InformationalVersion ?? "0.0.0";
             var plus = info.IndexOf('+');
             return plus >= 0 ? info[..plus] : info;
