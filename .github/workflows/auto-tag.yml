@@ -1,4 +1,4 @@
-name: Auto Tag
+name: Build Release
 
 on:
   push:
