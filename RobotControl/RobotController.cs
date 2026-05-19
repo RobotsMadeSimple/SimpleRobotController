@@ -29,6 +29,17 @@ namespace Controller.RobotControl
             PropertyNameCaseInsensitive = true
         };
 
+        private static readonly string _version = GetAssemblyVersion();
+
+        private static string GetAssemblyVersion()
+        {
+            var info = System.Reflection.Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion ?? "0.0.0";
+            var plus = info.IndexOf('+');
+            return plus >= 0 ? info[..plus] : info;
+        }
+
         // Hard-stop flag — set from any thread, consumed exclusively on the control loop thread
         private volatile bool _hardStopRequested;
 
@@ -305,6 +316,70 @@ namespace Controller.RobotControl
                     };
                     break;
 
+                case "Update":
+                    {
+                        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux))
+                        {
+                            payload = new { ok = false, error = "Update is only supported on Linux." };
+                            break;
+                        }
+
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                Console.WriteLine("[Update] Fetching latest release from GitHub…");
+                                using var http = new System.Net.Http.HttpClient();
+                                http.DefaultRequestHeaders.Add("User-Agent", "SimpleRobotController");
+
+                                var json = await http.GetStringAsync(
+                                    "https://api.github.com/repos/RobotsMadeSimple/SimpleRobotController/releases/latest");
+                                using var doc = JsonDocument.Parse(json);
+
+                                string? downloadUrl = null;
+                                foreach (var asset in doc.RootElement.GetProperty("assets").EnumerateArray())
+                                {
+                                    if (asset.GetProperty("name").GetString() == "SimpleRobotController")
+                                    {
+                                        downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                                        break;
+                                    }
+                                }
+
+                                if (downloadUrl == null)
+                                {
+                                    Console.WriteLine("[Update] Linux binary not found in latest release.");
+                                    return;
+                                }
+
+                                var exePath = Environment.ProcessPath
+                                    ?? System.Diagnostics.Process.GetCurrentProcess().MainModule!.FileName;
+                                var tempPath = exePath + ".update";
+
+                                Console.WriteLine($"[Update] Downloading {downloadUrl}…");
+                                var bytes = await http.GetByteArrayAsync(downloadUrl);
+                                await File.WriteAllBytesAsync(tempPath, bytes);
+
+                                File.SetUnixFileMode(tempPath,
+                                    System.IO.UnixFileMode.UserRead   | System.IO.UnixFileMode.UserWrite  | System.IO.UnixFileMode.UserExecute |
+                                    System.IO.UnixFileMode.GroupRead  | System.IO.UnixFileMode.GroupExecute |
+                                    System.IO.UnixFileMode.OtherRead  | System.IO.UnixFileMode.OtherExecute);
+
+                                File.Move(tempPath, exePath, overwrite: true);
+                                Console.WriteLine("[Update] Binary replaced. Exiting for systemd restart…");
+                                await Task.Delay(500);
+                                Environment.Exit(0);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Update] Failed: {ex.Message}");
+                            }
+                        });
+
+                        payload = new { ok = true };
+                        break;
+                    }
+
                 case "RestartController":
                     _ = Task.Run(async () =>
                     {
@@ -495,6 +570,8 @@ namespace Controller.RobotControl
 
                             // Built program repository
                             lastBuiltProgramUpdate = builtProgramRepo.LastUpdatedUnixMs,
+                            version = _version,
+                            isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
                         };
                         break;
                     }
