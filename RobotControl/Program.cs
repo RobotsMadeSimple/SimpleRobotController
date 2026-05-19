@@ -11,6 +11,11 @@ class Program
         // Ensure config files load relative to the exe when launched from startup folder
         Directory.SetCurrentDirectory(AppContext.BaseDirectory);
 
+        var version = Controller.RobotControl.RobotController.Version;
+        Console.WriteLine($"[Boot] Simple Robot Controller {version}");
+        Console.WriteLine($"[Boot] OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
+        Console.WriteLine($"[Boot] Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
+
         var identity = RobotIdentityService.Load();
         var config   = RobotConfigService.Load();
 

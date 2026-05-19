@@ -30,6 +30,7 @@ namespace Controller.RobotControl
         };
 
         private static readonly string _version = GetAssemblyVersion();
+        public static string Version => _version;
 
         private static string GetAssemblyVersion()
         {
