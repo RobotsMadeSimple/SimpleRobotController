@@ -1098,8 +1098,23 @@ namespace Controller.RobotControl
                     break;
 
                 case "BackOffVertical":
-                    jointJoggingProfiler.Jog(new(0, 0, -_config.VerticalHomingDirection), _config.HomingSpeed, 100, _config.HomingBackoffMm, 0.001);
-                    if (!IsMoving && !stb.Input2)
+                {
+                    var t = new Vector6(
+                        CurrentJointTargets.X,
+                        CurrentJointTargets.Y,
+                        CurrentJointTargets.Z - (_config.HomingBackoffMm * _config.VerticalHomingDirection),
+                        CurrentJointTargets.RX,
+                        CurrentJointTargets.RY,
+                        CurrentJointTargets.RZ
+                    );
+                    this.TargetJoints = t;
+                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
+                    homingState = "WaitVerticalBackoff";
+                    break;
+                }
+
+                case "WaitVerticalBackoff":
+                    if (!IsMoving)
                         homingState = "HomeVerticalSlow";
                     break;
 
@@ -1154,8 +1169,23 @@ namespace Controller.RobotControl
                     break;
 
                 case "BackOffHorizontal":
-                    jointJoggingProfiler.Jog(new(0, -_config.HorizontalHomingDirection), _config.HomingSpeed, 100, _config.HomingBackoffMm, 0.001);
-                    if (!IsMoving && !stb.Input3)
+                {
+                    var t = new Vector6(
+                        CurrentJointTargets.X,
+                        CurrentJointTargets.Y - (_config.HomingBackoffMm * _config.HorizontalHomingDirection),
+                        CurrentJointTargets.Z,
+                        CurrentJointTargets.RX,
+                        CurrentJointTargets.RY,
+                        CurrentJointTargets.RZ
+                    );
+                    this.TargetJoints = t;
+                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
+                    homingState = "WaitHorizontalBackoff";
+                    break;
+                }
+
+                case "WaitHorizontalBackoff":
+                    if (!IsMoving)
                         homingState = "HomeHorizontalSlow";
                     break;
 
@@ -1210,8 +1240,23 @@ namespace Controller.RobotControl
                     break;
 
                 case "BackOffJ1":
-                    jointJoggingProfiler.Jog(new(-_config.J1HomingDirection), _config.HomingSpeed, 100, _config.HomingBackoffMm, 0.001);
-                    if (!IsMoving && !stb.Input1)
+                {
+                    var t = new Vector6(
+                        CurrentJointTargets.X - (_config.HomingBackoffMm * _config.J1HomingDirection),
+                        CurrentJointTargets.Y,
+                        CurrentJointTargets.Z,
+                        CurrentJointTargets.RX,
+                        CurrentJointTargets.RY,
+                        CurrentJointTargets.RZ
+                    );
+                    this.TargetJoints = t;
+                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
+                    homingState = "WaitJ1Backoff";
+                    break;
+                }
+
+                case "WaitJ1Backoff":
+                    if (!IsMoving)
                         homingState = "HomeJ1Slow";
                     break;
 
