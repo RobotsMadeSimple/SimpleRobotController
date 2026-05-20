@@ -408,6 +408,8 @@ namespace Controller.RobotControl
                     payload = new
                     {
                         homingSpeed               = _config.HomingSpeed,
+                        homingSlowSpeed           = _config.HomingSlowSpeed,
+                        homingBackoffMm           = _config.HomingBackoffMm,
                         j1HomeOffsetDeg           = _config.J1HomeOffsetDeg,
                         verticalHomePosition      = _config.VerticalHomePosition,
                         horizontalHomePosition    = _config.HorizontalHomePosition,
@@ -429,6 +431,8 @@ namespace Controller.RobotControl
                     var p = JsonSerializer.Deserialize<SetRobotConfigParams>(
                         command.Params!.Value.GetRawText(), _jsonOptions)!;
                     if (p.HomingSpeed.HasValue)               _config.HomingSpeed               = p.HomingSpeed.Value;
+                    if (p.HomingSlowSpeed.HasValue)           _config.HomingSlowSpeed           = p.HomingSlowSpeed.Value;
+                    if (p.HomingBackoffMm.HasValue)           _config.HomingBackoffMm           = p.HomingBackoffMm.Value;
                     if (p.J1HomeOffsetDeg.HasValue)           _config.J1HomeOffsetDeg           = p.J1HomeOffsetDeg.Value;
                     if (p.VerticalHomePosition.HasValue)      _config.VerticalHomePosition      = p.VerticalHomePosition.Value;
                     if (p.HorizontalHomePosition.HasValue)    _config.HorizontalHomePosition    = p.HorizontalHomePosition.Value;
@@ -1074,7 +1078,33 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeVertical":
+                    if (stb.Input2)
+                    {
+                        // Sensor already triggered — skip fast approach and go straight to back-off
+                        homingState = "BackOffVertical";
+                        break;
+                    }
                     jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    if (stb.Input2)
+                    {
+                        ExecuteHardStop();
+                        homingState = "WaitVerticalStop1";
+                    }
+                    break;
+
+                case "WaitVerticalStop1":
+                    if (!IsMoving)
+                        homingState = "BackOffVertical";
+                    break;
+
+                case "BackOffVertical":
+                    jointJoggingProfiler.Jog(new(0, 0, -_config.VerticalHomingDirection), _config.HomingSpeed, 100, _config.HomingBackoffMm, 0.001);
+                    if (!IsMoving && !stb.Input2)
+                        homingState = "HomeVerticalSlow";
+                    break;
+
+                case "HomeVerticalSlow":
+                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
                     if (stb.Input2)
                     {
                         ExecuteHardStop();
@@ -1105,7 +1135,32 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeHorizontal":
+                    if (stb.Input3)
+                    {
+                        homingState = "BackOffHorizontal";
+                        break;
+                    }
                     jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    if (stb.Input3)
+                    {
+                        ExecuteHardStop();
+                        homingState = "WaitHorizontalStop1";
+                    }
+                    break;
+
+                case "WaitHorizontalStop1":
+                    if (!IsMoving)
+                        homingState = "BackOffHorizontal";
+                    break;
+
+                case "BackOffHorizontal":
+                    jointJoggingProfiler.Jog(new(0, -_config.HorizontalHomingDirection), _config.HomingSpeed, 100, _config.HomingBackoffMm, 0.001);
+                    if (!IsMoving && !stb.Input3)
+                        homingState = "HomeHorizontalSlow";
+                    break;
+
+                case "HomeHorizontalSlow":
+                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
                     if (stb.Input3)
                     {
                         ExecuteHardStop();
@@ -1115,9 +1170,7 @@ namespace Controller.RobotControl
 
                 case "WaitHorizontalMoveComplete":
                     if (!IsMoving)
-                    {
                         homingState = "SetHorizontalHomed";
-                    }
                     break;
 
                 case "SetHorizontalHomed":
@@ -1138,8 +1191,32 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeJ1":
-                    Vector6 J1JogDirection = new(_config.J1HomingDirection);
-                    jointJoggingProfiler.Jog(J1JogDirection, _config.HomingSpeed, 100, 10000000, 0.001);
+                    if (stb.Input1)
+                    {
+                        homingState = "BackOffJ1";
+                        break;
+                    }
+                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    if (stb.Input1)
+                    {
+                        ExecuteHardStop();
+                        homingState = "WaitJ1Stop1";
+                    }
+                    break;
+
+                case "WaitJ1Stop1":
+                    if (!IsMoving)
+                        homingState = "BackOffJ1";
+                    break;
+
+                case "BackOffJ1":
+                    jointJoggingProfiler.Jog(new(-_config.J1HomingDirection), _config.HomingSpeed, 100, _config.HomingBackoffMm, 0.001);
+                    if (!IsMoving && !stb.Input1)
+                        homingState = "HomeJ1Slow";
+                    break;
+
+                case "HomeJ1Slow":
+                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
                     if (stb.Input1)
                     {
                         ExecuteHardStop();
@@ -1149,9 +1226,7 @@ namespace Controller.RobotControl
 
                 case "WaitJ1MoveComplete":
                     if (!IsMoving)
-                    {
                         homingState = "SetJ1MotorHomed";
-                    }
                     break;
 
                 case "SetJ1MotorHomed":
