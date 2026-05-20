@@ -516,6 +516,7 @@ namespace Controller.RobotControl
                             isHoming = this.homingState != "WaitingForStart",
                             lastPointUpdate = pointRepo.LastUpdatedUnixMs,
                             driverConnected = stb.connected,
+                            driverOk = stb.connected && stb.status != 0,
 
                             x = CurrentPosition.X,
                             y = CurrentPosition.Y,
