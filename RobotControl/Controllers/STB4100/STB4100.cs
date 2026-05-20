@@ -71,7 +71,8 @@ public class STB4100
         Output4 = (_outputsByte & 8) != 0;
     }
 
-    private readonly Stopwatch _statusTimer = Stopwatch.StartNew();
+    private readonly Stopwatch _statusTimer    = Stopwatch.StartNew();
+    private readonly Stopwatch _autoResetTimer = new();
 
     public StepperMotor Motor1 { get; }
     public StepperMotor Motor2 { get; }
@@ -279,6 +280,13 @@ public class STB4100
         if (bytesRead != buffer.Length) return;
 
         status = buffer[1];
+
+        if (status == 0 && connected && (!_autoResetTimer.IsRunning || _autoResetTimer.ElapsedMilliseconds > 2000))
+        {
+            Console.WriteLine("[STB4100] Fault detected — auto-resetting");
+            Reset();
+            _autoResetTimer.Restart();
+        }
 
         var steps = new[]
         {
