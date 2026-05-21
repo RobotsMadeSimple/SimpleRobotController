@@ -17,7 +17,7 @@ namespace Controller.RobotControl
 
         /// <summary>Distance to back off from the sensor before the slow approach (mm, or deg for J1).</summary>
         [JsonPropertyName("homingBackoffMm")]
-        public double HomingBackoffMm { get; set; } = 5;
+        public double HomingBackoffMm { get; set; } = 10;
 
         /// <summary>J1 angle (degrees) applied once the limit switch is hit.</summary>
         [JsonPropertyName("j1HomeOffsetDeg")]
