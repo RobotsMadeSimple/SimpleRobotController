@@ -1,6 +1,6 @@
 using HidSharp;
-using Microsoft.Win32.SafeHandles;
-using System.Runtime.InteropServices;
+using System;
+using System.Linq;
 
 namespace Controller.RobotControl.UsbRelay
 {
@@ -8,11 +8,10 @@ namespace Controller.RobotControl.UsbRelay
     /// Low-level driver for the DCTTECH 4-channel USB HID relay board.
     /// VID 0x16C0 / PID 0x05DF
     ///
-    /// Protocol (Windows blocks the interrupt OUT pipe for this device;
-    /// feature reports via the control pipe are the only path that works):
-    ///   Write: HidD_SetFeature([0x00, CMD, relay, 0x00 × 6])
+    /// Protocol (feature reports via the HID control pipe):
+    ///   Write: SetFeature([0x00, CMD, relay, 0x00 × 6])
     ///          CMD: 0xFF = ON, 0xFD = OFF
-    ///   Read:  HidD_GetFeature([0x01, …×9])
+    ///   Read:  GetFeature([0x01, …×9])
     ///          bytes[1..5] = ASCII serial, byte[8] = relay bitmask (bit 0 = relay 1)
     /// </summary>
     public sealed class UsbRelayDevice : IDisposable
@@ -24,13 +23,13 @@ namespace Controller.RobotControl.UsbRelay
         private const byte CmdOn  = 0xFF;
         private const byte CmdOff = 0xFD;
 
-        private readonly SafeFileHandle _handle;
+        private readonly HidStream _stream;
 
         public string Serial { get; private set; }
 
-        private UsbRelayDevice(SafeFileHandle handle, string serial)
+        private UsbRelayDevice(HidStream stream, string serial)
         {
-            _handle = handle;
+            _stream = stream;
             Serial  = serial;
         }
 
@@ -44,28 +43,14 @@ namespace Controller.RobotControl.UsbRelay
             var hidDevice = DeviceList.Local.GetHidDeviceOrNull(VendorId, ProductId);
             if (hidDevice == null) return null;
 
-            string path;
-            try { path = hidDevice.GetFileSystemName(); }
+            HidStream stream;
+            try
+            {
+                stream = hidDevice.Open();
+            }
             catch (Exception ex)
             {
-                Console.WriteLine($"[UsbRelay] Could not get device path: {ex.Message}");
-                return null;
-            }
-
-            // Open with both read and write share so other processes can still enumerate
-            var handle = NativeMethods.CreateFile(
-                path,
-                NativeMethods.GenericRead | NativeMethods.GenericWrite,
-                NativeMethods.FileShareRead | NativeMethods.FileShareWrite,
-                IntPtr.Zero,
-                NativeMethods.OpenExisting,
-                0,
-                IntPtr.Zero);
-
-            if (handle.IsInvalid)
-            {
-                Console.WriteLine($"[UsbRelay] CreateFile failed (error {Marshal.GetLastWin32Error()}).");
-                handle.Dispose();
+                Console.WriteLine($"[UsbRelay] Could not open device: {ex.Message}");
                 return null;
             }
 
@@ -75,14 +60,14 @@ namespace Controller.RobotControl.UsbRelay
             {
                 var buf = new byte[10];
                 buf[0] = 0x01;
-                if (NativeMethods.HidD_GetFeature(handle, buf, buf.Length))
-                    serial = System.Text.Encoding.ASCII.GetString(
-                        buf.Skip(1).Take(5).Where(b => b >= 0x20 && b <= 0x7E).ToArray());
+                stream.GetFeature(buf);
+                serial = System.Text.Encoding.ASCII.GetString(
+                    buf.Skip(1).Take(5).Where(b => b >= 0x20 && b <= 0x7E).ToArray());
             }
             catch { }
 
             Console.WriteLine($"[UsbRelay] Opened relay board (serial: '{serial}')");
-            return new UsbRelayDevice(handle, serial);
+            return new UsbRelayDevice(stream, serial);
         }
 
         // ── Public API ─────────────────────────────────────────────────────────
@@ -95,8 +80,7 @@ namespace Controller.RobotControl.UsbRelay
 
             byte cmd = on ? CmdOn : CmdOff;
             var buf = new byte[] { 0x00, cmd, (byte)relay, 0, 0, 0, 0, 0, 0 };
-            if (!NativeMethods.HidD_SetFeature(_handle, buf, buf.Length))
-                throw new IOException($"HidD_SetFeature failed (error {Marshal.GetLastWin32Error()})");
+            _stream.SetFeature(buf);
         }
 
         /// <summary>Read the current relay bitmask. Bit 0 = relay 1, bit 3 = relay 4.</summary>
@@ -104,8 +88,7 @@ namespace Controller.RobotControl.UsbRelay
         {
             var buf = new byte[10];
             buf[0] = 0x01;
-            if (!NativeMethods.HidD_GetFeature(_handle, buf, buf.Length))
-                throw new IOException($"HidD_GetFeature failed (error {Marshal.GetLastWin32Error()})");
+            _stream.GetFeature(buf);
             return buf[8];
         }
 
@@ -117,40 +100,7 @@ namespace Controller.RobotControl.UsbRelay
 
         public void Dispose()
         {
-            try { _handle.Dispose(); } catch { }
-        }
-
-        // ── P/Invoke ───────────────────────────────────────────────────────────
-
-        private static class NativeMethods
-        {
-            internal const uint GenericRead    = 0x80000000;
-            internal const uint GenericWrite   = 0x40000000;
-            internal const uint FileShareRead  = 0x00000001;
-            internal const uint FileShareWrite = 0x00000002;
-            internal const uint OpenExisting   = 3;
-
-            [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-            internal static extern SafeFileHandle CreateFile(
-                string lpFileName,
-                uint dwDesiredAccess,
-                uint dwShareMode,
-                IntPtr lpSecurityAttributes,
-                uint dwCreationDisposition,
-                uint dwFlagsAndAttributes,
-                IntPtr hTemplateFile);
-
-            [DllImport("hid.dll", SetLastError = true)]
-            internal static extern bool HidD_SetFeature(
-                SafeFileHandle handle,
-                byte[] lpReportBuffer,
-                int reportBufferLength);
-
-            [DllImport("hid.dll", SetLastError = true)]
-            internal static extern bool HidD_GetFeature(
-                SafeFileHandle handle,
-                byte[] lpReportBuffer,
-                int reportBufferLength);
+            try { _stream.Dispose(); } catch { }
         }
     }
 }
