@@ -168,7 +168,7 @@ public class STB4100
 
             if (now >= nextTick)
             {
-                Loop();
+                if (connected) Loop();
 
                 if (moving)
                 {
@@ -195,6 +195,12 @@ public class STB4100
     {
         while (true)
         {
+            if (_stream is null)
+            {
+                Thread.Sleep(2000);
+                Connect();
+                continue;
+            }
             if (_statusTimer.ElapsedMilliseconds >= 20)
             {
                 GetStatus();
@@ -276,7 +282,14 @@ public class STB4100
         if (_stream is null)
             return;
 
-        int bytesRead = _stream.Read(buffer);
+        int bytesRead;
+        try { bytesRead = _stream.Read(buffer); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[STB4100] Read error: {ex.Message} — disconnected");
+            _stream = null; _device = null; connected = false;
+            return;
+        }
         if (bytesRead != buffer.Length) return;
 
         status = buffer[1];
@@ -361,7 +374,12 @@ public class STB4100
             return;
 
         //Console.WriteLine("Command: " + string.Join(", ", send.Select(b => (int)b)));
-        _stream.Write([.. send]);
+        try { _stream.Write([.. send]); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[STB4100] Write error: {ex.Message} — disconnected");
+            _stream = null; _device = null; connected = false;
+        }
     }
 
     private void SendStatus(int command)
@@ -392,6 +410,11 @@ public class STB4100
             return;
 
         //Console.WriteLine("Status: " + string.Join(", ", send.Select(b => (int)b)));
-        _stream.Write([.. send]);
+        try { _stream.Write([.. send]); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[STB4100] Write error: {ex.Message} — disconnected");
+            _stream = null; _device = null; connected = false;
+        }
     }
 }
