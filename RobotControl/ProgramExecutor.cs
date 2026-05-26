@@ -224,6 +224,10 @@ namespace Controller.RobotControl
                 case StepType.SetVariable:
                     ExecuteSetVariable(step, frame);
                     break;
+
+                case StepType.PauseProgram:
+                    ExecutePauseProgram(step, frame);
+                    break;
             }
         }
 
@@ -407,6 +411,13 @@ namespace Controller.RobotControl
             frame.Index++;
         }
 
+        private void ExecutePauseProgram(ProgramStep step, StepListFrame frame)
+        {
+            frame.Index++;
+            ReportStepCompleted(step);
+            Finish(global::ProgramStatus.Stopped, "Paused — press Continue to restart");
+        }
+
         private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
         {
             if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
@@ -534,6 +545,7 @@ namespace Controller.RobotControl
                 StepType.SetSpeedL    => $"Set Linear Speed → {step.Speed} mm/s",
                 StepType.SetSpeedJ    => $"Set Joint Speed → {step.Speed} mm/s",
                 StepType.SetVariable  => $"${step.VariableName} = {step.VariableExpr}",
+                StepType.PauseProgram => "Pause Program",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
