@@ -64,6 +64,7 @@ namespace Controller.RobotControl
 
         // Current Status of Robot
         private Vector6 CurrentPosition = new();  // Actual position of the robot
+        public Vector6 GetCurrentPosition() => new Vector6(CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z, CurrentPosition.RX, CurrentPosition.RY, CurrentPosition.RZ);
         public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || IsJogging || IsJointJogging || IsToolJogging;
         // X is away from flange, Y is towards the inside of the robot, Z is Vertical
         public Vector6 CurrentTool = new(0, 0, 0);
