@@ -14,6 +14,7 @@ namespace Controller.RobotControl
         public PointRepository       pointRepo       = new();
         public ToolRepository        toolRepo        = new();
         public BuiltProgramRepository builtProgramRepo = new();
+        public GridRepository gridRepo = new();
         public STB4100 stb = new();
         private RobotIdentity _identity = new();
         public Action<RobotIdentity>? OnIdentityChanged;
@@ -110,7 +111,7 @@ namespace Controller.RobotControl
             stb.Start();
 
 
-            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, builtProgramRepo);
+            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, builtProgramRepo, gridRepo);
 
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
@@ -578,6 +579,10 @@ namespace Controller.RobotControl
 
                             // Built program repository
                             lastBuiltProgramUpdate = builtProgramRepo.LastUpdatedUnixMs,
+
+                            // Grid repository
+                            lastGridUpdate = gridRepo.LastUpdatedUnixMs,
+
                             version = _version,
                             isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
                         };
@@ -794,6 +799,46 @@ namespace Controller.RobotControl
                             PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
                         });
                         payload = new { programs = json };
+                    }
+                    break;
+
+                // ── Grid repository ───────────────────────────────────────────────
+                case "GetGrids":
+                    {
+                        var list = gridRepo.GetAll();
+                        var json = System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions
+                        {
+                            PropertyNameCaseInsensitive = true,
+                        });
+                        payload = new { grids = json };
+                    }
+                    break;
+
+                case "SaveGrid":
+                    {
+                        var p = LoadParams<SaveGridParams>(command);
+                        gridRepo.Upsert(new Grid
+                        {
+                            Id            = p.Id,
+                            Name          = p.Name,
+                            BasePointName = p.BasePointName,
+                            RowOffsetX    = p.RowOffsetX,
+                            RowOffsetY    = p.RowOffsetY,
+                            RowOffsetZ    = p.RowOffsetZ,
+                            ColOffsetX    = p.ColOffsetX,
+                            ColOffsetY    = p.ColOffsetY,
+                            ColOffsetZ    = p.ColOffsetZ,
+                            RowCount      = p.RowCount,
+                            ColCount      = p.ColCount,
+                            Rotation      = p.Rotation,
+                        });
+                    }
+                    break;
+
+                case "DeleteGrid":
+                    {
+                        var p = LoadParams<GridIdParams>(command);
+                        gridRepo.Delete(p.Id);
                     }
                     break;
 

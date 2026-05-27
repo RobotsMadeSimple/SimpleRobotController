@@ -17,6 +17,7 @@ namespace Controller.RobotControl
         private readonly PointRepository          _pointRepo;
         private readonly ToolRepository           _toolRepo;
         private readonly BuiltProgramRepository   _builtProgramRepo;
+        private readonly GridRepository           _gridRepo;
 
         // ── Execution state ──────────────────────────────────────────────────
         private BuiltProgram?   _program;
@@ -42,13 +43,14 @@ namespace Controller.RobotControl
         public bool IsRunning => _running;
         public string? CurrentProgramName => _program?.Name;
 
-        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo)
+        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo, GridRepository gridRepo)
         {
             _controller       = controller;
             _programManager   = programManager;
             _pointRepo        = pointRepo;
             _toolRepo         = toolRepo;
             _builtProgramRepo = builtProgramRepo;
+            _gridRepo         = gridRepo;
         }
 
         // ── Public control ───────────────────────────────────────────────────
@@ -236,7 +238,52 @@ namespace Controller.RobotControl
             if (_awaitingMove) return;
 
             Point point;
-            if (string.IsNullOrEmpty(step.PointName))
+            if (step.GridPoint != null)
+            {
+                var gp   = step.GridPoint;
+                var grid = _gridRepo.Get(gp.GridId);
+                if (grid == null) { Finish(global::ProgramStatus.Error, $"Grid not found: {gp.GridId}"); return; }
+
+                var basePoint = _pointRepo.Get(grid.BasePointName);
+                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Grid base point not found: {grid.BasePointName}"); return; }
+
+                int row, col;
+                if (gp.UseGridIndex)
+                {
+                    if (!grid.ColCount.HasValue || grid.ColCount.Value <= 0)
+                    {
+                        Finish(global::ProgramStatus.Error, $"Grid '{grid.Name}' requires colCount to use grid index");
+                        return;
+                    }
+                    int idx = (int)Math.Round(EvalField(step, "gridGridIndex", gp.GridIndex ?? 0));
+                    row = idx / grid.ColCount.Value;
+                    col = idx % grid.ColCount.Value;
+                }
+                else
+                {
+                    row = (int)Math.Round(EvalField(step, "gridRowIndex", gp.RowIndex ?? 0));
+                    col = (int)Math.Round(EvalField(step, "gridColIndex", gp.ColIndex ?? 0));
+                }
+
+                double rawX = row * grid.RowOffsetX + col * grid.ColOffsetX;
+                double rawY = row * grid.RowOffsetY + col * grid.ColOffsetY;
+                double rawZ = row * grid.RowOffsetZ + col * grid.ColOffsetZ;
+
+                double theta = grid.Rotation * Math.PI / 180.0;
+                double rotX  = rawX * Math.Cos(theta) - rawY * Math.Sin(theta);
+                double rotY  = rawX * Math.Sin(theta) + rawY * Math.Cos(theta);
+
+                point = new Point
+                {
+                    X  = basePoint.X  + rotX,
+                    Y  = basePoint.Y  + rotY,
+                    Z  = basePoint.Z  + rawZ,
+                    RX = basePoint.RX,
+                    RY = basePoint.RY,
+                    RZ = basePoint.RZ,
+                };
+            }
+            else if (string.IsNullOrEmpty(step.PointName))
             {
                 // No point specified — use the current TCP position as the base so offsets
                 // act as relative displacements from wherever the robot is right now.
