@@ -7,9 +7,17 @@ namespace Controller.RobotControl
 {
     public class RobotConfig
     {
-        /// <summary>Speed used for all axes during the homing sequence (mm/s or deg/s).</summary>
+        /// <summary>Speed used for all axes during the fast homing approach (mm/s or deg/s).</summary>
         [JsonPropertyName("homingSpeed")]
         public double HomingSpeed { get; set; } = 20;
+
+        /// <summary>Speed used for the slow second-pass homing approach (mm/s or deg/s).</summary>
+        [JsonPropertyName("homingSlowSpeed")]
+        public double HomingSlowSpeed { get; set; } = 5;
+
+        /// <summary>Distance to back off from the sensor before the slow approach (mm, or deg for J1).</summary>
+        [JsonPropertyName("homingBackoffMm")]
+        public double HomingBackoffMm { get; set; } = 10;
 
         /// <summary>J1 angle (degrees) applied once the limit switch is hit.</summary>
         [JsonPropertyName("j1HomeOffsetDeg")]

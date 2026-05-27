@@ -226,6 +226,10 @@ namespace Controller.RobotControl
                 case StepType.SetVariable:
                     ExecuteSetVariable(step, frame);
                     break;
+
+                case StepType.PauseProgram:
+                    ExecutePauseProgram(step, frame);
+                    break;
             }
         }
 
@@ -279,9 +283,16 @@ namespace Controller.RobotControl
                     RZ = basePoint.RZ,
                 };
             }
+            else if (string.IsNullOrEmpty(step.PointName))
+            {
+                // No point specified — use the current TCP position as the base so offsets
+                // act as relative displacements from wherever the robot is right now.
+                var pos = _controller.GetCurrentPosition();
+                point = new Point { X = pos.X, Y = pos.Y, Z = pos.Z, RX = pos.RX, RY = pos.RY, RZ = pos.RZ };
+            }
             else
             {
-                var found = _pointRepo.Get(step.PointName ?? "");
+                var found = _pointRepo.Get(step.PointName);
                 if (found is null)
                 {
                     Finish(global::ProgramStatus.Error, $"Point not found: {step.PointName}");
@@ -459,6 +470,13 @@ namespace Controller.RobotControl
             frame.Index++;
         }
 
+        private void ExecutePauseProgram(ProgramStep step, StepListFrame frame)
+        {
+            frame.Index++;
+            ReportStepCompleted(step);
+            Finish(global::ProgramStatus.Stopped, "Paused — press Continue to restart");
+        }
+
         private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
         {
             if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
@@ -586,6 +604,7 @@ namespace Controller.RobotControl
                 StepType.SetSpeedL    => $"Set Linear Speed → {step.Speed} mm/s",
                 StepType.SetSpeedJ    => $"Set Joint Speed → {step.Speed} mm/s",
                 StepType.SetVariable  => $"${step.VariableName} = {step.VariableExpr}",
+                StepType.PauseProgram => "Pause Program",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";

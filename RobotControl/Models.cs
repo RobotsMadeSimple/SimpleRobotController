@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable }
+public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram }
 
 public class ProgramStep
 {
@@ -292,6 +292,8 @@ public class SetRobotIdentityParams
 public class SetRobotConfigParams
 {
     [JsonPropertyName("homingSpeed")]               public double? HomingSpeed               { get; set; }
+    [JsonPropertyName("homingSlowSpeed")]           public double? HomingSlowSpeed           { get; set; }
+    [JsonPropertyName("homingBackoffMm")]           public double? HomingBackoffMm           { get; set; }
     [JsonPropertyName("j1HomeOffsetDeg")]           public double? J1HomeOffsetDeg           { get; set; }
     [JsonPropertyName("verticalHomePosition")]      public double? VerticalHomePosition      { get; set; }
     [JsonPropertyName("horizontalHomePosition")]    public double? HorizontalHomePosition    { get; set; }
