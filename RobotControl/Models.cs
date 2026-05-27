@@ -228,6 +228,10 @@ public class ProgramStep
     // Keys match JSON property names (camelCase). Evaluated at execution time.
     [JsonPropertyName("expressions")]
     public Dictionary<string, string>? Expressions { get; set; }
+
+    // Grid point reference — when set, overrides pointName with a calculated grid position
+    [JsonPropertyName("gridPoint")]
+    public GridPointRef? GridPoint { get; set; }
 }
 
 public class ProgramVariable
@@ -309,6 +313,45 @@ public class CommandMessage
     public string Id { get; set; } = default!;
     public string Command { get; set; } = default!;
     public JsonElement? Params { get; set; }
+}
+
+// ── Grid ──────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// A 2D grid of positions defined by a base point, row/column offsets, and an
+/// optional rotation about the base point's Z-axis.
+/// </summary>
+public class Grid
+{
+    [JsonPropertyName("id")]             public string Id             { get; set; } = "";
+    [JsonPropertyName("name")]           public string Name           { get; set; } = "";
+    [JsonPropertyName("basePointName")]  public string BasePointName  { get; set; } = "";
+
+    [JsonPropertyName("rowOffsetX")]     public double RowOffsetX     { get; set; }
+    [JsonPropertyName("rowOffsetY")]     public double RowOffsetY     { get; set; }
+    [JsonPropertyName("rowOffsetZ")]     public double RowOffsetZ     { get; set; }
+
+    [JsonPropertyName("colOffsetX")]     public double ColOffsetX     { get; set; }
+    [JsonPropertyName("colOffsetY")]     public double ColOffsetY     { get; set; }
+    [JsonPropertyName("colOffsetZ")]     public double ColOffsetZ     { get; set; }
+
+    [JsonPropertyName("rowCount")]       public int?   RowCount       { get; set; }
+    [JsonPropertyName("colCount")]       public int?   ColCount       { get; set; }
+
+    /// <summary>Degrees — rotates the row/column offsets around the base-point Z-axis.</summary>
+    [JsonPropertyName("rotation")]       public double Rotation       { get; set; }
+
+    [JsonPropertyName("lastUpdatedUnixMs")] public long LastUpdatedUnixMs { get; set; }
+}
+
+/// <summary>Identifies a cell in a named grid — used as the target position in a MoveL/MoveJ step.</summary>
+public class GridPointRef
+{
+    [JsonPropertyName("gridId")]       public string  GridId       { get; set; } = "";
+    [JsonPropertyName("rowIndex")]     public double? RowIndex     { get; set; }
+    [JsonPropertyName("colIndex")]     public double? ColIndex     { get; set; }
+    [JsonPropertyName("gridIndex")]    public double? GridIndex    { get; set; }
+    [JsonPropertyName("useGridIndex")] public bool    UseGridIndex { get; set; }
 }
 
 public class Vector6
@@ -663,6 +706,27 @@ public class RenameRelayParams
 {
     [JsonPropertyName("relay")] public int    Relay { get; set; }  // 1–4
     [JsonPropertyName("name")]  public string Name  { get; set; } = "";
+}
+
+public class SaveGridParams
+{
+    [JsonPropertyName("id")]             public string  Id             { get; set; } = "";
+    [JsonPropertyName("name")]           public string  Name           { get; set; } = "";
+    [JsonPropertyName("basePointName")]  public string  BasePointName  { get; set; } = "";
+    [JsonPropertyName("rowOffsetX")]     public double  RowOffsetX     { get; set; }
+    [JsonPropertyName("rowOffsetY")]     public double  RowOffsetY     { get; set; }
+    [JsonPropertyName("rowOffsetZ")]     public double  RowOffsetZ     { get; set; }
+    [JsonPropertyName("colOffsetX")]     public double  ColOffsetX     { get; set; }
+    [JsonPropertyName("colOffsetY")]     public double  ColOffsetY     { get; set; }
+    [JsonPropertyName("colOffsetZ")]     public double  ColOffsetZ     { get; set; }
+    [JsonPropertyName("rowCount")]       public int?    RowCount       { get; set; }
+    [JsonPropertyName("colCount")]       public int?    ColCount       { get; set; }
+    [JsonPropertyName("rotation")]       public double  Rotation       { get; set; }
+}
+
+public class GridIdParams
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
 }
 
 /// <summary>Relay board state included in GetIO responses.</summary>
