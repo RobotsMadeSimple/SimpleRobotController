@@ -235,11 +235,23 @@ namespace Controller.RobotControl
         {
             if (_awaitingMove) return;
 
-            var point = _pointRepo.Get(step.PointName ?? "");
-            if (point is null)
+            Point point;
+            if (string.IsNullOrEmpty(step.PointName))
             {
-                Finish(global::ProgramStatus.Error, $"Point not found: {step.PointName}");
-                return;
+                // No point specified — use the current TCP position as the base so offsets
+                // act as relative displacements from wherever the robot is right now.
+                var pos = _controller.GetCurrentPosition();
+                point = new Point { X = pos.X, Y = pos.Y, Z = pos.Z, RX = pos.RX, RY = pos.RY, RZ = pos.RZ };
+            }
+            else
+            {
+                var found = _pointRepo.Get(step.PointName);
+                if (found is null)
+                {
+                    Finish(global::ProgramStatus.Error, $"Point not found: {step.PointName}");
+                    return;
+                }
+                point = found;
             }
 
             // Determine if a local tool offset is set on this step
