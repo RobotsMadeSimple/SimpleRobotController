@@ -48,6 +48,8 @@ public class GridRepository
     {
         lock (_lock)
         {
+            if (string.IsNullOrWhiteSpace(grid.Id))
+                grid.Id = Guid.NewGuid().ToString();
             grid.LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             _grids[grid.Id] = grid;
             Save();
