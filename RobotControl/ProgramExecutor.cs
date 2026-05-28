@@ -313,16 +313,31 @@ namespace Controller.RobotControl
             bool hasToolOffset = step.ToolOffsetX.HasValue || step.ToolOffsetY.HasValue || step.ToolOffsetZ.HasValue
                                || step.ToolOffsetRX.HasValue || step.ToolOffsetRY.HasValue || step.ToolOffsetRZ.HasValue;
 
+            // Base position + offsets
+            double finalX  = point.X  + EvalField(step, "offsetX",  step.OffsetX  ?? 0);
+            double finalY  = point.Y  + EvalField(step, "offsetY",  step.OffsetY  ?? 0);
+            double finalZ  = point.Z  + EvalField(step, "offsetZ",  step.OffsetZ  ?? 0);
+            double finalRX = point.RX + EvalField(step, "offsetRX", step.OffsetRX ?? 0);
+            double finalRY = point.RY + EvalField(step, "offsetRY", step.OffsetRY ?? 0);
+            double finalRZ = point.RZ + EvalField(step, "offsetRZ", step.OffsetRZ ?? 0);
+
+            // Per-axis absolute overrides — replace calculated value when set
+            if (step.OverrideX.HasValue  || step.Expressions?.ContainsKey("overrideX")  == true) finalX  = EvalField(step, "overrideX",  step.OverrideX  ?? 0);
+            if (step.OverrideY.HasValue  || step.Expressions?.ContainsKey("overrideY")  == true) finalY  = EvalField(step, "overrideY",  step.OverrideY  ?? 0);
+            if (step.OverrideZ.HasValue  || step.Expressions?.ContainsKey("overrideZ")  == true) finalZ  = EvalField(step, "overrideZ",  step.OverrideZ  ?? 0);
+            if (step.OverrideRX.HasValue || step.Expressions?.ContainsKey("overrideRX") == true) finalRX = EvalField(step, "overrideRX", step.OverrideRX ?? 0);
+            if (step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
+            if (step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
+
             var cmd = new RobotCommand
             {
                 CommandType = step.Type == StepType.MoveL ? "MoveL" : "MoveJ",
-                // Target point + optional position offset
-                X  = point.X  + EvalField(step, "offsetX",  step.OffsetX  ?? 0),
-                Y  = point.Y  + EvalField(step, "offsetY",  step.OffsetY  ?? 0),
-                Z  = point.Z  + EvalField(step, "offsetZ",  step.OffsetZ  ?? 0),
-                RX = point.RX + EvalField(step, "offsetRX", step.OffsetRX ?? 0),
-                RY = point.RY + EvalField(step, "offsetRY", step.OffsetRY ?? 0),
-                RZ = point.RZ + EvalField(step, "offsetRZ", step.OffsetRZ ?? 0),
+                X  = finalX,
+                Y  = finalY,
+                Z  = finalZ,
+                RX = finalRX,
+                RY = finalRY,
+                RZ = finalRZ,
                 // Optional local tool offset applied on top of the active tool
                 TX  = hasToolOffset ? EvalField(step, "toolOffsetX",  step.ToolOffsetX  ?? 0) : null,
                 TY  = hasToolOffset ? EvalField(step, "toolOffsetY",  step.ToolOffsetY  ?? 0) : null,

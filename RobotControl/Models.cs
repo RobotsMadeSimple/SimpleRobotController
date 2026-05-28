@@ -183,6 +183,14 @@ public class ProgramStep
     [JsonPropertyName("toolOffsetRY")] public double? ToolOffsetRY { get; set; }
     [JsonPropertyName("toolOffsetRZ")] public double? ToolOffsetRZ { get; set; }
 
+    // Per-axis absolute overrides — when set, replace the calculated axis value (base + offset) (mm / deg)
+    [JsonPropertyName("overrideX")]  public double? OverrideX  { get; set; }
+    [JsonPropertyName("overrideY")]  public double? OverrideY  { get; set; }
+    [JsonPropertyName("overrideZ")]  public double? OverrideZ  { get; set; }
+    [JsonPropertyName("overrideRX")] public double? OverrideRX { get; set; }
+    [JsonPropertyName("overrideRY")] public double? OverrideRY { get; set; }
+    [JsonPropertyName("overrideRZ")] public double? OverrideRZ { get; set; }
+
     // SetOutput
     [JsonPropertyName("outputNumber")]
     public int? OutputNumber { get; set; }
