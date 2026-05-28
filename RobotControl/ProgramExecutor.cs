@@ -265,6 +265,10 @@ namespace Controller.RobotControl
                 case StepType.GoToLabel:
                     ExecuteGoToLabel(step, frame);
                     break;
+
+                case StepType.IfCondition:
+                    ExecuteIfCondition(step, frame);
+                    break;
             }
         }
 
@@ -573,6 +577,92 @@ namespace Controller.RobotControl
                 $"GoToLabel: label '{step.LabelName ?? step.LabelId}' not found in current scope");
         }
 
+        private Dictionary<string, double> BuildIoVariables()
+        {
+            var io = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+            io["stb.in1"]  = _controller.stb.Input1  ? 1.0 : 0.0;
+            io["stb.in2"]  = _controller.stb.Input2  ? 1.0 : 0.0;
+            io["stb.in3"]  = _controller.stb.Input3  ? 1.0 : 0.0;
+            io["stb.in4"]  = _controller.stb.Input4  ? 1.0 : 0.0;
+            io["stb.out1"] = _controller.stb.Output1 ? 1.0 : 0.0;
+            io["stb.out2"] = _controller.stb.Output2 ? 1.0 : 0.0;
+            io["stb.out3"] = _controller.stb.Output3 ? 1.0 : 0.0;
+            io["stb.out4"] = _controller.stb.Output4 ? 1.0 : 0.0;
+
+            var relays = _controller.RelayManager.GetRelayStates();
+            if (relays != null)
+                for (int ri = 0; ri < relays.Length && ri < 4; ri++)
+                    io[$"relay.{ri + 1}"] = relays[ri] ? 1.0 : 0.0;
+
+            foreach (var nano in _controller.NanoManager.GetAllStates())
+                if (!string.IsNullOrEmpty(nano.Name))
+                    foreach (var pin in nano.Pins)
+                        if (!string.IsNullOrEmpty(pin.Name))
+                            io[$"nano.{nano.Name}.{pin.Name}"] = pin.Value ? 1.0 : 0.0;
+
+            return io;
+        }
+
+        private bool EvaluateConditionGroup(ConditionGroup group, Dictionary<string, double> vars)
+        {
+            if (group.Items.Count == 0) return true;
+            bool isAny = group.Combinator == "ANY";
+            foreach (var item in group.Items)
+            {
+                bool result = EvaluateConditionItem(item, vars);
+                if (isAny && result)  return true;
+                if (!isAny && !result) return false;
+            }
+            return !isAny;
+        }
+
+        private bool EvaluateConditionItem(ConditionItem item, Dictionary<string, double> vars)
+        {
+            double left, right;
+            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables); } catch { left  = 0; }
+            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables); } catch { right = 0; }
+            const double eps = 1e-9;
+            return item.Operator switch
+            {
+                "==" => Math.Abs(left - right) < eps,
+                "!=" => Math.Abs(left - right) >= eps,
+                ">"  => left > right,
+                ">=" => left >= right,
+                "<"  => left < right,
+                "<=" => left <= right,
+                _    => false,
+            };
+        }
+
+        private void ExecuteIfCondition(ProgramStep step, StepListFrame frame)
+        {
+            frame.Index++;
+            ReportStepCompleted(step);
+
+            var allVars = new Dictionary<string, double>(_variables, StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in BuildIoVariables()) allVars[kv.Key] = kv.Value;
+
+            if (step.Condition != null && EvaluateConditionGroup(step.Condition, allVars))
+            {
+                var body = step.IfSteps ?? new();
+                if (body.Count > 0) _frameStack.Push(new StepListFrame(body, 0));
+                return;
+            }
+
+            foreach (var elif in step.ElseIfBranches ?? [])
+            {
+                if (EvaluateConditionGroup(elif.Condition, allVars))
+                {
+                    if (elif.Steps.Count > 0) _frameStack.Push(new StepListFrame(elif.Steps, 0));
+                    return;
+                }
+            }
+
+            var elseBody = step.ElseSteps ?? new();
+            if (elseBody.Count > 0) _frameStack.Push(new StepListFrame(elseBody, 0));
+        }
+
         private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
         {
             if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
@@ -703,6 +793,9 @@ namespace Controller.RobotControl
                 StepType.PauseProgram => "Pause Program",
                 StepType.Label        => $"Label: {step.LabelName ?? step.LabelId}",
                 StepType.GoToLabel    => $"Go To: {step.LabelName ?? step.LabelId}",
+                StepType.IfCondition  => step.Condition != null
+                    ? $"If [{step.Condition.Combinator} · {step.Condition.Items.Count} condition(s)]"
+                    : "If Condition",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
@@ -729,6 +822,12 @@ namespace Controller.RobotControl
                 {
                     var routine = repo.Get(s.RoutineName ?? "");
                     if (routine != null) count += CountSteps(routine.Steps, repo);
+                }
+                if (s.Type == StepType.IfCondition)
+                {
+                    if (s.IfSteps != null) count += CountSteps(s.IfSteps, repo);
+                    foreach (var elif in s.ElseIfBranches ?? []) count += CountSteps(elif.Steps, repo);
+                    if (s.ElseSteps != null) count += CountSteps(s.ElseSteps, repo);
                 }
             }
             return count;

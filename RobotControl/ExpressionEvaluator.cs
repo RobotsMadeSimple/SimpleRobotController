@@ -131,7 +131,7 @@ namespace Controller.RobotControl
                 {
                     i++;
                     int start = i;
-                    while (i < expr.Length && (char.IsLetterOrDigit(expr[i]) || expr[i] == '_')) i++;
+                    while (i < expr.Length && (char.IsLetterOrDigit(expr[i]) || expr[i] == '_' || expr[i] == '.')) i++;
                     tokens.Add(new Token(TokType.Variable, expr[start..i]));
                     continue;
                 }
