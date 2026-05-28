@@ -38,7 +38,8 @@ namespace Controller.RobotControl
         private ProgramStep? _pendingStep;
 
         // Program variables — initialised from BuiltProgram.Variables on Start(), mutated by SetVariable steps
-        private readonly Dictionary<string, double> _variables = new();
+        private readonly Dictionary<string, double>       _variables     = new();
+        private readonly Dictionary<string, List<double>> _listVariables = new();
 
         public bool IsRunning => _running;
         public string? CurrentProgramName => _program?.Name;
@@ -80,8 +81,14 @@ namespace Controller.RobotControl
 
             // Initialise variables from the program definition
             _variables.Clear();
+            _listVariables.Clear();
             foreach (var v in program.Variables ?? [])
-                _variables[v.Name] = v.Value;
+            {
+                if (v.Values != null && v.Values.Count > 0)
+                    _listVariables[v.Name] = v.Values;
+                else
+                    _variables[v.Name] = v.Value;
+            }
 
             _program = program;
             _stopRequested = false;
@@ -122,6 +129,7 @@ namespace Controller.RobotControl
             _loopDepth       = 0;
             _frameStack.Clear();
             _variables.Clear();
+            _listVariables.Clear();
         }
 
         // ── Main update — called every control loop tick ──────────────────────
@@ -483,7 +491,7 @@ namespace Controller.RobotControl
             {
                 try
                 {
-                    _variables[step.VariableName] = ExpressionEvaluator.Evaluate(step.VariableExpr, _variables);
+                    _variables[step.VariableName] = ExpressionEvaluator.Evaluate(step.VariableExpr, _variables, _listVariables);
                 }
                 catch
                 {
@@ -505,7 +513,7 @@ namespace Controller.RobotControl
         {
             if (step.Expressions != null && step.Expressions.TryGetValue(fieldName, out var expr))
             {
-                try { return ExpressionEvaluator.Evaluate(expr, _variables); }
+                try { return ExpressionEvaluator.Evaluate(expr, _variables, _listVariables); }
                 catch { /* fall through */ }
             }
             return fallback;
