@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition }
+public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming }
 
 public class ConditionItem
 {
@@ -273,6 +273,9 @@ public class ProgramStep
     [JsonPropertyName("ifSteps")]         public List<ProgramStep>?  IfSteps        { get; set; }
     [JsonPropertyName("elseIfBranches")]  public List<ElseIfBranch>? ElseIfBranches { get; set; }
     [JsonPropertyName("elseSteps")]       public List<ProgramStep>?  ElseSteps      { get; set; }
+
+    // SetTool
+    [JsonPropertyName("toolName")]        public string? ToolName { get; set; }
 }
 
 public class ProgramVariable

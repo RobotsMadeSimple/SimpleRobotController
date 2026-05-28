@@ -74,6 +74,23 @@ namespace Controller.RobotControl
 
         // Active tool name — "" means no tool (origin Vector6)
         private string activeTool = "";
+        public string HomingState => homingState;
+        public void TriggerHoming() => startHoming = true;
+        public void ApplyTool(string? name)
+        {
+            if (string.IsNullOrEmpty(name) || name == "none")
+            {
+                activeTool  = "";
+                CurrentTool = Vector6.Zero;
+            }
+            else
+            {
+                var tool = toolRepo.Get(name);
+                if (tool != null) { activeTool = name; CurrentTool = new Vector6(tool.X, tool.Y, tool.Z, tool.RX, tool.RY, tool.RZ); }
+            }
+            CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
+            CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+        }
 
         // Robot configuration (homing offsets, speeds, etc.)
         private RobotConfig _config = new();

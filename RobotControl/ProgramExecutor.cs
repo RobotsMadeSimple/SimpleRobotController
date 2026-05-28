@@ -269,6 +269,14 @@ namespace Controller.RobotControl
                 case StepType.IfCondition:
                     ExecuteIfCondition(step, frame);
                     break;
+
+                case StepType.SetTool:
+                    ExecuteSetTool(step, frame);
+                    break;
+
+                case StepType.RunHoming:
+                    ExecuteRunHoming(step, frame);
+                    break;
             }
         }
 
@@ -663,6 +671,44 @@ namespace Controller.RobotControl
             if (elseBody.Count > 0) _frameStack.Push(new StepListFrame(elseBody, 0));
         }
 
+        private void ExecuteSetTool(ProgramStep step, StepListFrame frame)
+        {
+            _controller.ApplyTool(step.ToolName);
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private bool _homingTriggered = false;
+        private void ExecuteRunHoming(ProgramStep step, StepListFrame frame)
+        {
+            if (!_homingTriggered)
+            {
+                _controller.TriggerHoming();
+                _homingTriggered = true;
+                return;
+            }
+            // Wait for homing to start, then wait for it to finish
+            if (_controller.HomingState == "WaitingForStart")
+            {
+                // Either homing completed or hasn't started yet — if we triggered it, it's done
+                // Guard: only advance after we've seen the state leave WaitingForStart at least once
+                // Use a separate flag set when state left WaitingForStart
+                if (_homingStartedMoving)
+                {
+                    _homingTriggered    = false;
+                    _homingStartedMoving = false;
+                    ReportStepCompleted(step);
+                    frame.Index++;
+                }
+                // else: still waiting for homing state machine to pick up the trigger
+            }
+            else
+            {
+                _homingStartedMoving = true;
+            }
+        }
+        private bool _homingStartedMoving = false;
+
         private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
         {
             if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
@@ -796,6 +842,8 @@ namespace Controller.RobotControl
                 StepType.IfCondition  => step.Condition != null
                     ? $"If [{step.Condition.Combinator} · {step.Condition.Items.Count} condition(s)]"
                     : "If Condition",
+                StepType.SetTool      => $"Set Tool → {(string.IsNullOrEmpty(step.ToolName) ? "None" : step.ToolName)}",
+                StepType.RunHoming    => "Run Homing",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
