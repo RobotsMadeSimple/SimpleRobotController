@@ -242,6 +242,8 @@ public class ProgramVariable
     public string Name { get; set; } = "";
     [JsonPropertyName("value")]
     public double Value { get; set; }
+    [JsonPropertyName("values")]
+    public List<double>? Values { get; set; }
     [JsonPropertyName("description")]
     public string? Description { get; set; }
 }

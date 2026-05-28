@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 
@@ -8,6 +9,7 @@ namespace Controller.RobotControl
     ///
     /// Supported syntax:
     ///   Variables    : $varName
+    ///   List index   : $listName[indexExpr]  or  $listName[3]
     ///   Literals     : 3.14  -5  100
     ///   Operators    : +  -  *  /
     ///   Grouping     : (expr)
@@ -17,58 +19,61 @@ namespace Controller.RobotControl
     ///   "$speed * 0.8"
     ///   "($pickHeight + $offset) / 2"
     ///   "$counter + 1"
+    ///   "$positions[$index]"
+    ///   "$offsets[2] + $base"
     /// </summary>
     internal static class ExpressionEvaluator
     {
-        private enum TokType { Number, Variable, Op, LParen, RParen }
+        private enum TokType { Number, Variable, Op, LParen, RParen, LBracket, RBracket }
         private readonly record struct Token(TokType Type, string Value);
 
         // ── Public entry point ────────────────────────────────────────────────
 
-        public static double Evaluate(string expr, Dictionary<string, double> variables)
+        public static double Evaluate(string expr, Dictionary<string, double> variables,
+            Dictionary<string, List<double>>? listVariables = null)
         {
             var tokens = Tokenize(expr.Trim());
             int idx = 0;
-            return ParseAddSub(tokens, ref idx, variables);
+            return ParseAddSub(tokens, ref idx, variables, listVariables);
         }
 
         // ── Recursive descent ─────────────────────────────────────────────────
 
-        private static double ParseAddSub(List<Token> t, ref int i, Dictionary<string, double> vars)
+        private static double ParseAddSub(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
         {
-            double left = ParseMulDiv(t, ref i, vars);
+            double left = ParseMulDiv(t, ref i, vars, listVars);
             while (i < t.Count && t[i].Type == TokType.Op && (t[i].Value == "+" || t[i].Value == "-"))
             {
                 string op = t[i++].Value;
-                double right = ParseMulDiv(t, ref i, vars);
+                double right = ParseMulDiv(t, ref i, vars, listVars);
                 left = op == "+" ? left + right : left - right;
             }
             return left;
         }
 
-        private static double ParseMulDiv(List<Token> t, ref int i, Dictionary<string, double> vars)
+        private static double ParseMulDiv(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
         {
-            double left = ParseUnary(t, ref i, vars);
+            double left = ParseUnary(t, ref i, vars, listVars);
             while (i < t.Count && t[i].Type == TokType.Op && (t[i].Value == "*" || t[i].Value == "/"))
             {
                 string op = t[i++].Value;
-                double right = ParseUnary(t, ref i, vars);
+                double right = ParseUnary(t, ref i, vars, listVars);
                 left = op == "*" ? left * right : (right != 0 ? left / right : 0);
             }
             return left;
         }
 
-        private static double ParseUnary(List<Token> t, ref int i, Dictionary<string, double> vars)
+        private static double ParseUnary(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
         {
             if (i < t.Count && t[i].Type == TokType.Op && t[i].Value == "-")
             {
                 i++;
-                return -ParsePrimary(t, ref i, vars);
+                return -ParsePrimary(t, ref i, vars, listVars);
             }
-            return ParsePrimary(t, ref i, vars);
+            return ParsePrimary(t, ref i, vars, listVars);
         }
 
-        private static double ParsePrimary(List<Token> t, ref int i, Dictionary<string, double> vars)
+        private static double ParsePrimary(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
         {
             if (i >= t.Count) return 0;
 
@@ -77,7 +82,17 @@ namespace Controller.RobotControl
             if (tok.Type == TokType.Variable)
             {
                 i++;
-                return vars.TryGetValue(tok.Value, out double v) ? v : 0;
+                string name = tok.Value;
+                // List indexing: $name[indexExpr]
+                if (i < t.Count && t[i].Type == TokType.LBracket && listVars != null && listVars.TryGetValue(name, out var list))
+                {
+                    i++; // consume '['
+                    double idxVal = ParseAddSub(t, ref i, vars, listVars);
+                    if (i < t.Count && t[i].Type == TokType.RBracket) i++; // consume ']'
+                    int idx = (int)Math.Round(idxVal);
+                    return (idx >= 0 && idx < list.Count) ? list[idx] : 0;
+                }
+                return vars.TryGetValue(name, out double v) ? v : 0;
             }
 
             if (tok.Type == TokType.Number)
@@ -89,7 +104,7 @@ namespace Controller.RobotControl
             if (tok.Type == TokType.LParen)
             {
                 i++;
-                double val = ParseAddSub(t, ref i, vars);
+                double val = ParseAddSub(t, ref i, vars, listVars);
                 if (i < t.Count && t[i].Type == TokType.RParen) i++;
                 return val;
             }
@@ -138,8 +153,10 @@ namespace Controller.RobotControl
                     continue;
                 }
 
-                if (c == '(') { tokens.Add(new Token(TokType.LParen, "(")); i++; continue; }
-                if (c == ')') { tokens.Add(new Token(TokType.RParen, ")")); i++; continue; }
+                if (c == '(') { tokens.Add(new Token(TokType.LParen,   "(")); i++; continue; }
+                if (c == ')') { tokens.Add(new Token(TokType.RParen,   ")")); i++; continue; }
+                if (c == '[') { tokens.Add(new Token(TokType.LBracket, "[")); i++; continue; }
+                if (c == ']') { tokens.Add(new Token(TokType.RBracket, "]")); i++; continue; }
 
                 i++; // skip unrecognised characters
             }
