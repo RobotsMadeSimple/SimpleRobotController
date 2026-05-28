@@ -24,6 +24,7 @@ namespace Controller.RobotControl
         private bool            _running;
         // volatile so the control-loop thread always sees writes from the WebSocket thread
         private volatile bool   _stopRequested;
+        private volatile bool   _isPaused;
 
         // Stack for nested step lists (supports Loop)
         private readonly Stack<StepListFrame> _frameStack = new();
@@ -42,6 +43,7 @@ namespace Controller.RobotControl
         private readonly Dictionary<string, List<double>> _listVariables = new();
 
         public bool IsRunning => _running;
+        public bool IsPaused  => _isPaused;
         public string? CurrentProgramName => _program?.Name;
 
         public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo, GridRepository gridRepo)
@@ -92,8 +94,24 @@ namespace Controller.RobotControl
 
             _program = program;
             _stopRequested = false;
-            _awaitingMove = false;
-            _running = true;
+            _isPaused      = false;
+            _awaitingMove  = false;
+            _running       = true;
+        }
+
+        public void Resume()
+        {
+            if (!_isPaused) return;
+            _isPaused      = false;
+            _stopRequested = false;
+            _running       = true;
+            _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+            {
+                ProgramName       = _program!.Name,
+                ProgramStatus     = global::ProgramStatus.Running,
+                CurrentStepNumber = _globalStepIndex,
+                StepDescription   = "Resuming…",
+            });
         }
 
         public void Stop()
@@ -123,6 +141,7 @@ namespace Controller.RobotControl
         {
             _running         = false;
             _stopRequested   = false;
+            _isPaused        = false;
             _awaitingMove    = false;
             _pendingStep     = null;
             _globalStepIndex = 0;
@@ -237,6 +256,14 @@ namespace Controller.RobotControl
 
                 case StepType.PauseProgram:
                     ExecutePauseProgram(step, frame);
+                    break;
+
+                case StepType.Label:
+                    ExecuteLabel(step, frame);
+                    break;
+
+                case StepType.GoToLabel:
+                    ExecuteGoToLabel(step, frame);
                     break;
             }
         }
@@ -497,7 +524,53 @@ namespace Controller.RobotControl
         {
             frame.Index++;
             ReportStepCompleted(step);
-            Finish(global::ProgramStatus.Stopped, "Paused — press Continue to restart");
+            // Pause without clearing the frame stack so Resume() can continue from the next step
+            _running      = false;
+            _isPaused     = true;
+            _awaitingMove = false;
+            _pendingStep  = null;
+            _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+            {
+                ProgramName         = _program!.Name,
+                ProgramStatus       = global::ProgramStatus.Stopped,
+                CurrentStepNumber   = _globalStepIndex,
+                StepDescription     = "Paused — press Continue to resume",
+                CurrentPointName    = "",
+                CurrentOffsetX      = null, CurrentOffsetY   = null, CurrentOffsetZ   = null,
+                CurrentOffsetRX     = null, CurrentOffsetRY  = null, CurrentOffsetRZ  = null,
+                CurrentToolOffsetX  = null, CurrentToolOffsetY  = null, CurrentToolOffsetZ  = null,
+                CurrentToolOffsetRX = null, CurrentToolOffsetRY = null, CurrentToolOffsetRZ = null,
+            });
+        }
+
+        private void ExecuteLabel(ProgramStep step, StepListFrame frame)
+        {
+            // Labels are no-ops at runtime — they are only markers for GoToLabel
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteGoToLabel(ProgramStep step, StepListFrame frame)
+        {
+            if (string.IsNullOrEmpty(step.LabelId))
+            {
+                Finish(global::ProgramStatus.Error, "GoToLabel: no label ID set");
+                return;
+            }
+
+            for (int i = 0; i < frame.Steps.Count; i++)
+            {
+                var s = frame.Steps[i];
+                if (s.Type == StepType.Label && s.LabelId == step.LabelId)
+                {
+                    ReportStepCompleted(step);
+                    frame.Index = i; // Label step advances past itself on the next tick
+                    return;
+                }
+            }
+
+            Finish(global::ProgramStatus.Error,
+                $"GoToLabel: label '{step.LabelName ?? step.LabelId}' not found in current scope");
         }
 
         private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
@@ -628,6 +701,8 @@ namespace Controller.RobotControl
                 StepType.SetSpeedJ    => $"Set Joint Speed → {step.Speed} mm/s",
                 StepType.SetVariable  => $"${step.VariableName} = {step.VariableExpr}",
                 StepType.PauseProgram => "Pause Program",
+                StepType.Label        => $"Label: {step.LabelName ?? step.LabelId}",
+                StepType.GoToLabel    => $"Go To: {step.LabelName ?? step.LabelId}",
                 _                     => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
