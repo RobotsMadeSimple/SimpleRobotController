@@ -144,7 +144,28 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel }
+public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition }
+
+public class ConditionItem
+{
+    [JsonPropertyName("id")]       public string Id       { get; set; } = "";
+    [JsonPropertyName("left")]     public string Left     { get; set; } = "";
+    [JsonPropertyName("operator")] public string Operator { get; set; } = "==";
+    [JsonPropertyName("right")]    public string Right    { get; set; } = "";
+}
+
+public class ConditionGroup
+{
+    [JsonPropertyName("combinator")] public string Combinator { get; set; } = "ALL";
+    [JsonPropertyName("items")]      public List<ConditionItem> Items { get; set; } = new();
+}
+
+public class ElseIfBranch
+{
+    [JsonPropertyName("id")]        public string         Id        { get; set; } = "";
+    [JsonPropertyName("condition")] public ConditionGroup Condition { get; set; } = new();
+    [JsonPropertyName("steps")]     public List<ProgramStep> Steps  { get; set; } = new();
+}
 
 public class ProgramStep
 {
@@ -246,6 +267,12 @@ public class ProgramStep
     public string? LabelId { get; set; }
     [JsonPropertyName("labelName")]
     public string? LabelName { get; set; }
+
+    // IfCondition
+    [JsonPropertyName("condition")]       public ConditionGroup?     Condition      { get; set; }
+    [JsonPropertyName("ifSteps")]         public List<ProgramStep>?  IfSteps        { get; set; }
+    [JsonPropertyName("elseIfBranches")]  public List<ElseIfBranch>? ElseIfBranches { get; set; }
+    [JsonPropertyName("elseSteps")]       public List<ProgramStep>?  ElseSteps      { get; set; }
 }
 
 public class ProgramVariable
