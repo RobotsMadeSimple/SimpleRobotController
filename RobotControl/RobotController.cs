@@ -636,8 +636,13 @@ namespace Controller.RobotControl
                         var built = builtProgramRepo.Get(p.ProgramName);
                         if (built != null)
                         {
-                            DisplaceRunningBuiltProgram(p.ProgramName);
-                            programExecutor?.Start(built);
+                            if (programExecutor?.IsPaused == true && programExecutor.CurrentProgramName == p.ProgramName)
+                                programExecutor.Resume();
+                            else
+                            {
+                                DisplaceRunningBuiltProgram(p.ProgramName);
+                                programExecutor?.Start(built);
+                            }
                         }
                         else
                             programManager.SetFlag(p.ProgramName, "Start");
