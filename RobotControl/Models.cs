@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram }
+public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel }
 
 public class ProgramStep
 {
@@ -240,6 +240,12 @@ public class ProgramStep
     // Grid point reference — when set, overrides pointName with a calculated grid position
     [JsonPropertyName("gridPoint")]
     public GridPointRef? GridPoint { get; set; }
+
+    // Label / GoToLabel
+    [JsonPropertyName("labelId")]
+    public string? LabelId { get; set; }
+    [JsonPropertyName("labelName")]
+    public string? LabelName { get; set; }
 }
 
 public class ProgramVariable
