@@ -47,6 +47,7 @@ class Program
         }
 
         var sd = new ServiceDiscovery();
+        var currentIdentity = identity;
         var service = BuildProfile(identity);
         sd.Advertise(service);
 
@@ -57,11 +58,25 @@ class Program
         {
             _ = Task.Run(async () =>
             {
+                currentIdentity = updated;
                 sd.Unadvertise(service);
                 await Task.Delay(250);
                 service = BuildProfile(updated);
                 sd.Advertise(service);
                 Console.WriteLine($"[mDNS] Re-advertising with Type: '{updated.RobotType}', Name: '{updated.RobotName}'");
+            });
+        };
+
+        System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, _) =>
+        {
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2000); // wait for DHCP to assign the new IP
+                sd.Unadvertise(service);
+                await Task.Delay(250);
+                service = BuildProfile(currentIdentity);
+                sd.Advertise(service);
+                Console.WriteLine("[mDNS] Network address changed — re-advertising");
             });
         };
 
