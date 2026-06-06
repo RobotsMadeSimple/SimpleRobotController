@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace Controller.RobotControl
@@ -547,9 +548,33 @@ namespace Controller.RobotControl
 
         private void ExecuteStatusUpdate(ProgramStep step, StepListFrame frame)
         {
-            // StatusUpdate steps complete instantly; count them immediately
-            ReportStepCompleted(step);
+            if (_loopDepth == 0) _globalStepIndex++;
+            _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+            {
+                ProgramName        = _program!.Name,
+                ProgramStatus      = global::ProgramStatus.Running,
+                CurrentStepNumber  = _globalStepIndex,
+                StepDescription    = !string.IsNullOrEmpty(step.StatusMessage)
+                    ? InterpolateVariables(step.StatusMessage)
+                    : StepDescription(step),
+                WarningDescription = !string.IsNullOrEmpty(step.StatusWarning)
+                    ? InterpolateVariables(step.StatusWarning)
+                    : null,
+                ErrorDescription   = !string.IsNullOrEmpty(step.StatusError)
+                    ? InterpolateVariables(step.StatusError)
+                    : null,
+                ShouldLog          = true,
+            });
             frame.Index++;
+        }
+
+        private string InterpolateVariables(string template)
+        {
+            return Regex.Replace(template, @"\$(\w+)", m =>
+            {
+                var name = m.Groups[1].Value;
+                return _variables.TryGetValue(name, out var v) ? v.ToString("G6") : m.Value;
+            });
         }
 
         private void ExecuteSetOutput(ProgramStep step, StepListFrame frame)
