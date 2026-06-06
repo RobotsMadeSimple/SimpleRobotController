@@ -762,19 +762,32 @@ namespace Controller.RobotControl
                 return;
             }
 
-            for (int i = 0; i < frame.Steps.Count; i++)
+            // Search current frame first, then walk up the stack toward the top-level frame.
+            // frames[0] = current (deepest), frames[last] = top-level.
+            var frames = _frameStack.ToArray();
+            for (int fi = 0; fi < frames.Length; fi++)
             {
-                var s = frame.Steps[i];
-                if (s.Type == StepType.Label && s.LabelId == step.LabelId)
+                var target = frames[fi];
+                for (int i = 0; i < target.Steps.Count; i++)
                 {
-                    ReportStepCompleted(step);
-                    frame.Index = i; // Label step advances past itself on the next tick
-                    return;
+                    if (target.Steps[i].Type == StepType.Label &&
+                        target.Steps[i].LabelId == step.LabelId)
+                    {
+                        // Unwind any frames above the target; fix _loopDepth for abandoned loops.
+                        for (int k = 0; k < fi; k++)
+                        {
+                            if (frames[k].IsLoop) _loopDepth--;
+                            _frameStack.Pop();
+                        }
+                        ReportStepCompleted(step);
+                        target.Index = i; // Label step advances past itself on the next tick
+                        return;
+                    }
                 }
             }
 
             Finish(global::ProgramStatus.Error,
-                $"GoToLabel: label '{step.LabelName ?? step.LabelId}' not found in current scope");
+                $"GoToLabel: label '{step.LabelName ?? step.LabelId}' not found");
         }
 
         private Dictionary<string, double> BuildIoVariables()
