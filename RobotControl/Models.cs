@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming }
 
 public class ConditionItem
 {
@@ -276,6 +276,11 @@ public class ProgramStep
 
     // SetTool
     [JsonPropertyName("toolName")]        public string? ToolName { get; set; }
+
+    // JumpL / JumpJ — Z height used for lift and lower legs (mm). JumpZStart/JumpZEnd override each leg independently.
+    [JsonPropertyName("jumpZ")]      public double? JumpZ      { get; set; }
+    [JsonPropertyName("jumpZStart")] public double? JumpZStart { get; set; }
+    [JsonPropertyName("jumpZEnd")]   public double? JumpZEnd   { get; set; }
 }
 
 public class ProgramVariable
