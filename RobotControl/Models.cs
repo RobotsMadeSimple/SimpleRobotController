@@ -224,6 +224,9 @@ public class ProgramStep
     // Non-blocking pulse: set to OutputValue for PulseMs, then set to opposite. 0/null = hold.
     [JsonPropertyName("pulseMs")]
     public int? PulseMs { get; set; }
+    // When true and PulseMs > 0, block program execution until the pulse completes before advancing.
+    [JsonPropertyName("pulseBlocking")]
+    public bool? PulseBlocking { get; set; }
 
     // Wait
     [JsonPropertyName("waitMs")]

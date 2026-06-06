@@ -559,23 +559,43 @@ namespace Controller.RobotControl
             var value  = step.OutputValue ?? false;
             var pulse  = step.PulseMs ?? 0;
 
-            // Set to the requested state immediately
-            ApplyOutput(_controller, card, number, value, step.OutputNanoId);
-
-            // Non-blocking pulse: after the pulse duration, flip to the opposite state
-            if (pulse > 0)
+            if (!frame.WaitStarted)
             {
-                var ctrl   = _controller;
-                var nanoId = step.OutputNanoId;
-                _ = Task.Run(async () =>
+                ApplyOutput(_controller, card, number, value, step.OutputNanoId);
+
+                if (pulse > 0 && step.PulseBlocking == true)
                 {
-                    await Task.Delay(pulse);
-                    ApplyOutput(ctrl, card, number, !value, nanoId);
-                });
+                    _waitStartMs      = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    frame.WaitStarted = true;
+                    ReportStepStarted(step);
+                    return;
+                }
+
+                if (pulse > 0)
+                {
+                    var ctrl   = _controller;
+                    var nanoId = step.OutputNanoId;
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(pulse);
+                        ApplyOutput(ctrl, card, number, !value, nanoId);
+                    });
+                }
+
+                ReportStepCompleted(step);
+                frame.Index++;
+                return;
             }
 
-            ReportStepCompleted(step);
-            frame.Index++;
+            // Blocking pulse — wait for pulse duration then flip
+            var elapsed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _waitStartMs;
+            if (elapsed >= pulse)
+            {
+                ApplyOutput(_controller, card, number, !value, step.OutputNanoId);
+                frame.WaitStarted = false;
+                frame.Index++;
+                ReportStepCompleted(step);
+            }
         }
 
         /// <summary>Applies a single output state to the correct IO card.</summary>
@@ -1016,7 +1036,10 @@ namespace Controller.RobotControl
                 "nano"  => $"Nano Output {step.OutputNumber} → {state}",
                 _       => $"STB Output {step.OutputNumber} → {state}",
             };
-            return (step.PulseMs ?? 0) > 0 ? $"{base_}  (pulse {step.PulseMs} ms)" : base_;
+            var pulseSuffix = (step.PulseMs ?? 0) > 0
+                ? $"  (pulse {step.PulseMs} ms{(step.PulseBlocking == true ? ", blocking" : "")})"
+                : "";
+            return $"{base_}{pulseSuffix}";
         }
 
         internal static int CountSteps(List<ProgramStep> steps, BuiltProgramRepository? repo = null)
