@@ -146,6 +146,7 @@ namespace Controller.RobotControl
             _pendingStep     = null;
             _globalStepIndex = 0;
             _loopDepth       = 0;
+            _jumpSubStep     = 0;
             _frameStack.Clear();
             _variables.Clear();
             _listVariables.Clear();
@@ -220,6 +221,11 @@ namespace Controller.RobotControl
                 case StepType.MoveL:
                 case StepType.MoveJ:
                     ExecuteMove(step, frame);
+                    break;
+
+                case StepType.JumpL:
+                case StepType.JumpJ:
+                    ExecuteJump(step, frame);
                     break;
 
                 case StepType.SetOutput:
@@ -396,6 +402,147 @@ namespace Controller.RobotControl
             // Announce the step is in progress without counting it yet
             ReportStepStarted(step);
             frame.Index++;
+        }
+
+        private void ExecuteJump(ProgramStep step, StepListFrame frame)
+        {
+            if (_awaitingMove) return;
+
+            if (_jumpSubStep == 0)
+            {
+                // Resolve final target (same as ExecuteMove — supports PointName, GridPoint, or current pos)
+                Point point;
+                if (step.GridPoint != null)
+                {
+                    var gp   = step.GridPoint;
+                    var grid = _gridRepo.Get(gp.GridId);
+                    if (grid == null) { Finish(global::ProgramStatus.Error, $"Grid not found: {gp.GridId}"); return; }
+
+                    var basePoint = _pointRepo.Get(grid.BasePointName);
+                    if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Grid base point not found: {grid.BasePointName}"); return; }
+
+                    int row, col;
+                    if (gp.UseGridIndex)
+                    {
+                        if (!grid.ColCount.HasValue || grid.ColCount.Value <= 0)
+                        {
+                            Finish(global::ProgramStatus.Error, $"Grid '{grid.Name}' requires colCount to use grid index");
+                            return;
+                        }
+                        int idx = (int)Math.Round(EvalField(step, "gridGridIndex", gp.GridIndex ?? 0));
+                        row = idx / grid.ColCount.Value;
+                        col = idx % grid.ColCount.Value;
+                    }
+                    else
+                    {
+                        row = (int)Math.Round(EvalField(step, "gridRowIndex", gp.RowIndex ?? 0));
+                        col = (int)Math.Round(EvalField(step, "gridColIndex", gp.ColIndex ?? 0));
+                    }
+
+                    double rawX = row * grid.RowOffsetX + col * grid.ColOffsetX;
+                    double rawY = row * grid.RowOffsetY + col * grid.ColOffsetY;
+                    double rawZ = row * grid.RowOffsetZ + col * grid.ColOffsetZ;
+                    double theta = grid.Rotation * Math.PI / 180.0;
+
+                    point = new Point
+                    {
+                        X  = basePoint.X + rawX * Math.Cos(theta) - rawY * Math.Sin(theta),
+                        Y  = basePoint.Y + rawX * Math.Sin(theta) + rawY * Math.Cos(theta),
+                        Z  = basePoint.Z + rawZ,
+                        RX = basePoint.RX, RY = basePoint.RY, RZ = basePoint.RZ,
+                    };
+                }
+                else if (string.IsNullOrEmpty(step.PointName))
+                {
+                    var pos = _controller.GetCurrentPosition();
+                    point = new Point { X = pos.X, Y = pos.Y, Z = pos.Z, RX = pos.RX, RY = pos.RY, RZ = pos.RZ };
+                }
+                else
+                {
+                    var found = _pointRepo.Get(step.PointName);
+                    if (found is null) { Finish(global::ProgramStatus.Error, $"Point not found: {step.PointName}"); return; }
+                    point = found;
+                }
+
+                double finalX  = point.X  + EvalField(step, "offsetX",  step.OffsetX  ?? 0);
+                double finalY  = point.Y  + EvalField(step, "offsetY",  step.OffsetY  ?? 0);
+                double finalZ  = point.Z  + EvalField(step, "offsetZ",  step.OffsetZ  ?? 0);
+                double finalRX = point.RX + EvalField(step, "offsetRX", step.OffsetRX ?? 0);
+                double finalRY = point.RY + EvalField(step, "offsetRY", step.OffsetRY ?? 0);
+                double finalRZ = point.RZ + EvalField(step, "offsetRZ", step.OffsetRZ ?? 0);
+
+                if (step.OverrideX.HasValue  || step.Expressions?.ContainsKey("overrideX")  == true) finalX  = EvalField(step, "overrideX",  step.OverrideX  ?? 0);
+                if (step.OverrideY.HasValue  || step.Expressions?.ContainsKey("overrideY")  == true) finalY  = EvalField(step, "overrideY",  step.OverrideY  ?? 0);
+                if (step.OverrideZ.HasValue  || step.Expressions?.ContainsKey("overrideZ")  == true) finalZ  = EvalField(step, "overrideZ",  step.OverrideZ  ?? 0);
+                if (step.OverrideRX.HasValue || step.Expressions?.ContainsKey("overrideRX") == true) finalRX = EvalField(step, "overrideRX", step.OverrideRX ?? 0);
+                if (step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
+                if (step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
+
+                bool hasJumpZ      = step.JumpZ.HasValue      || step.Expressions?.ContainsKey("jumpZ")      == true;
+                bool hasJumpZStart = step.JumpZStart.HasValue || step.Expressions?.ContainsKey("jumpZStart") == true;
+                bool hasJumpZEnd   = step.JumpZEnd.HasValue   || step.Expressions?.ContainsKey("jumpZEnd")   == true;
+
+                if (!hasJumpZ && !hasJumpZStart)
+                {
+                    Finish(global::ProgramStatus.Error, "Jump step: JumpZ must be set");
+                    return;
+                }
+
+                var cur = _controller.GetCurrentPosition();
+                _jumpStartPos = cur;
+                _jumpTarget   = new Vector6(finalX, finalY, finalZ, finalRX, finalRY, finalRZ);
+                _jumpZStart   = hasJumpZStart ? EvalField(step, "jumpZStart", step.JumpZStart ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
+                _jumpZEnd     = hasJumpZEnd   ? EvalField(step, "jumpZEnd",   step.JumpZEnd   ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
+                _jumpCmdType  = step.Type == StepType.JumpJ ? "MoveJ" : "MoveL";
+                _jumpSpeed    = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null;
+                _jumpAccel    = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null;
+                _jumpDecel    = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null;
+                _jumpSubStep  = 1;
+
+                _controller.QueuedCommands.Add(new RobotCommand
+                {
+                    CommandType = "MoveL",
+                    X = _jumpStartPos.X, Y = _jumpStartPos.Y, Z = _jumpZStart,
+                    RX = _jumpStartPos.RX, RY = _jumpStartPos.RY, RZ = _jumpStartPos.RZ,
+                    Speed = _jumpSpeed, Accel = _jumpAccel, Decel = _jumpDecel,
+                });
+                _awaitingMove = true;
+                ReportStepStarted(step);
+                return;
+            }
+
+            if (_jumpSubStep == 1)
+            {
+                _controller.QueuedCommands.Add(new RobotCommand
+                {
+                    CommandType = _jumpCmdType,
+                    X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpZEnd,
+                    RX = _jumpTarget.RX, RY = _jumpTarget.RY, RZ = _jumpTarget.RZ,
+                    Speed = _jumpSpeed, Accel = _jumpAccel, Decel = _jumpDecel,
+                });
+                _jumpSubStep  = 2;
+                _awaitingMove = true;
+                return;
+            }
+
+            if (_jumpSubStep == 2)
+            {
+                _controller.QueuedCommands.Add(new RobotCommand
+                {
+                    CommandType = "MoveL",
+                    X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpTarget.Z,
+                    RX = _jumpTarget.RX, RY = _jumpTarget.RY, RZ = _jumpTarget.RZ,
+                    Speed = _jumpSpeed, Accel = _jumpAccel, Decel = _jumpDecel,
+                });
+                _jumpSubStep  = 3;
+                _awaitingMove = true;
+                return;
+            }
+
+            // _jumpSubStep == 3: all three legs complete
+            _jumpSubStep = 0;
+            frame.Index++;
+            ReportStepCompleted(step);
         }
 
         private void ExecuteStatusUpdate(ProgramStep step, StepListFrame frame)
@@ -709,6 +856,15 @@ namespace Controller.RobotControl
         }
         private bool _homingStartedMoving = false;
 
+        // ── Jump sub-step state ───────────────────────────────────────────────
+        private int     _jumpSubStep  = 0;  // 0=idle, 1=lift dispatched, 2=transit dispatched, 3=lower dispatched
+        private Vector6 _jumpTarget   = new();
+        private Vector6 _jumpStartPos = new();
+        private double  _jumpZStart   = 0;
+        private double  _jumpZEnd     = 0;
+        private string  _jumpCmdType  = "MoveL";
+        private double? _jumpSpeed, _jumpAccel, _jumpDecel;
+
         private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
         {
             if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
@@ -749,7 +905,8 @@ namespace Controller.RobotControl
         /// <summary>Emits a "step in progress" update — description shown but count not yet incremented.</summary>
         private void ReportStepStarted(ProgramStep step)
         {
-            var isMove = step.Type == StepType.MoveL || step.Type == StepType.MoveJ;
+            var isMove = step.Type == StepType.MoveL || step.Type == StepType.MoveJ
+                      || step.Type == StepType.JumpL || step.Type == StepType.JumpJ;
 
             double? Off(string key, double? raw) =>
                 isMove && (raw.HasValue || (step.Expressions?.ContainsKey(key) == true))
@@ -828,6 +985,8 @@ namespace Controller.RobotControl
             {
                 StepType.MoveL        => $"MoveL → {step.PointName}",
                 StepType.MoveJ        => $"MoveJ → {step.PointName}",
+                StepType.JumpL        => $"JumpL → {step.PointName}",
+                StepType.JumpJ        => $"JumpJ → {step.PointName}",
                 StepType.SetOutput    => BuildSetOutputDescription(step),
                 StepType.Wait         => $"Wait {step.WaitMs} ms",
                 StepType.Loop         => $"Loop ×{(step.LoopCount == 0 ? "∞" : step.LoopCount)}",
