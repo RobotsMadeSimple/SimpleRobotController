@@ -19,6 +19,7 @@ namespace Controller.RobotControl
         private readonly ToolRepository           _toolRepo;
         private readonly BuiltProgramRepository   _builtProgramRepo;
         private readonly GridRepository           _gridRepo;
+        private readonly StackRepository          _stackRepo;
 
         // ── Execution state ──────────────────────────────────────────────────
         private BuiltProgram?   _program;
@@ -47,7 +48,7 @@ namespace Controller.RobotControl
         public bool IsPaused  => _isPaused;
         public string? CurrentProgramName => _program?.Name;
 
-        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo, GridRepository gridRepo)
+        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo, GridRepository gridRepo, StackRepository stackRepo)
         {
             _controller       = controller;
             _programManager   = programManager;
@@ -55,6 +56,7 @@ namespace Controller.RobotControl
             _toolRepo         = toolRepo;
             _builtProgramRepo = builtProgramRepo;
             _gridRepo         = gridRepo;
+            _stackRepo        = stackRepo;
         }
 
         // ── Public control ───────────────────────────────────────────────────
@@ -337,6 +339,29 @@ namespace Controller.RobotControl
                     RZ = basePoint.RZ,
                 };
             }
+            else if (step.StackPoint != null)
+            {
+                var sp    = step.StackPoint;
+                var stack = _stackRepo.Get(sp.StackId);
+                if (stack == null) { Finish(global::ProgramStatus.Error, $"Stack not found: {sp.StackId}"); return; }
+
+                var basePoint = _pointRepo.Get(stack.BasePointName);
+                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Stack base point not found: {stack.BasePointName}"); return; }
+
+                int idx = (int)Math.Round(EvalField(step, "stackIndex", sp.Index ?? 0));
+                if (stack.MaxCount.HasValue && stack.MaxCount.Value > 0)
+                    idx = ((idx % stack.MaxCount.Value) + stack.MaxCount.Value) % stack.MaxCount.Value;
+
+                point = new Point
+                {
+                    X  = basePoint.X  + idx * stack.OffsetX,
+                    Y  = basePoint.Y  + idx * stack.OffsetY,
+                    Z  = basePoint.Z  + idx * stack.OffsetZ,
+                    RX = basePoint.RX,
+                    RY = basePoint.RY,
+                    RZ = basePoint.RZ,
+                };
+            }
             else if (string.IsNullOrEmpty(step.PointName))
             {
                 // No point specified — use the current TCP position as the base so offsets
@@ -411,7 +436,7 @@ namespace Controller.RobotControl
 
             if (_jumpSubStep == 0)
             {
-                // Resolve final target (same as ExecuteMove — supports PointName, GridPoint, or current pos)
+                // Resolve final target (same as ExecuteMove — supports PointName, GridPoint, StackPoint, or current pos)
                 Point point;
                 if (step.GridPoint != null)
                 {
@@ -451,6 +476,29 @@ namespace Controller.RobotControl
                         Y  = basePoint.Y + rawX * Math.Sin(theta) + rawY * Math.Cos(theta),
                         Z  = basePoint.Z + rawZ,
                         RX = basePoint.RX, RY = basePoint.RY, RZ = basePoint.RZ,
+                    };
+                }
+                else if (step.StackPoint != null)
+                {
+                    var sp    = step.StackPoint;
+                    var stack = _stackRepo.Get(sp.StackId);
+                    if (stack == null) { Finish(global::ProgramStatus.Error, $"Stack not found: {sp.StackId}"); return; }
+
+                    var basePoint = _pointRepo.Get(stack.BasePointName);
+                    if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Stack base point not found: {stack.BasePointName}"); return; }
+
+                    int idx = (int)Math.Round(EvalField(step, "stackIndex", sp.Index ?? 0));
+                    if (stack.MaxCount.HasValue && stack.MaxCount.Value > 0)
+                        idx = ((idx % stack.MaxCount.Value) + stack.MaxCount.Value) % stack.MaxCount.Value;
+
+                    point = new Point
+                    {
+                        X  = basePoint.X  + idx * stack.OffsetX,
+                        Y  = basePoint.Y  + idx * stack.OffsetY,
+                        Z  = basePoint.Z  + idx * stack.OffsetZ,
+                        RX = basePoint.RX,
+                        RY = basePoint.RY,
+                        RZ = basePoint.RZ,
                     };
                 }
                 else if (string.IsNullOrEmpty(step.PointName))

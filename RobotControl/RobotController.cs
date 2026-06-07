@@ -14,7 +14,8 @@ namespace Controller.RobotControl
         public PointRepository       pointRepo       = new();
         public ToolRepository        toolRepo        = new();
         public BuiltProgramRepository builtProgramRepo = new();
-        public GridRepository gridRepo = new();
+        public GridRepository  gridRepo  = new();
+        public StackRepository stackRepo = new();
         public STB4100 stb = new();
         private RobotIdentity _identity = new();
         public Action<RobotIdentity>? OnIdentityChanged;
@@ -128,7 +129,7 @@ namespace Controller.RobotControl
             stb.Start();
 
 
-            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, builtProgramRepo, gridRepo);
+            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, builtProgramRepo, gridRepo, stackRepo);
 
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
@@ -600,6 +601,9 @@ namespace Controller.RobotControl
                             // Grid repository
                             lastGridUpdate = gridRepo.LastUpdatedUnixMs,
 
+                            // Stack repository
+                            lastStackUpdate = stackRepo.LastUpdatedUnixMs,
+
                             version = _version,
                             isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
                         };
@@ -861,6 +865,41 @@ namespace Controller.RobotControl
                     {
                         var p = LoadParams<GridIdParams>(command);
                         gridRepo.Delete(p.Id);
+                    }
+                    break;
+
+                // ── Stack repository ──────────────────────────────────────────────
+                case "GetStacks":
+                    {
+                        var list = stackRepo.GetAll();
+                        var json = System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions
+                        {
+                            PropertyNameCaseInsensitive = true,
+                        });
+                        payload = new { stacks = json };
+                    }
+                    break;
+
+                case "SaveStack":
+                    {
+                        var p = LoadParams<SaveStackParams>(command);
+                        stackRepo.Upsert(new RobotStack
+                        {
+                            Id            = p.Id,
+                            Name          = p.Name,
+                            BasePointName = p.BasePointName,
+                            OffsetX       = p.OffsetX,
+                            OffsetY       = p.OffsetY,
+                            OffsetZ       = p.OffsetZ,
+                            MaxCount      = p.MaxCount,
+                        });
+                    }
+                    break;
+
+                case "DeleteStack":
+                    {
+                        var p = LoadParams<StackIdParams>(command);
+                        stackRepo.Delete(p.Id);
                     }
                     break;
 
