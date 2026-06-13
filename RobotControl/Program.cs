@@ -109,6 +109,52 @@ class Program
 
         wsServer.Map(app);
 
+        // ── Camera HTTP endpoints ──────────────────────────────────────────────
+        // MJPEG stream: multipart/x-mixed-replace — works natively in web browsers
+        app.MapGet("/camera/{id}/stream", async (string id, HttpContext context) =>
+        {
+            var camera = robotController.CameraManager.GetCamera(id);
+            if (camera == null) { context.Response.StatusCode = 404; return; }
+
+            context.Response.ContentType        = "multipart/x-mixed-replace; boundary=mjpegframe";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+
+            var ct = context.RequestAborted;
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    var jpeg = camera.GetLatestFrame();
+                    if (jpeg != null)
+                    {
+                        var header = $"--mjpegframe\r\nContent-Type: image/jpeg\r\nContent-Length: {jpeg.Length}\r\n\r\n";
+                        await context.Response.WriteAsync(header, ct);
+                        await context.Response.Body.WriteAsync(jpeg, ct);
+                        await context.Response.WriteAsync("\r\n", ct);
+                        await context.Response.Body.FlushAsync(ct);
+                    }
+                    await Task.Delay(33, ct); // cap at ~30fps
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+
+        // Single JPEG snapshot — for polling on platforms that don't support MJPEG
+        app.MapGet("/camera/{id}/snapshot", async (string id, HttpContext context) =>
+        {
+            var camera = robotController.CameraManager.GetCamera(id);
+            if (camera == null) { context.Response.StatusCode = 404; return; }
+
+            var jpeg = camera.GetLatestFrame();
+            if (jpeg == null) { context.Response.StatusCode = 204; return; }
+
+            context.Response.ContentType        = "image/jpeg";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            await context.Response.Body.WriteAsync(jpeg);
+        });
+
         app.Run("http://0.0.0.0:9000");
     }
 }
