@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop }
 
 public class ConditionItem
 {
@@ -288,6 +288,20 @@ public class ProgramStep
     [JsonPropertyName("jumpZ")]      public double? JumpZ      { get; set; }
     [JsonPropertyName("jumpZStart")] public double? JumpZStart { get; set; }
     [JsonPropertyName("jumpZEnd")]   public double? JumpZEnd   { get; set; }
+
+    // AuxMove / AuxContinuous / AuxStop
+    // auxSteps:    steps to move; sign determines direction (positive=CW, negative=CCW)
+    // auxVelocity: peak velocity in steps/sec  (AuxMove + AuxContinuous)
+    // auxAccel:    acceleration in steps/sec^2 (AuxMove + AuxContinuous)
+    // auxDecel:    deceleration in steps/sec^2 (AuxMove only; AuxStop uses this for ramp-down)
+    // auxWaitForDone: when true (default), program blocks until AuxMove finishes
+    [JsonPropertyName("auxDeviceId")]    public string? AuxDeviceId    { get; set; }
+    [JsonPropertyName("auxAxisIndex")]   public int?    AuxAxisIndex   { get; set; }
+    [JsonPropertyName("auxSteps")]       public long?   AuxSteps       { get; set; }
+    [JsonPropertyName("auxVelocity")]    public double? AuxVelocity    { get; set; }
+    [JsonPropertyName("auxAccel")]       public double? AuxAccel       { get; set; }
+    [JsonPropertyName("auxDecel")]       public double? AuxDecel       { get; set; }
+    [JsonPropertyName("auxWaitForDone")] public bool?   AuxWaitForDone { get; set; }
 }
 
 public class ProgramVariable
@@ -365,6 +379,7 @@ public class SetRobotConfigParams
     [JsonPropertyName("m4Direction")]               public int?    M4Direction               { get; set; }
     [JsonPropertyName("enableNanoCards")]           public bool?   EnableNanoCards           { get; set; }
     [JsonPropertyName("enableRelayCard")]           public bool?   EnableRelayCard           { get; set; }
+    [JsonPropertyName("enableAuxAxis")]             public bool?   EnableAuxAxis             { get; set; }
 }
 
 public class CommandMessage
@@ -826,6 +841,36 @@ public class SaveStackParams
 public class StackIdParams
 {
     [JsonPropertyName("id")] public string Id { get; set; } = "";
+}
+
+// ── Aux Axis command params ────────────────────────────────────────────────────
+
+public class MoveAuxParams
+{
+    [JsonPropertyName("deviceId")]  public string DeviceId  { get; set; } = "AUX_STEPPER_001";
+    [JsonPropertyName("axis")]      public int    Axis      { get; set; }
+    [JsonPropertyName("steps")]     public long   Steps     { get; set; }
+    [JsonPropertyName("velocity")]  public double Velocity  { get; set; } = 1000;
+    [JsonPropertyName("accel")]     public double Accel     { get; set; } = 10000;
+    [JsonPropertyName("decel")]     public double Decel     { get; set; } = 10000;
+}
+
+public class JogAuxParams
+{
+    [JsonPropertyName("deviceId")]  public string DeviceId  { get; set; } = "AUX_STEPPER_001";
+    [JsonPropertyName("axis")]      public int    Axis      { get; set; }
+    /// <summary>Steps/sec. Positive=CW, negative=CCW. 0 = stop.</summary>
+    [JsonPropertyName("velocity")]  public double Velocity  { get; set; }
+    [JsonPropertyName("accel")]     public double Accel     { get; set; } = 10000;
+    [JsonPropertyName("decel")]     public double Decel     { get; set; } = 10000;
+}
+
+public class StopAuxParams
+{
+    [JsonPropertyName("deviceId")]  public string DeviceId  { get; set; } = "AUX_STEPPER_001";
+    [JsonPropertyName("axis")]      public int?   Axis      { get; set; }
+    [JsonPropertyName("decel")]     public double Decel     { get; set; } = 10000;
+    [JsonPropertyName("immediate")] public bool   Immediate { get; set; } = false;
 }
 
 /// <summary>Relay board state included in GetIO responses.</summary>
