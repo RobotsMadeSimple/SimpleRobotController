@@ -509,6 +509,7 @@ namespace Controller.RobotControl
                         enableNanoCards           = _config.EnableNanoCards,
                         enableRelayCard           = _config.EnableRelayCard,
                         enableAuxAxis             = _config.EnableAuxAxis,
+                        enableCameras             = _config.EnableCameras,
                     };
                     break;
 
@@ -533,6 +534,7 @@ namespace Controller.RobotControl
                     if (p.EnableNanoCards.HasValue)           _config.EnableNanoCards           = p.EnableNanoCards.Value;
                     if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
                     if (p.EnableAuxAxis.HasValue)             _config.EnableAuxAxis             = p.EnableAuxAxis.Value;
+                    if (p.EnableCameras.HasValue)             _config.EnableCameras             = p.EnableCameras.Value;
                     RobotConfigService.Save(_config);
                     break;
                 }
