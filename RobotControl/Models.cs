@@ -384,6 +384,7 @@ public class SetRobotConfigParams
     [JsonPropertyName("enableNanoCards")]           public bool?   EnableNanoCards           { get; set; }
     [JsonPropertyName("enableRelayCard")]           public bool?   EnableRelayCard           { get; set; }
     [JsonPropertyName("enableAuxAxis")]             public bool?   EnableAuxAxis             { get; set; }
+    [JsonPropertyName("enableCameras")]             public bool?   EnableCameras             { get; set; }
 }
 
 public class CommandMessage
