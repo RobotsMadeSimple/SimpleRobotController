@@ -298,6 +298,10 @@ public class ProgramStep
     [JsonPropertyName("auxDeviceId")]    public string? AuxDeviceId    { get; set; }
     [JsonPropertyName("auxAxisIndex")]   public int?    AuxAxisIndex   { get; set; }
     [JsonPropertyName("auxSteps")]       public long?   AuxSteps       { get; set; }
+    // Physical-unit move: distance in mm (Linear) or degrees (Rotary). Null = use auxSteps.
+    [JsonPropertyName("auxDistance")]    public double? AuxDistance    { get; set; }
+    // "mm" | "deg" — indicates auxDistance is in physical units; velocity/accel/decel also in those units.
+    [JsonPropertyName("auxUnit")]        public string? AuxUnit        { get; set; }
     [JsonPropertyName("auxVelocity")]    public double? AuxVelocity    { get; set; }
     [JsonPropertyName("auxAccel")]       public double? AuxAccel       { get; set; }
     [JsonPropertyName("auxDecel")]       public double? AuxDecel       { get; set; }
@@ -871,6 +875,18 @@ public class StopAuxParams
     [JsonPropertyName("axis")]      public int?   Axis      { get; set; }
     [JsonPropertyName("decel")]     public double Decel     { get; set; } = 10000;
     [JsonPropertyName("immediate")] public bool   Immediate { get; set; } = false;
+}
+
+public class SetAuxAxisConfigParams
+{
+    [JsonPropertyName("deviceId")]       public string DeviceId       { get; set; } = "AUX_STEPPER_001";
+    [JsonPropertyName("axisIndex")]      public int    AxisIndex      { get; set; }
+    [JsonPropertyName("name")]           public string Name           { get; set; } = "";
+    [JsonPropertyName("stepsPerRev")]    public int    StepsPerRev    { get; set; } = 1600;
+    [JsonPropertyName("invertDirection")]public bool   InvertDirection{ get; set; } = false;
+    [JsonPropertyName("axisType")]       public string AxisType       { get; set; } = "";
+    [JsonPropertyName("gearRatio")]      public double GearRatio      { get; set; } = 1.0;
+    [JsonPropertyName("mmPerRev")]       public double MmPerRev       { get; set; } = 0.0;
 }
 
 /// <summary>Relay board state included in GetIO responses.</summary>

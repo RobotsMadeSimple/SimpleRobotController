@@ -100,13 +100,34 @@ namespace Controller.RobotControl.AuxAxis
                     PortName   = device.PortName,
                     Axes       = cfg?.Axes.Select(a => new AuxAxisChannelState
                     {
-                        AxisIndex = a.AxisIndex,
-                        Name      = a.Name,
-                        Active    = false,
+                        AxisIndex       = a.AxisIndex,
+                        Name            = a.Name,
+                        Active          = false,
+                        StepsPerRev     = a.StepsPerRev,
+                        InvertDirection = a.InvertDirection,
+                        AxisType        = a.AxisType,
+                        GearRatio       = a.GearRatio,
+                        MmPerRev        = a.MmPerRev,
                     }).ToList() ?? new(),
                 });
             }
             return result;
+        }
+
+        public void UpdateAxisConfig(string deviceId, int axisIndex, AuxAxisChannelConfig patch)
+        {
+            var dev = _config.Devices.FirstOrDefault(d => d.Id == deviceId);
+            if (dev == null) return;
+            var axis = dev.Axes.FirstOrDefault(a => a.AxisIndex == axisIndex);
+            if (axis == null) return;
+
+            axis.Name            = patch.Name;
+            axis.StepsPerRev     = patch.StepsPerRev;
+            axis.InvertDirection = patch.InvertDirection;
+            axis.AxisType        = patch.AxisType;
+            axis.GearRatio       = patch.GearRatio;
+            axis.MmPerRev        = patch.MmPerRev;
+            Save(_config);
         }
 
         // ── Config persistence ────────────────────────────────────────────────

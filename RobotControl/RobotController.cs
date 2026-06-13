@@ -598,6 +598,23 @@ namespace Controller.RobotControl
                     break;
                 }
 
+                case "SetAuxAxisConfig":
+                {
+                    var p = JsonSerializer.Deserialize<SetAuxAxisConfigParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    AuxAxisManager.UpdateAxisConfig(p.DeviceId, p.AxisIndex, new AuxAxis.AuxAxisChannelConfig
+                    {
+                        AxisIndex       = p.AxisIndex,
+                        Name            = p.Name,
+                        StepsPerRev     = p.StepsPerRev,
+                        InvertDirection = p.InvertDirection,
+                        AxisType        = p.AxisType,
+                        GearRatio       = p.GearRatio,
+                        MmPerRev        = p.MmPerRev,
+                    });
+                    break;
+                }
+
                 // ── End aux axis commands ──────────────────────────────────────────
 
                 case "StopJog":

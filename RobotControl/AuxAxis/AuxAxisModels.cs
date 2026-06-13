@@ -16,6 +16,22 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("name")]            public string Name            { get; set; } = "";
         [JsonPropertyName("stepsPerRev")]     public int    StepsPerRev     { get; set; } = 1600;
         [JsonPropertyName("invertDirection")] public bool   InvertDirection { get; set; } = false;
+        // "Rotary" (degrees) or "Linear" (mm). Empty = unconfigured (use raw steps).
+        [JsonPropertyName("axisType")]        public string AxisType        { get; set; } = "";
+        [JsonPropertyName("gearRatio")]       public double GearRatio       { get; set; } = 1.0;
+        // Only used when AxisType == "Linear"
+        [JsonPropertyName("mmPerRev")]        public double MmPerRev        { get; set; } = 0.0;
+
+        /// <summary>Steps per physical output unit (mm for Linear, degrees for Rotary).
+        /// Returns 0 when the axis is not configured (use raw steps instead).</summary>
+        public double StepsPerUnit()
+        {
+            if (string.IsNullOrEmpty(AxisType)) return 0;
+            if (AxisType == "Linear")
+                return MmPerRev > 0 ? (StepsPerRev * GearRatio) / MmPerRev : 0;
+            // Rotary
+            return (StepsPerRev * GearRatio) / 360.0;
+        }
     }
 
     public class AuxAxisManagerConfig
@@ -35,9 +51,14 @@ namespace Controller.RobotControl.AuxAxis
 
     public class AuxAxisChannelState
     {
-        [JsonPropertyName("axisIndex")] public int    AxisIndex { get; set; }
-        [JsonPropertyName("name")]      public string Name      { get; set; } = "";
-        [JsonPropertyName("active")]    public bool   Active    { get; set; }
-        [JsonPropertyName("position")]  public long   Position  { get; set; }
+        [JsonPropertyName("axisIndex")]       public int    AxisIndex       { get; set; }
+        [JsonPropertyName("name")]            public string Name            { get; set; } = "";
+        [JsonPropertyName("active")]          public bool   Active          { get; set; }
+        [JsonPropertyName("position")]        public long   Position        { get; set; }
+        [JsonPropertyName("stepsPerRev")]     public int    StepsPerRev     { get; set; } = 1600;
+        [JsonPropertyName("invertDirection")] public bool   InvertDirection { get; set; } = false;
+        [JsonPropertyName("axisType")]        public string AxisType        { get; set; } = "";
+        [JsonPropertyName("gearRatio")]       public double GearRatio       { get; set; } = 1.0;
+        [JsonPropertyName("mmPerRev")]        public double MmPerRev        { get; set; } = 0.0;
     }
 }
