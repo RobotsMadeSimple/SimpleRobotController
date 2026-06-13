@@ -78,6 +78,10 @@ namespace Controller.RobotControl
         /// <summary>Show the Aux Axis stepper card in the app.</summary>
         [JsonPropertyName("enableAuxAxis")]
         public bool EnableAuxAxis { get; set; } = false;
+
+        /// <summary>Show USB camera cards in the app.</summary>
+        [JsonPropertyName("enableCameras")]
+        public bool EnableCameras { get; set; } = false;
     }
 
     public static class RobotConfigService

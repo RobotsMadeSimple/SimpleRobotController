@@ -122,6 +122,9 @@ namespace Controller.RobotControl
         // ── Aux Stepper Axes ──────────────────────────────────────────────────
         public AuxAxisManager AuxAxisManager { get; private set; } = null!;
 
+        // ── USB Cameras ───────────────────────────────────────────────────────
+        public Camera.CameraManager CameraManager { get; private set; } = null!;
+
         private string? _auxActiveDeviceId;
         private int     _auxActiveAxis;
 
@@ -138,6 +141,9 @@ namespace Controller.RobotControl
 
             AuxAxisManager = new AuxAxisManager("aux_config.json");
             AuxAxisManager.Start();
+
+            CameraManager = new Camera.CameraManager("camera_config.json");
+            CameraManager.Start();
 
             stb.Start();
 
@@ -570,6 +576,62 @@ namespace Controller.RobotControl
                     payload = new { config = auxCfgJson };
                 }
                 break;
+
+                // ── Camera commands ────────────────────────────────────────────────
+
+                case "GetCameras":
+                {
+                    var states    = CameraManager.GetState();
+                    var statesJson = JsonSerializer.Serialize(states, new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    });
+                    payload = new { cameras = statesJson };
+                }
+                break;
+
+                case "AddCamera":
+                {
+                    var p = JsonSerializer.Deserialize<AddCameraParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    CameraManager.AddCamera(new Camera.CameraConfig
+                    {
+                        Name        = p.Name,
+                        DeviceIndex = p.DeviceIndex,
+                        Enabled     = p.Enabled,
+                        Width       = p.Width,
+                        Height      = p.Height,
+                        TargetFps   = p.TargetFps,
+                    });
+                    break;
+                }
+
+                case "RemoveCamera":
+                {
+                    var p = JsonSerializer.Deserialize<RemoveCameraParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    CameraManager.RemoveCamera(p.Id);
+                    break;
+                }
+
+                case "SetCameraConfig":
+                {
+                    var p = JsonSerializer.Deserialize<SetCameraConfigParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    CameraManager.UpdateCamera(p.Id, new Camera.CameraConfig
+                    {
+                        Id          = p.Id,
+                        Name        = p.Name,
+                        DeviceIndex = p.DeviceIndex,
+                        Enabled     = p.Enabled,
+                        Width       = p.Width,
+                        Height      = p.Height,
+                        TargetFps   = p.TargetFps,
+                    });
+                    break;
+                }
+
+                // ── End camera commands ────────────────────────────────────────────
 
                 case "MoveAux":
                 {
