@@ -40,6 +40,10 @@ namespace Controller.RobotControl
         // Step that was dispatched asynchronously; reported complete when the move finishes
         private ProgramStep? _pendingStep;
 
+        // Whether we are awaiting an aux axis indexed move with WaitForDone=true
+        private bool _awaitingAuxMove;
+        private ProgramStep? _pendingAuxStep;
+
         // Program variables — initialised from BuiltProgram.Variables on Start(), mutated by SetVariable steps
         private readonly Dictionary<string, double>       _variables     = new();
         private readonly Dictionary<string, List<double>> _listVariables = new();
@@ -98,8 +102,10 @@ namespace Controller.RobotControl
             _program = program;
             _stopRequested = false;
             _isPaused      = false;
-            _awaitingMove  = false;
-            _running       = true;
+            _awaitingMove    = false;
+            _awaitingAuxMove = false;
+            _pendingAuxStep  = null;
+            _running         = true;
         }
 
         public void Resume()
@@ -124,8 +130,10 @@ namespace Controller.RobotControl
             // Request a queue drain on the control loop thread — calling Clear() directly
             // here would race with RunCommands() which reads QueuedCommands on the loop thread.
             _controller.RequestQueueDrain();
-            _awaitingMove = false;
-            _pendingStep  = null;
+            _awaitingMove    = false;
+            _pendingStep     = null;
+            _awaitingAuxMove = false;
+            _pendingAuxStep  = null;
 
             // Hard-stop any active motion profiler so IsMoving clears immediately.
             // Without this, a stuck profiler (e.g. zero-speed) would leave the
@@ -147,6 +155,8 @@ namespace Controller.RobotControl
             _isPaused        = false;
             _awaitingMove    = false;
             _pendingStep     = null;
+            _awaitingAuxMove = false;
+            _pendingAuxStep  = null;
             _globalStepIndex = 0;
             _loopDepth       = 0;
             _jumpSubStep     = 0;
@@ -161,7 +171,7 @@ namespace Controller.RobotControl
         {
             if (!_running || _program is null) return;
 
-            // If we dispatched a move, wait until the queue is clear and the robot is idle
+            // If we dispatched a robot move, wait until the queue is clear and the robot is idle
             if (_awaitingMove)
             {
                 if (_controller.QueuedCommands.Count == 0 && !_controller.IsMoving)
@@ -172,6 +182,22 @@ namespace Controller.RobotControl
                     {
                         ReportStepCompleted(_pendingStep);
                         _pendingStep = null;
+                    }
+                }
+                else
+                    return;
+            }
+
+            // If we dispatched an aux indexed move with WaitForDone=true, block until it completes
+            if (_awaitingAuxMove)
+            {
+                if (!_controller.IsAuxMoving)
+                {
+                    _awaitingAuxMove = false;
+                    if (_pendingAuxStep is not null)
+                    {
+                        ReportStepCompleted(_pendingAuxStep);
+                        _pendingAuxStep = null;
                     }
                 }
                 else
@@ -285,6 +311,18 @@ namespace Controller.RobotControl
 
                 case StepType.RunHoming:
                     ExecuteRunHoming(step, frame);
+                    break;
+
+                case StepType.AuxMove:
+                    ExecuteAuxMove(step, frame);
+                    break;
+
+                case StepType.AuxContinuous:
+                    ExecuteAuxContinuous(step, frame);
+                    break;
+
+                case StepType.AuxStop:
+                    ExecuteAuxStop(step, frame);
                     break;
             }
         }
@@ -777,10 +815,12 @@ namespace Controller.RobotControl
             frame.Index++;
             ReportStepCompleted(step);
             // Pause without clearing the frame stack so Resume() can continue from the next step
-            _running      = false;
-            _isPaused     = true;
-            _awaitingMove = false;
-            _pendingStep  = null;
+            _running         = false;
+            _isPaused        = true;
+            _awaitingMove    = false;
+            _pendingStep     = null;
+            _awaitingAuxMove = false;
+            _pendingAuxStep  = null;
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName         = _program!.Name,
@@ -962,6 +1002,72 @@ namespace Controller.RobotControl
         }
         private bool _homingStartedMoving = false;
 
+        // ── Aux axis steps ────────────────────────────────────────────────────
+
+        private void ExecuteAuxMove(ProgramStep step, StepListFrame frame)
+        {
+            string deviceId  = step.AuxDeviceId ?? _controller.AuxAxisManager.GetFirstDevice()?.Id ?? "";
+            int    axisIndex = step.AuxAxisIndex ?? 0;
+            long   steps     = (long)EvalField(step, "auxSteps",    step.AuxSteps    ?? 0);
+
+            if (steps == 0) { ReportStepCompleted(step); frame.Index++; return; }
+
+            bool ccw      = steps < 0;
+            long absSteps = Math.Abs(steps);
+
+            double velocity = EvalField(step, "auxVelocity", step.AuxVelocity ?? 1600);
+            double accel    = EvalField(step, "auxAccel",    step.AuxAccel    ?? 3200);
+            double decel    = EvalField(step, "auxDecel",    step.AuxDecel    ?? accel);
+
+            var axisCfg = _controller.AuxAxisManager.GetAxisConfig(deviceId, axisIndex);
+            if (axisCfg?.InvertDirection == true) ccw = !ccw;
+
+            _controller.AuxAxisManager.SetDirection(deviceId, axisIndex, ccw);
+            _controller.StartAuxMove(deviceId, axisIndex, absSteps, velocity, accel, decel);
+
+            bool wait = step.AuxWaitForDone ?? true;
+            if (wait)
+            {
+                ReportStepStarted(step);
+                frame.Index++;
+                _awaitingAuxMove = true;
+                _pendingAuxStep  = step;
+            }
+            else
+            {
+                frame.Index++;
+                ReportStepCompleted(step);
+            }
+        }
+
+        private void ExecuteAuxContinuous(ProgramStep step, StepListFrame frame)
+        {
+            string deviceId  = step.AuxDeviceId ?? _controller.AuxAxisManager.GetFirstDevice()?.Id ?? "";
+            int    axisIndex = step.AuxAxisIndex ?? 0;
+            double velocity  = EvalField(step, "auxVelocity", step.AuxVelocity ?? 1600);
+            double accel     = EvalField(step, "auxAccel",    step.AuxAccel    ?? 3200);
+
+            bool ccw = velocity < 0;
+            velocity = Math.Abs(velocity);
+
+            var axisCfg = _controller.AuxAxisManager.GetAxisConfig(deviceId, axisIndex);
+            if (axisCfg?.InvertDirection == true) ccw = !ccw;
+
+            _controller.AuxAxisManager.SetDirection(deviceId, axisIndex, ccw);
+            _controller.StartAuxContinuous(deviceId, axisIndex, velocity, accel);
+
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteAuxStop(ProgramStep step, StepListFrame frame)
+        {
+            double decel = EvalField(step, "auxDecel", step.AuxDecel ?? 10000);
+            _controller.StopAux(decel);
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
         // ── Jump sub-step state ───────────────────────────────────────────────
         private int     _jumpSubStep  = 0;  // 0=idle, 1=lift dispatched, 2=transit dispatched, 3=lower dispatched
         private Vector6 _jumpTarget   = new();
@@ -1061,10 +1167,12 @@ namespace Controller.RobotControl
 
         private void Finish(global::ProgramStatus status, string description)
         {
-            _running       = false;
-            _stopRequested = false;
-            _awaitingMove  = false;
-            _pendingStep   = null;
+            _running         = false;
+            _stopRequested   = false;
+            _awaitingMove    = false;
+            _pendingStep     = null;
+            _awaitingAuxMove = false;
+            _pendingAuxStep  = null;
             _frameStack.Clear();
 
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
@@ -1108,8 +1216,11 @@ namespace Controller.RobotControl
                     ? $"If [{step.Condition.Combinator} · {step.Condition.Items.Count} condition(s)]"
                     : "If Condition",
                 StepType.SetTool      => $"Set Tool → {(string.IsNullOrEmpty(step.ToolName) ? "None" : step.ToolName)}",
-                StepType.RunHoming    => "Run Homing",
-                _                     => step.Type.ToString(),
+                StepType.RunHoming     => "Run Homing",
+                StepType.AuxMove       => $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxSteps} steps",
+                StepType.AuxContinuous => $"Aux Continuous · axis {step.AuxAxisIndex}",
+                StepType.AuxStop       => $"Aux Stop · device {step.AuxDeviceId ?? "default"}",
+                _                      => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
         }

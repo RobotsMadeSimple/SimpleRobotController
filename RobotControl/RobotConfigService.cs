@@ -74,6 +74,10 @@ namespace Controller.RobotControl
         /// <summary>Show the USB relay board card in the app.</summary>
         [JsonPropertyName("enableRelayCard")]
         public bool EnableRelayCard { get; set; } = false;
+
+        /// <summary>Show the Aux Axis stepper card in the app.</summary>
+        [JsonPropertyName("enableAuxAxis")]
+        public bool EnableAuxAxis { get; set; } = false;
     }
 
     public static class RobotConfigService

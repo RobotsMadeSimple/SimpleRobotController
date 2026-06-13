@@ -1,4 +1,5 @@
-﻿using Controller.RobotControl.MotionProfilers;
+﻿using Controller.RobotControl.AuxAxis;
+using Controller.RobotControl.MotionProfilers;
 using Controller.RobotControl.Nano;
 using Controller.RobotControl.Robots.ASTRO;
 using Controller.RobotControl.UsbRelay;
@@ -118,6 +119,15 @@ namespace Controller.RobotControl
         // ── USB Relay ─────────────────────────────────────────────────────────
         public UsbRelayManager RelayManager { get; private set; } = null!;
 
+        // ── Aux Stepper Axes ──────────────────────────────────────────────────
+        public AuxAxisManager AuxAxisManager { get; private set; } = null!;
+
+        private string? _auxActiveDeviceId;
+        private int     _auxActiveAxis;
+
+        public bool IsAuxMoving =>
+            _auxActiveDeviceId is not null && AuxAxisManager.IsDeviceMoving(_auxActiveDeviceId);
+
         public RobotController()
         {
             NanoManager = new NanoManager("nano_config.json");
@@ -125,6 +135,9 @@ namespace Controller.RobotControl
 
             RelayManager = new UsbRelayManager();
             RelayManager.Start();
+
+            AuxAxisManager = new AuxAxisManager("aux_config.json");
+            AuxAxisManager.Start();
 
             stb.Start();
 
@@ -304,6 +317,52 @@ namespace Controller.RobotControl
             stb.SetMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
         }
 
+        // ── Aux axis motion ───────────────────────────────────────────────────
+
+        /// <summary>
+        /// Start an indexed aux move: Arduino runs the trapezoidal profile and reports DONE when complete.
+        /// Sign of steps determines direction.
+        /// </summary>
+        public void StartAuxMove(string deviceId, int axis, long steps, double velocity, double accel, double decel)
+        {
+            var axisCfg = AuxAxisManager.GetAxisConfig(deviceId, axis);
+            bool ccw    = (axisCfg?.InvertDirection ?? false) ? steps > 0 : steps < 0;
+
+            AuxAxisManager.SetDirection(deviceId, axis, ccw);
+
+            _auxActiveDeviceId = deviceId;
+            _auxActiveAxis     = axis;
+            AuxAxisManager.StartMove(deviceId, axis, Math.Abs(steps),
+                (int)Math.Max(1, velocity), (int)Math.Max(1, accel), (int)Math.Max(1, decel));
+        }
+
+        /// <summary>
+        /// Start continuous aux motion (conveyor): Arduino ramps up to velocity and holds until StopAux().
+        /// Positive velocity = CW, negative = CCW.
+        /// </summary>
+        public void StartAuxContinuous(string deviceId, int axis, double velocity, double accel)
+        {
+            var axisCfg = AuxAxisManager.GetAxisConfig(deviceId, axis);
+            bool ccw    = (axisCfg?.InvertDirection ?? false) ? velocity > 0 : velocity < 0;
+
+            AuxAxisManager.SetDirection(deviceId, axis, ccw);
+
+            _auxActiveDeviceId = deviceId;
+            _auxActiveAxis     = axis;
+            AuxAxisManager.SetContinuous(deviceId, axis,
+                (int)Math.Max(1, Math.Abs(velocity)), (int)Math.Max(1, Math.Abs(accel)));
+        }
+
+        /// <summary>Stop the active aux axis. Immediate sends X; otherwise decelerates gracefully.</summary>
+        public void StopAux(double decel = 10000, bool immediate = false)
+        {
+            if (_auxActiveDeviceId is null) return;
+            if (immediate)
+                AuxAxisManager.StopAll(_auxActiveDeviceId);
+            else
+                AuxAxisManager.StopSmooth(_auxActiveDeviceId, _auxActiveAxis, (int)Math.Max(1, decel));
+        }
+
         public void SetIdentity(RobotIdentity identity)
         {
             _identity = identity;
@@ -443,6 +502,7 @@ namespace Controller.RobotControl
                         m4Direction               = _config.M4Direction,
                         enableNanoCards           = _config.EnableNanoCards,
                         enableRelayCard           = _config.EnableRelayCard,
+                        enableAuxAxis             = _config.EnableAuxAxis,
                     };
                     break;
 
@@ -466,6 +526,7 @@ namespace Controller.RobotControl
                     if (p.M4Direction.HasValue)               { _config.M4Direction             = p.M4Direction.Value;   ApplyMotorDirections(); }
                     if (p.EnableNanoCards.HasValue)           _config.EnableNanoCards           = p.EnableNanoCards.Value;
                     if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
+                    if (p.EnableAuxAxis.HasValue)             _config.EnableAuxAxis             = p.EnableAuxAxis.Value;
                     RobotConfigService.Save(_config);
                     break;
                 }
@@ -485,6 +546,59 @@ namespace Controller.RobotControl
                 case "HardStop":
                     HardStop();
                     break;
+
+                // ── Aux axis commands ──────────────────────────────────────────────
+
+                case "GetAuxState":
+                {
+                    var auxStates = AuxAxisManager.GetState();
+                    var auxJson   = JsonSerializer.Serialize(auxStates, new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    });
+                    payload = new { state = auxJson };
+                }
+                break;
+
+                case "GetAuxConfig":
+                {
+                    var auxCfg    = AuxAxisManager.GetConfig();
+                    var auxCfgJson = JsonSerializer.Serialize(auxCfg, new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    });
+                    payload = new { config = auxCfgJson };
+                }
+                break;
+
+                case "MoveAux":
+                {
+                    var p = JsonSerializer.Deserialize<MoveAuxParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    StartAuxMove(p.DeviceId, p.Axis, p.Steps, p.Velocity, p.Accel, p.Decel);
+                    break;
+                }
+
+                case "JogAux":
+                {
+                    var p = JsonSerializer.Deserialize<JogAuxParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    if (p.Velocity == 0)
+                        StopAux(p.Decel);
+                    else
+                        StartAuxContinuous(p.DeviceId, p.Axis, p.Velocity, p.Accel);
+                    break;
+                }
+
+                case "StopAux":
+                {
+                    var p = JsonSerializer.Deserialize<StopAuxParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    StopAux(p.Decel, p.Immediate);
+                    break;
+                }
+
+                // ── End aux axis commands ──────────────────────────────────────────
 
                 case "StopJog":
                     joggingMotionProfiler.StopJog();
@@ -1507,6 +1621,7 @@ namespace Controller.RobotControl
             QueuedCommands.Clear();
             startHoming = false;
             homingState = "WaitingForStart";
+            AuxAxisManager.StopAllDevices();
         }
 
         public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)
