@@ -109,38 +109,41 @@ class Program
 
         wsServer.Map(app);
 
-        // ── Camera HTTP endpoints ──────────────────────────────────────────────
-        // MJPEG stream: multipart/x-mixed-replace — works natively in web browsers
-        app.MapGet("/camera/{id}/stream", async (string id, HttpContext context) =>
+        // ── Camera endpoints ───────────────────────────────────────────────────
+        // WebSocket stream: sends base64 data-URI frames as text messages.
+        // Works on web, Android, and Electron (React Native <Image source={{ uri }}>).
+        app.MapGet("/camera/{id}/ws", async (string id, HttpContext context) =>
         {
+            if (!context.WebSockets.IsWebSocketRequest)
+            {
+                context.Response.StatusCode = 426;
+                return;
+            }
+
             var camera = robotController.CameraManager.GetCamera(id);
             if (camera == null) { context.Response.StatusCode = 404; return; }
 
-            context.Response.ContentType        = "multipart/x-mixed-replace; boundary=mjpegframe";
-            context.Response.Headers["Cache-Control"] = "no-cache";
-            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
-
+            using var ws = await context.WebSockets.AcceptWebSocketAsync();
             var ct = context.RequestAborted;
             try
             {
-                while (!ct.IsCancellationRequested)
+                while (!ct.IsCancellationRequested && ws.State == System.Net.WebSockets.WebSocketState.Open)
                 {
                     var jpeg = camera.GetLatestFrame();
                     if (jpeg != null)
                     {
-                        var header = $"--mjpegframe\r\nContent-Type: image/jpeg\r\nContent-Length: {jpeg.Length}\r\n\r\n";
-                        await context.Response.WriteAsync(header, ct);
-                        await context.Response.Body.WriteAsync(jpeg, ct);
-                        await context.Response.WriteAsync("\r\n", ct);
-                        await context.Response.Body.FlushAsync(ct);
+                        var b64  = "data:image/jpeg;base64," + Convert.ToBase64String(jpeg);
+                        var buf  = System.Text.Encoding.ASCII.GetBytes(b64);
+                        await ws.SendAsync(buf, System.Net.WebSockets.WebSocketMessageType.Text, true, ct);
                     }
-                    await Task.Delay(33, ct); // cap at ~30fps
+                    await Task.Delay(50, ct); // ~20fps
                 }
             }
             catch (OperationCanceledException) { }
+            catch (Exception) { }
         });
 
-        // Single JPEG snapshot — for polling on platforms that don't support MJPEG
+        // Single JPEG snapshot — lightweight still image for thumbnails / testing
         app.MapGet("/camera/{id}/snapshot", async (string id, HttpContext context) =>
         {
             var camera = robotController.CameraManager.GetCamera(id);
