@@ -1008,18 +1008,35 @@ namespace Controller.RobotControl
         {
             string deviceId  = step.AuxDeviceId ?? _controller.AuxAxisManager.GetFirstDevice()?.Id ?? "";
             int    axisIndex = step.AuxAxisIndex ?? 0;
-            long   steps     = (long)EvalField(step, "auxSteps",    step.AuxSteps    ?? 0);
+
+            var axisCfg = _controller.AuxAxisManager.GetAxisConfig(deviceId, axisIndex);
+            double spu   = axisCfg?.StepsPerUnit() ?? 0;
+
+            long   steps;
+            double velocity, accel, decel;
+
+            if (!string.IsNullOrEmpty(step.AuxUnit) && step.AuxDistance.HasValue && spu > 0)
+            {
+                // Physical-unit mode — convert distance and rates to steps
+                double dist = EvalField(step, "auxDistance", step.AuxDistance.Value);
+                steps    = (long)Math.Round(dist * spu);
+                velocity = EvalField(step, "auxVelocity", step.AuxVelocity ?? 10) * spu;
+                accel    = EvalField(step, "auxAccel",    step.AuxAccel    ?? 50)  * spu;
+                decel    = EvalField(step, "auxDecel",    step.AuxDecel    ?? accel / spu) * spu;
+            }
+            else
+            {
+                steps    = (long)EvalField(step, "auxSteps",    step.AuxSteps    ?? 0);
+                velocity = EvalField(step, "auxVelocity", step.AuxVelocity ?? 1600);
+                accel    = EvalField(step, "auxAccel",    step.AuxAccel    ?? 3200);
+                decel    = EvalField(step, "auxDecel",    step.AuxDecel    ?? accel);
+            }
 
             if (steps == 0) { ReportStepCompleted(step); frame.Index++; return; }
 
             bool ccw      = steps < 0;
             long absSteps = Math.Abs(steps);
 
-            double velocity = EvalField(step, "auxVelocity", step.AuxVelocity ?? 1600);
-            double accel    = EvalField(step, "auxAccel",    step.AuxAccel    ?? 3200);
-            double decel    = EvalField(step, "auxDecel",    step.AuxDecel    ?? accel);
-
-            var axisCfg = _controller.AuxAxisManager.GetAxisConfig(deviceId, axisIndex);
             if (axisCfg?.InvertDirection == true) ccw = !ccw;
 
             _controller.AuxAxisManager.SetDirection(deviceId, axisIndex, ccw);
@@ -1044,13 +1061,25 @@ namespace Controller.RobotControl
         {
             string deviceId  = step.AuxDeviceId ?? _controller.AuxAxisManager.GetFirstDevice()?.Id ?? "";
             int    axisIndex = step.AuxAxisIndex ?? 0;
-            double velocity  = EvalField(step, "auxVelocity", step.AuxVelocity ?? 1600);
-            double accel     = EvalField(step, "auxAccel",    step.AuxAccel    ?? 3200);
+
+            var axisCfg = _controller.AuxAxisManager.GetAxisConfig(deviceId, axisIndex);
+            double spu   = axisCfg?.StepsPerUnit() ?? 0;
+
+            double velocity, accel;
+            if (!string.IsNullOrEmpty(step.AuxUnit) && spu > 0)
+            {
+                velocity = EvalField(step, "auxVelocity", step.AuxVelocity ?? 10) * spu;
+                accel    = EvalField(step, "auxAccel",    step.AuxAccel    ?? 50)  * spu;
+            }
+            else
+            {
+                velocity = EvalField(step, "auxVelocity", step.AuxVelocity ?? 1600);
+                accel    = EvalField(step, "auxAccel",    step.AuxAccel    ?? 3200);
+            }
 
             bool ccw = velocity < 0;
             velocity = Math.Abs(velocity);
 
-            var axisCfg = _controller.AuxAxisManager.GetAxisConfig(deviceId, axisIndex);
             if (axisCfg?.InvertDirection == true) ccw = !ccw;
 
             _controller.AuxAxisManager.SetDirection(deviceId, axisIndex, ccw);
@@ -1217,7 +1246,9 @@ namespace Controller.RobotControl
                     : "If Condition",
                 StepType.SetTool      => $"Set Tool → {(string.IsNullOrEmpty(step.ToolName) ? "None" : step.ToolName)}",
                 StepType.RunHoming     => "Run Homing",
-                StepType.AuxMove       => $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxSteps} steps",
+                StepType.AuxMove       => !string.IsNullOrEmpty(step.AuxUnit) && step.AuxDistance.HasValue
+                    ? $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxDistance} {step.AuxUnit}"
+                    : $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxSteps} steps",
                 StepType.AuxContinuous => $"Aux Continuous · axis {step.AuxAxisIndex}",
                 StepType.AuxStop       => $"Aux Stop · device {step.AuxDeviceId ?? "default"}",
                 _                      => step.Type.ToString(),
