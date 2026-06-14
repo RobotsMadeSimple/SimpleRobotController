@@ -912,6 +912,27 @@ namespace Controller.RobotControl
                     _variables[output.PassedVar] = cr.Passed ? 1 : 0;
             }
 
+            foreach (var output in step.PolygonOutputs ?? [])
+            {
+                var pr = result.PolygonResults.Find(r => r.InspectionId == output.InspectionId);
+                if (pr == null) continue;
+
+                if (!string.IsNullOrEmpty(output.CountVar))
+                    _variables[output.CountVar] = pr.Count;
+
+                if (!string.IsNullOrEmpty(output.FoundVar))
+                    _variables[output.FoundVar] = pr.Found ? 1 : 0;
+
+                if (!string.IsNullOrEmpty(output.AngleVar))
+                    _variables[output.AngleVar] = pr.Angle;
+
+                if (!string.IsNullOrEmpty(output.CenterXVar))
+                    _variables[output.CenterXVar] = pr.CenterX;
+
+                if (!string.IsNullOrEmpty(output.CenterYVar))
+                    _variables[output.CenterYVar] = pr.CenterY;
+            }
+
             _controller.VisionManager.StopProgram(_visionProgramId!);
             _awaitingVision  = false;
             _visionProgramId = null;
