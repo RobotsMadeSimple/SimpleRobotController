@@ -144,7 +144,44 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, RunVision }
+
+/// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
+public class Vector6Val
+{
+    [JsonPropertyName("x")]  public double X  { get; set; }
+    [JsonPropertyName("y")]  public double Y  { get; set; }
+    [JsonPropertyName("z")]  public double Z  { get; set; }
+    [JsonPropertyName("rx")] public double RX { get; set; }
+    [JsonPropertyName("ry")] public double RY { get; set; }
+    [JsonPropertyName("rz")] public double RZ { get; set; }
+
+    public double GetComponent(string name) => name.ToLower() switch {
+        "x" or "0" => X, "y" or "1" => Y, "z" or "2" => Z,
+        "rx" or "3" => RX, "ry" or "4" => RY, "rz" or "5" => RZ,
+        _ => 0
+    };
+    public double GetComponent(int idx) => idx switch {
+        0 => X, 1 => Y, 2 => Z, 3 => RX, 4 => RY, 5 => RZ, _ => 0
+    };
+}
+
+/// <summary>Maps one BlobInspection's outputs to program variable names.</summary>
+public class VisionStepOutput
+{
+    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
+    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
+    [JsonPropertyName("pointsVar")]    public string? PointsVar    { get; set; }
+    [JsonPropertyName("detectedVar")]  public string? DetectedVar  { get; set; }
+}
+
+/// <summary>Maps one ColorCoverageInspection's outputs to program variable names.</summary>
+public class ColorVisionStepOutput
+{
+    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
+    [JsonPropertyName("coverageVar")]  public string? CoverageVar  { get; set; }
+    [JsonPropertyName("passedVar")]    public string? PassedVar    { get; set; }
+}
 
 public class ConditionItem
 {
@@ -289,6 +326,16 @@ public class ProgramStep
     [JsonPropertyName("jumpZStart")] public double? JumpZStart { get; set; }
     [JsonPropertyName("jumpZEnd")]   public double? JumpZEnd   { get; set; }
 
+    // RunVision
+    [JsonPropertyName("visionProgramId")]   public string? VisionProgramId   { get; set; }
+    [JsonPropertyName("visionProgramName")] public string? VisionProgramName { get; set; }
+    [JsonPropertyName("visionOutputs")]     public List<VisionStepOutput>?      VisionOutputs { get; set; }
+    [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>? ColorOutputs  { get; set; }
+
+    // Variable point target for move steps — overrides pointName when set
+    [JsonPropertyName("varPointName")]  public string? VarPointName  { get; set; }
+    [JsonPropertyName("varPointIndex")] public string? VarPointIndex { get; set; }
+
     // AuxMove / AuxContinuous / AuxStop
     // auxSteps:    steps to move; sign determines direction (positive=CW, negative=CCW)
     // auxVelocity: peak velocity in steps/sec  (AuxMove + AuxContinuous)
@@ -318,8 +365,13 @@ public class ProgramVariable
     public double Value { get; set; }
     [JsonPropertyName("values")]
     public List<double>? Values { get; set; }
+    /// <summary>When non-null, this is a Vector6 array variable (e.g. blob detection results). Populated at runtime by RunVision.</summary>
+    [JsonPropertyName("points")]
+    public List<Vector6Val>? Points { get; set; }
     [JsonPropertyName("description")]
     public string? Description { get; set; }
+    [JsonPropertyName("isBoolean")]
+    public bool? IsBoolean { get; set; }
 }
 
 public class BuiltProgram
@@ -925,4 +977,16 @@ public class UsbRelayState
     [JsonPropertyName("serial")]    public string?  Serial    { get; set; }
     [JsonPropertyName("relays")]    public bool[]?  Relays    { get; set; }  // index 0 = relay 1
     [JsonPropertyName("names")]     public string[] Names     { get; set; } = [];
+}
+
+// ── Vision command params ─────────────────────────────────────────────────────
+
+public class DeleteVisionProgramParams
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+}
+
+public class StartStopVisionParams
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
 }
