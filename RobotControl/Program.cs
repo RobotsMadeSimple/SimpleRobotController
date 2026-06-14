@@ -158,6 +158,69 @@ class Program
             await context.Response.Body.WriteAsync(jpeg);
         });
 
+        // ── Vision endpoints ───────────────────────────────────────────────────
+        // WebSocket stream of annotated frames for a running vision program.
+        app.MapGet("/vision/{id}/ws", async (string id, HttpContext context) =>
+        {
+            if (!context.WebSockets.IsWebSocketRequest)
+            {
+                context.Response.StatusCode = 426;
+                return;
+            }
+
+            var proc = robotController.VisionManager.GetProcessor(id);
+            if (proc == null) { context.Response.StatusCode = 404; return; }
+
+            using var ws = await context.WebSockets.AcceptWebSocketAsync();
+            var ct = context.RequestAborted;
+            try
+            {
+                while (!ct.IsCancellationRequested && ws.State == System.Net.WebSockets.WebSocketState.Open)
+                {
+                    var jpeg = proc.GetLatestAnnotated();
+                    if (jpeg != null)
+                    {
+                        var b64  = "data:image/jpeg;base64," + Convert.ToBase64String(jpeg);
+                        var buf  = System.Text.Encoding.ASCII.GetBytes(b64);
+                        await ws.SendAsync(buf, System.Net.WebSockets.WebSocketMessageType.Text, true, ct);
+                    }
+                    await Task.Delay(50, ct);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { }
+        });
+
+        // Raw (unannotated) snapshot for the vision editor zone-drawing canvas
+        app.MapGet("/vision/{id}/snapshot", async (string id, HttpContext context) =>
+        {
+            var proc = robotController.VisionManager.GetProcessor(id);
+            if (proc == null) { context.Response.StatusCode = 404; return; }
+
+            var jpeg = proc.GetLatestRaw();
+            if (jpeg == null) { context.Response.StatusCode = 204; return; }
+
+            context.Response.ContentType = "image/jpeg";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            await context.Response.Body.WriteAsync(jpeg);
+        });
+
+        // Latest annotated frame (blobs + zone borders drawn) for live polling
+        app.MapGet("/vision/{id}/annotated", async (string id, HttpContext context) =>
+        {
+            var proc = robotController.VisionManager.GetProcessor(id);
+            if (proc == null) { context.Response.StatusCode = 404; return; }
+
+            var jpeg = proc.GetLatestAnnotated();
+            if (jpeg == null) { context.Response.StatusCode = 204; return; }
+
+            context.Response.ContentType = "image/jpeg";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            await context.Response.Body.WriteAsync(jpeg);
+        });
+
         app.Run("http://0.0.0.0:9000");
     }
 }

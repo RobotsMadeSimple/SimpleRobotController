@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -44,9 +45,16 @@ namespace Controller.RobotControl
         private bool _awaitingAuxMove;
         private ProgramStep? _pendingAuxStep;
 
+        // RunVision: waiting for a fresh inspection result from VisionProcessor
+        private bool   _awaitingVision;
+        private long   _visionStartMs;
+        private string? _visionProgramId;
+
         // Program variables — initialised from BuiltProgram.Variables on Start(), mutated by SetVariable steps
-        private readonly Dictionary<string, double>       _variables     = new();
-        private readonly Dictionary<string, List<double>> _listVariables = new();
+        private readonly Dictionary<string, double>            _variables        = new();
+        private readonly Dictionary<string, List<double>>      _listVariables    = new();
+        private readonly Dictionary<string, List<Vector6Val>>  _pointVariables   = new();
+        private readonly HashSet<string>                       _booleanVariables = new(StringComparer.OrdinalIgnoreCase);
 
         public bool IsRunning => _running;
         public bool IsPaused  => _isPaused;
@@ -91,12 +99,19 @@ namespace Controller.RobotControl
             // Initialise variables from the program definition
             _variables.Clear();
             _listVariables.Clear();
+            _pointVariables.Clear();
+            _booleanVariables.Clear();
             foreach (var v in program.Variables ?? [])
             {
-                if (v.Values != null && v.Values.Count > 0)
+                if (v.Points != null)
+                    _pointVariables[v.Name] = new List<Vector6Val>(v.Points);
+                else if (v.Values != null && v.Values.Count > 0)
                     _listVariables[v.Name] = v.Values;
                 else
+                {
                     _variables[v.Name] = v.Value;
+                    if (v.IsBoolean == true) _booleanVariables.Add(v.Name);
+                }
             }
 
             _program = program;
@@ -105,6 +120,8 @@ namespace Controller.RobotControl
             _awaitingMove    = false;
             _awaitingAuxMove = false;
             _pendingAuxStep  = null;
+            _awaitingVision  = false;
+            _visionProgramId = null;
             _running         = true;
         }
 
@@ -134,6 +151,8 @@ namespace Controller.RobotControl
             _pendingStep     = null;
             _awaitingAuxMove = false;
             _pendingAuxStep  = null;
+            _awaitingVision  = false;
+            _visionProgramId = null;
 
             // Hard-stop any active motion profiler so IsMoving clears immediately.
             // Without this, a stuck profiler (e.g. zero-speed) would leave the
@@ -157,12 +176,16 @@ namespace Controller.RobotControl
             _pendingStep     = null;
             _awaitingAuxMove = false;
             _pendingAuxStep  = null;
+            _awaitingVision  = false;
+            _visionProgramId = null;
             _globalStepIndex = 0;
             _loopDepth       = 0;
             _jumpSubStep     = 0;
             _frameStack.Clear();
             _variables.Clear();
             _listVariables.Clear();
+            _pointVariables.Clear();
+            _booleanVariables.Clear();
         }
 
         // ── Main update — called every control loop tick ──────────────────────
@@ -324,6 +347,10 @@ namespace Controller.RobotControl
                 case StepType.AuxStop:
                     ExecuteAuxStop(step, frame);
                     break;
+
+                case StepType.RunVision:
+                    ExecuteRunVision(step, frame);
+                    break;
             }
         }
 
@@ -399,6 +426,23 @@ namespace Controller.RobotControl
                     RY = basePoint.RY,
                     RZ = basePoint.RZ,
                 };
+            }
+            else if (!string.IsNullOrEmpty(step.VarPointName))
+            {
+                if (!_pointVariables.TryGetValue(step.VarPointName, out var ptList) || ptList.Count == 0)
+                {
+                    Finish(global::ProgramStatus.Error, $"Variable point '{step.VarPointName}' is empty or not set");
+                    return;
+                }
+                int ptIdx = 0;
+                if (!string.IsNullOrEmpty(step.VarPointIndex))
+                {
+                    try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(step.VarPointIndex, _variables, _listVariables, _pointVariables)); }
+                    catch { /* default 0 */ }
+                }
+                ptIdx = Math.Clamp(ptIdx, 0, ptList.Count - 1);
+                var vp = ptList[ptIdx];
+                point = new Point { X = vp.X, Y = vp.Y, Z = vp.Z, RX = vp.RX, RY = vp.RY, RZ = vp.RZ };
             }
             else if (string.IsNullOrEmpty(step.PointName))
             {
@@ -656,10 +700,57 @@ namespace Controller.RobotControl
 
         private string InterpolateVariables(string template)
         {
-            return Regex.Replace(template, @"\$(\w+)", m =>
+            // Matches: $name, $name[expr], $name[expr].component
+            return Regex.Replace(template, @"\$(\w+)(?:\[([^\]]*)\](?:\.(\w+))?)?", m =>
             {
-                var name = m.Groups[1].Value;
-                return _variables.TryGetValue(name, out var v) ? v.ToString("G6") : m.Value;
+                var name     = m.Groups[1].Value;
+                var hasIndex = m.Groups[2].Success;
+                var idxExpr  = m.Groups[2].Value.Trim();
+                var hasComp  = m.Groups[3].Success;
+                var compName = m.Groups[3].Value.ToLower();
+
+                if (!hasIndex)
+                {
+                    // Plain $name — scalar → value, list → count, points → "N points"
+                    if (_variables.TryGetValue(name, out var sv))
+                        return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : sv.ToString("G6");
+                    if (_listVariables.ContainsKey(name))
+                        return $"{_listVariables[name].Count} items";
+                    if (_pointVariables.ContainsKey(name))
+                        return $"{_pointVariables[name].Count} points";
+                    return m.Value;
+                }
+
+                // Evaluate index expression (literal int or variable expression)
+                int idx = 0;
+                if (!string.IsNullOrEmpty(idxExpr))
+                {
+                    try { idx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, _variables, _listVariables, _pointVariables)); }
+                    catch { idx = 0; }
+                }
+
+                // Points variable
+                if (_pointVariables.TryGetValue(name, out var ptList))
+                {
+                    if (ptList.Count == 0) return "(empty)";
+                    idx = Math.Clamp(idx, 0, ptList.Count - 1);
+                    var pt = ptList[idx];
+
+                    if (hasComp)
+                        return pt.GetComponent(compName).ToString("G6");
+
+                    return $"(x={pt.X:G6}, y={pt.Y:G6}, z={pt.Z:G6}, rx={pt.RX:G6}, ry={pt.RY:G6}, rz={pt.RZ:G6})";
+                }
+
+                // List variable indexed
+                if (_listVariables.TryGetValue(name, out var list))
+                {
+                    if (list.Count == 0) return "(empty)";
+                    idx = Math.Clamp(idx, 0, list.Count - 1);
+                    return list[idx].ToString("G6");
+                }
+
+                return m.Value;
             });
         }
 
@@ -745,6 +836,87 @@ namespace Controller.RobotControl
                 frame.Index++;
                 ReportStepCompleted(step); // count it now that the wait has elapsed
             }
+        }
+
+        private void ExecuteRunVision(ProgramStep step, StepListFrame frame)
+        {
+            var programId = step.VisionProgramId;
+            if (string.IsNullOrEmpty(programId))
+            {
+                Finish(global::ProgramStatus.Error, "RunVision step has no vision program selected");
+                return;
+            }
+
+            if (!_awaitingVision)
+            {
+                // First entry: start the processor and record the trigger timestamp
+                _controller.VisionManager.StartProgram(programId);
+                _visionProgramId = programId;
+                _visionStartMs   = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                _awaitingVision  = true;
+
+                _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+                {
+                    ProgramName       = _program!.Name,
+                    ProgramStatus     = global::ProgramStatus.Running,
+                    CurrentStepNumber = _globalStepIndex,
+                    StepDescription   = $"Vision → {step.VisionProgramName ?? programId}",
+                });
+                return;
+            }
+
+            // Subsequent entries: poll for a fresh result
+            var proc = _controller.VisionManager.GetProcessor(_visionProgramId!);
+            if (proc == null)
+            {
+                // Processor was stopped externally — treat as error
+                _awaitingVision  = false;
+                _visionProgramId = null;
+                Finish(global::ProgramStatus.Error, $"Vision processor lost for '{step.VisionProgramName}'");
+                return;
+            }
+
+            var result = proc.GetLatestResult();
+            if (result == null || result.TimestampMs <= _visionStartMs)
+                return; // no fresh result yet — keep waiting
+
+            // Got a fresh result — write output variables, stop processor, advance
+            foreach (var output in step.VisionOutputs ?? [])
+            {
+                var ir = result.Inspections.Find(i => i.InspectionId == output.InspectionId);
+                if (ir == null) continue;
+
+                if (!string.IsNullOrEmpty(output.CountVar))
+                    _variables[output.CountVar] = ir.Blobs.Count;
+
+                if (!string.IsNullOrEmpty(output.PointsVar))
+                {
+                    _pointVariables[output.PointsVar] = ir.Blobs
+                        .Select(b => new Vector6Val { X = b.X, Y = b.Y })
+                        .ToList();
+                }
+
+                if (!string.IsNullOrEmpty(output.DetectedVar))
+                    _variables[output.DetectedVar] = ir.Blobs.Count > 0 ? 1 : 0;
+            }
+
+            foreach (var output in step.ColorOutputs ?? [])
+            {
+                var cr = result.ColorResults.Find(r => r.InspectionId == output.InspectionId);
+                if (cr == null) continue;
+
+                if (!string.IsNullOrEmpty(output.CoverageVar))
+                    _variables[output.CoverageVar] = cr.Coverage;
+
+                if (!string.IsNullOrEmpty(output.PassedVar))
+                    _variables[output.PassedVar] = cr.Passed ? 1 : 0;
+            }
+
+            _controller.VisionManager.StopProgram(_visionProgramId!);
+            _awaitingVision  = false;
+            _visionProgramId = null;
+            ReportStepCompleted(step);
+            frame.Index++;
         }
 
         private void ExecuteCallRoutine(ProgramStep step, StepListFrame frame)
@@ -921,8 +1093,8 @@ namespace Controller.RobotControl
         private bool EvaluateConditionItem(ConditionItem item, Dictionary<string, double> vars)
         {
             double left, right;
-            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables); } catch { left  = 0; }
-            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables); } catch { right = 0; }
+            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables, _pointVariables); } catch { left  = 0; }
+            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables, _pointVariables); } catch { right = 0; }
             const double eps = 1e-9;
             return item.Operator switch
             {
@@ -1134,7 +1306,7 @@ namespace Controller.RobotControl
         {
             if (step.Expressions != null && step.Expressions.TryGetValue(fieldName, out var expr))
             {
-                try { return ExpressionEvaluator.Evaluate(expr, _variables, _listVariables); }
+                try { return ExpressionEvaluator.Evaluate(expr, _variables, _listVariables, _pointVariables); }
                 catch { /* fall through */ }
             }
             return fallback;
@@ -1202,6 +1374,8 @@ namespace Controller.RobotControl
             _pendingStep     = null;
             _awaitingAuxMove = false;
             _pendingAuxStep  = null;
+            _awaitingVision  = false;
+            _visionProgramId = null;
             _frameStack.Clear();
 
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
@@ -1251,6 +1425,7 @@ namespace Controller.RobotControl
                     : $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxSteps} steps",
                 StepType.AuxContinuous => $"Aux Continuous · axis {step.AuxAxisIndex}",
                 StepType.AuxStop       => $"Aux Stop · device {step.AuxDeviceId ?? "default"}",
+                StepType.RunVision     => $"Vision → {step.VisionProgramName ?? step.VisionProgramId ?? "?"}",
                 _                      => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";

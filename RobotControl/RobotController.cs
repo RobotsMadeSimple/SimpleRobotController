@@ -125,6 +125,10 @@ namespace Controller.RobotControl
         // ── USB Cameras ───────────────────────────────────────────────────────
         public Camera.CameraManager CameraManager { get; private set; } = null!;
 
+        // ── Vision ────────────────────────────────────────────────────────────
+        public Vision.VisionProgramRepository VisionRepo    { get; private set; } = null!;
+        public Vision.VisionManager           VisionManager { get; private set; } = null!;
+
         private string? _auxActiveDeviceId;
         private int     _auxActiveAxis;
 
@@ -144,6 +148,9 @@ namespace Controller.RobotControl
 
             CameraManager = new Camera.CameraManager("camera_config.json");
             CameraManager.Start();
+
+            VisionRepo    = new Vision.VisionProgramRepository("vision_programs");
+            VisionManager = new Vision.VisionManager(CameraManager, VisionRepo);
 
             stb.Start();
 
@@ -1240,6 +1247,74 @@ namespace Controller.RobotControl
                         };
                     }
                     break;
+
+                // ── Vision commands ───────────────────────────────────────────────
+
+                case "GetVisionPrograms":
+                {
+                    var programs = VisionRepo.GetAll();
+                    var json = JsonSerializer.Serialize(programs, new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    });
+                    payload = new { programs = json, runningIds = VisionManager.GetRunningIds() };
+                }
+                break;
+
+                case "SaveVisionProgram":
+                {
+                    var prog = JsonSerializer.Deserialize<Vision.VisionProgram>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    if (string.IsNullOrEmpty(prog.Id))
+                        prog.Id = Guid.NewGuid().ToString("N")[..8];
+                    VisionRepo.Save(prog);
+                    VisionManager.OnProgramSaved(prog);
+                    payload = new { programId = prog.Id, lastUpdatedUnixMs = prog.LastUpdatedUnixMs };
+                }
+                break;
+
+                case "DeleteVisionProgram":
+                {
+                    var p = LoadParams<DeleteVisionProgramParams>(command);
+                    VisionManager.StopProgram(p.Id);
+                    VisionRepo.Delete(p.Id);
+                }
+                break;
+
+                case "StartVision":
+                {
+                    var p = LoadParams<StartStopVisionParams>(command);
+                    VisionManager.StartProgram(p.Id);
+                }
+                break;
+
+                case "StopVision":
+                {
+                    var p = LoadParams<StartStopVisionParams>(command);
+                    VisionManager.StopProgram(p.Id);
+                }
+                break;
+
+                case "GetVisionResult":
+                {
+                    var p = LoadParams<StartStopVisionParams>(command);
+                    var proc = VisionManager.GetProcessor(p.Id);
+                    if (proc != null)
+                    {
+                        var result = proc.GetLatestResult();
+                        var json   = result != null
+                            ? JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+                            : null;
+                        payload = new { result = json };
+                    }
+                    else
+                    {
+                        payload = new { result = (string?)null };
+                    }
+                }
+                break;
+
+                // ── End vision commands ───────────────────────────────────────────
 
                 default:
                     RobotCommand NewCommand = LoadParams<RobotCommand>(command);
