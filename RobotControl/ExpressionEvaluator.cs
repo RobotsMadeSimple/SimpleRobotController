@@ -9,71 +9,81 @@ namespace Controller.RobotControl
     ///
     /// Supported syntax:
     ///   Variables    : $varName
-    ///   List index   : $listName[indexExpr]  or  $listName[3]
+    ///   List index   : $listName[indexExpr]
+    ///   Point comp.  : $pointsVar[indexExpr].x   (x/y/z/rx/ry/rz)
+    ///   Point comp.  : $pointsVar[indexExpr][0]  (0=x 1=y 2=z 3=rx 4=ry 5=rz)
     ///   Literals     : 3.14  -5  100
     ///   Operators    : +  -  *  /
     ///   Grouping     : (expr)
     ///   Precedence   : standard (* / before + -)
-    ///
-    /// Examples:
-    ///   "$speed * 0.8"
-    ///   "($pickHeight + $offset) / 2"
-    ///   "$counter + 1"
-    ///   "$positions[$index]"
-    ///   "$offsets[2] + $base"
     /// </summary>
     internal static class ExpressionEvaluator
     {
-        private enum TokType { Number, Variable, Op, LParen, RParen, LBracket, RBracket }
+        private enum TokType { Number, Variable, Op, LParen, RParen, LBracket, RBracket, Dot, Word }
         private readonly record struct Token(TokType Type, string Value);
 
         // ── Public entry point ────────────────────────────────────────────────
 
-        public static double Evaluate(string expr, Dictionary<string, double> variables,
-            Dictionary<string, List<double>>? listVariables = null)
+        public static double Evaluate(
+            string expr,
+            Dictionary<string, double> variables,
+            Dictionary<string, List<double>>? listVariables = null,
+            Dictionary<string, List<Vector6Val>>? pointVariables = null)
         {
             var tokens = Tokenize(expr.Trim());
             int idx = 0;
-            return ParseAddSub(tokens, ref idx, variables, listVariables);
+            return ParseAddSub(tokens, ref idx, variables, listVariables, pointVariables);
         }
 
         // ── Recursive descent ─────────────────────────────────────────────────
 
-        private static double ParseAddSub(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
+        private static double ParseAddSub(List<Token> t, ref int i,
+            Dictionary<string, double> vars,
+            Dictionary<string, List<double>>? listVars,
+            Dictionary<string, List<Vector6Val>>? ptVars)
         {
-            double left = ParseMulDiv(t, ref i, vars, listVars);
+            double left = ParseMulDiv(t, ref i, vars, listVars, ptVars);
             while (i < t.Count && t[i].Type == TokType.Op && (t[i].Value == "+" || t[i].Value == "-"))
             {
                 string op = t[i++].Value;
-                double right = ParseMulDiv(t, ref i, vars, listVars);
+                double right = ParseMulDiv(t, ref i, vars, listVars, ptVars);
                 left = op == "+" ? left + right : left - right;
             }
             return left;
         }
 
-        private static double ParseMulDiv(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
+        private static double ParseMulDiv(List<Token> t, ref int i,
+            Dictionary<string, double> vars,
+            Dictionary<string, List<double>>? listVars,
+            Dictionary<string, List<Vector6Val>>? ptVars)
         {
-            double left = ParseUnary(t, ref i, vars, listVars);
+            double left = ParseUnary(t, ref i, vars, listVars, ptVars);
             while (i < t.Count && t[i].Type == TokType.Op && (t[i].Value == "*" || t[i].Value == "/"))
             {
                 string op = t[i++].Value;
-                double right = ParseUnary(t, ref i, vars, listVars);
+                double right = ParseUnary(t, ref i, vars, listVars, ptVars);
                 left = op == "*" ? left * right : (right != 0 ? left / right : 0);
             }
             return left;
         }
 
-        private static double ParseUnary(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
+        private static double ParseUnary(List<Token> t, ref int i,
+            Dictionary<string, double> vars,
+            Dictionary<string, List<double>>? listVars,
+            Dictionary<string, List<Vector6Val>>? ptVars)
         {
             if (i < t.Count && t[i].Type == TokType.Op && t[i].Value == "-")
             {
                 i++;
-                return -ParsePrimary(t, ref i, vars, listVars);
+                return -ParsePrimary(t, ref i, vars, listVars, ptVars);
             }
-            return ParsePrimary(t, ref i, vars, listVars);
+            return ParsePrimary(t, ref i, vars, listVars, ptVars);
         }
 
-        private static double ParsePrimary(List<Token> t, ref int i, Dictionary<string, double> vars, Dictionary<string, List<double>>? listVars)
+        private static double ParsePrimary(List<Token> t, ref int i,
+            Dictionary<string, double> vars,
+            Dictionary<string, List<double>>? listVars,
+            Dictionary<string, List<Vector6Val>>? ptVars)
         {
             if (i >= t.Count) return 0;
 
@@ -83,15 +93,50 @@ namespace Controller.RobotControl
             {
                 i++;
                 string name = tok.Value;
-                // List indexing: $name[indexExpr]
-                if (i < t.Count && t[i].Type == TokType.LBracket && listVars != null && listVars.TryGetValue(name, out var list))
+
+                // Array indexing: $name[indexExpr]
+                if (i < t.Count && t[i].Type == TokType.LBracket)
                 {
-                    i++; // consume '['
-                    double idxVal = ParseAddSub(t, ref i, vars, listVars);
-                    if (i < t.Count && t[i].Type == TokType.RBracket) i++; // consume ']'
-                    int idx = (int)Math.Round(idxVal);
-                    return (idx >= 0 && idx < list.Count) ? list[idx] : 0;
+                    // Try scalar list first
+                    if (listVars != null && listVars.TryGetValue(name, out var list))
+                    {
+                        i++; // consume '['
+                        double idxVal = ParseAddSub(t, ref i, vars, listVars, ptVars);
+                        if (i < t.Count && t[i].Type == TokType.RBracket) i++; // consume ']'
+                        int idx = (int)Math.Round(idxVal);
+                        return (idx >= 0 && idx < list.Count) ? list[idx] : 0;
+                    }
+
+                    // Try points variable
+                    if (ptVars != null && ptVars.TryGetValue(name, out var ptList))
+                    {
+                        i++; // consume '['
+                        double idxVal = ParseAddSub(t, ref i, vars, listVars, ptVars);
+                        if (i < t.Count && t[i].Type == TokType.RBracket) i++; // consume ']'
+                        int ptIdx = (int)Math.Round(idxVal);
+                        var pt = (ptIdx >= 0 && ptIdx < ptList.Count) ? ptList[ptIdx] : null;
+
+                        // .component  (e.g. .x .y .rx)
+                        if (i + 1 < t.Count && t[i].Type == TokType.Dot && t[i + 1].Type == TokType.Word)
+                        {
+                            string comp = t[i + 1].Value;
+                            i += 2;
+                            return pt?.GetComponent(comp) ?? 0;
+                        }
+
+                        // [compIndex]  (e.g. [0]=x [1]=y)
+                        if (i < t.Count && t[i].Type == TokType.LBracket)
+                        {
+                            i++; // consume '['
+                            double compIdxVal = ParseAddSub(t, ref i, vars, listVars, ptVars);
+                            if (i < t.Count && t[i].Type == TokType.RBracket) i++; // consume ']'
+                            return pt?.GetComponent((int)Math.Round(compIdxVal)) ?? 0;
+                        }
+
+                        return 0; // point var without component → 0
+                    }
                 }
+
                 return vars.TryGetValue(name, out double v) ? v : 0;
             }
 
@@ -104,9 +149,18 @@ namespace Controller.RobotControl
             if (tok.Type == TokType.LParen)
             {
                 i++;
-                double val = ParseAddSub(t, ref i, vars, listVars);
+                double val = ParseAddSub(t, ref i, vars, listVars, ptVars);
                 if (i < t.Count && t[i].Type == TokType.RParen) i++;
                 return val;
+            }
+
+            // Bare words: True → 1, False → 0 (case-insensitive)
+            if (tok.Type == TokType.Word)
+            {
+                i++;
+                if (tok.Value.Equals("true",  StringComparison.OrdinalIgnoreCase)) return 1;
+                if (tok.Value.Equals("false", StringComparison.OrdinalIgnoreCase)) return 0;
+                return 0;
             }
 
             return 0;
@@ -126,13 +180,22 @@ namespace Controller.RobotControl
                 // Whitespace
                 if (char.IsWhiteSpace(c)) { i++; continue; }
 
-                // Variable: $identifier
+                // Variable: $identifier (no dot — dots are Dot tokens)
                 if (c == '$')
                 {
                     i++;
                     int start = i;
-                    while (i < expr.Length && (char.IsLetterOrDigit(expr[i]) || expr[i] == '_' || expr[i] == '.')) i++;
+                    while (i < expr.Length && (char.IsLetterOrDigit(expr[i]) || expr[i] == '_')) i++;
                     tokens.Add(new Token(TokType.Variable, expr[start..i]));
+                    continue;
+                }
+
+                // Bare word (component name after dot: x, y, z, rx, ry, rz)
+                if (char.IsLetter(c) || c == '_')
+                {
+                    int start = i;
+                    while (i < expr.Length && (char.IsLetterOrDigit(expr[i]) || expr[i] == '_')) i++;
+                    tokens.Add(new Token(TokType.Word, expr[start..i]));
                     continue;
                 }
 
@@ -157,6 +220,7 @@ namespace Controller.RobotControl
                 if (c == ')') { tokens.Add(new Token(TokType.RParen,   ")")); i++; continue; }
                 if (c == '[') { tokens.Add(new Token(TokType.LBracket, "[")); i++; continue; }
                 if (c == ']') { tokens.Add(new Token(TokType.RBracket, "]")); i++; continue; }
+                if (c == '.') { tokens.Add(new Token(TokType.Dot,      ".")); i++; continue; }
 
                 i++; // skip unrecognised characters
             }
