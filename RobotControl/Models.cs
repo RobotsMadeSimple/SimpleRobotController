@@ -183,6 +183,17 @@ public class ColorVisionStepOutput
     [JsonPropertyName("passedVar")]    public string? PassedVar    { get; set; }
 }
 
+/// <summary>Maps one PolygonInspection's outputs to program variable names.</summary>
+public class PolygonVisionStepOutput
+{
+    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
+    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
+    [JsonPropertyName("foundVar")]     public string? FoundVar     { get; set; }
+    [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
+    [JsonPropertyName("centerXVar")]   public string? CenterXVar   { get; set; }
+    [JsonPropertyName("centerYVar")]   public string? CenterYVar   { get; set; }
+}
+
 public class ConditionItem
 {
     [JsonPropertyName("id")]       public string Id       { get; set; } = "";
@@ -329,8 +340,9 @@ public class ProgramStep
     // RunVision
     [JsonPropertyName("visionProgramId")]   public string? VisionProgramId   { get; set; }
     [JsonPropertyName("visionProgramName")] public string? VisionProgramName { get; set; }
-    [JsonPropertyName("visionOutputs")]     public List<VisionStepOutput>?      VisionOutputs { get; set; }
-    [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>? ColorOutputs  { get; set; }
+    [JsonPropertyName("visionOutputs")]     public List<VisionStepOutput>?         VisionOutputs  { get; set; }
+    [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>?    ColorOutputs   { get; set; }
+    [JsonPropertyName("polygonOutputs")]    public List<PolygonVisionStepOutput>?  PolygonOutputs { get; set; }
 
     // Variable point target for move steps — overrides pointName when set
     [JsonPropertyName("varPointName")]  public string? VarPointName  { get; set; }

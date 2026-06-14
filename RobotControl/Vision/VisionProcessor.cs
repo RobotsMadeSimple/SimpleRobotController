@@ -84,10 +84,11 @@ namespace Controller.RobotControl.Vision
                     var prog   = _program;
                     var result = new VisionResult
                     {
-                        ProgramId    = prog.Id,
-                        TimestampMs  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        Inspections  = new List<InspectionResult>(),
-                        ColorResults = new List<ColorCoverageResult>(),
+                        ProgramId      = prog.Id,
+                        TimestampMs    = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        Inspections    = new List<InspectionResult>(),
+                        ColorResults   = new List<ColorCoverageResult>(),
+                        PolygonResults = new List<PolygonResult>(),
                     };
 
                     using var annotated = src.Clone();
@@ -146,6 +147,18 @@ namespace Controller.RobotControl.Vision
                             result.ColorResults.Add(cr);
                         }
                         catch { /* skip failed color inspection */ }
+                    }
+
+                    // Run polygon inspections
+                    foreach (var polyInsp in prog.PolygonInspections)
+                    {
+                        if (!polyInsp.Enabled) continue;
+                        try
+                        {
+                            var pr = RunPolygonInspection(src, annotated, polyInsp, prog.Zones, ref colorLabelY);
+                            result.PolygonResults.Add(pr);
+                        }
+                        catch { /* skip failed polygon inspection */ }
                     }
 
                     Cv2.ImEncode(".jpg", annotated, out var buf, JpegParams);
@@ -380,6 +393,190 @@ namespace Controller.RobotControl.Vision
                     break;
                 }
             }
+        }
+
+        // ── Polygon inspection ────────────────────────────────────────────────────
+
+        private PolygonResult RunPolygonInspection(
+            Mat src, Mat annotated, PolygonInspection insp,
+            List<VisionZone> zones, ref int labelY)
+        {
+            int w = src.Width, h = src.Height;
+
+            VisionZone? zone = string.IsNullOrEmpty(insp.ZoneId)
+                ? null
+                : zones.FirstOrDefault(z => z.Id == insp.ZoneId);
+
+            using var gray    = new Mat();
+            using var blurred = new Mat();
+            using var thresh  = new Mat();
+            Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
+            Cv2.GaussianBlur(gray, blurred, new OpenCvSharp.Size(5, 5), 0);
+            Cv2.InRange(blurred, new Scalar(insp.MinThreshold), new Scalar(insp.MaxThreshold), thresh);
+            if (insp.InvertThreshold) Cv2.BitwiseNot(thresh, thresh);
+
+            Cv2.FindContours(thresh, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+            int    count    = 0;
+            double angle    = 0;
+            double centerX  = 0, centerY = 0;
+            double bestArea = 0;
+
+            var drawColor = new Scalar(0, 165, 255); // orange (BGR)
+
+            foreach (var contour in contours)
+            {
+                double area = Cv2.ContourArea(contour);
+                if (area < insp.MinArea || area > insp.MaxArea) continue;
+
+                double peri   = Cv2.ArcLength(contour, true);
+                var    approx = Cv2.ApproxPolyDP(contour, insp.Epsilon * peri, true);
+
+                if (approx.Length != insp.Sides) continue;
+
+                // Centroid from moments for zone check
+                var m = Cv2.Moments(contour);
+                if (m.M00 == 0) continue;
+                float cx = (float)(m.M10 / m.M00);
+                float cy = (float)(m.M01 / m.M00);
+
+                if (zone != null && !IsInsideZone(zone.Geometry, cx, cy, w, h)) continue;
+
+                // Draw approximated polygon
+                Cv2.Polylines(annotated, new[] { approx }, true, drawColor, 2);
+
+                // Orientation arrow from MinAreaRect
+                var rect = Cv2.MinAreaRect(approx);
+                double rad = rect.Angle * Math.PI / 180.0;
+                double len = Math.Sqrt(area) * 0.4;
+                var cpt = new OpenCvSharp.Point((int)cx, (int)cy);
+                var tip = new OpenCvSharp.Point((int)(cx + Math.Cos(rad) * len), (int)(cy + Math.Sin(rad) * len));
+                Cv2.ArrowedLine(annotated, cpt, tip, new Scalar(0, 255, 255), 2);
+                Cv2.PutText(annotated, $"{rect.Angle:F1}deg",
+                    new OpenCvSharp.Point((int)cx + 5, (int)cy - 5),
+                    HersheyFonts.HersheySimplex, 0.4, drawColor, 1);
+
+                count++;
+
+                if (area > bestArea)
+                {
+                    bestArea = area;
+                    angle    = Math.Round(rect.Angle, 2);
+                    centerX  = Math.Round(cx / w, 4);
+                    centerY  = Math.Round(cy / h, 4);
+                }
+            }
+
+            // Label
+            var labelColor = count > 0 ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
+            string label   = count > 0
+                ? $"{insp.Name}: {count} polygon(s) · {angle:F1}deg"
+                : $"{insp.Name}: none";
+            Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
+            Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, labelColor, 1);
+            labelY += 22;
+
+            return new PolygonResult
+            {
+                InspectionId = insp.Id,
+                Name         = insp.Name,
+                Count        = count,
+                Found        = count > 0,
+                Angle        = angle,
+                CenterX      = centerX,
+                CenterY      = centerY,
+            };
+        }
+
+        // ── Polygon debug frame ───────────────────────────────────────────────────
+
+        public byte[]? GetPolygonDebugFrame(string inspectionId)
+        {
+            var insp = _program.PolygonInspections.FirstOrDefault(i => i.Id == inspectionId);
+            if (insp == null) return null;
+
+            byte[]? raw;
+            lock (_lock) raw = _latestRaw;
+            if (raw == null) return null;
+
+            using var src = Cv2.ImDecode(raw, ImreadModes.Color);
+            if (src.Empty()) return null;
+
+            int w = src.Width, h = src.Height;
+
+            using var gray    = new Mat();
+            using var blurred = new Mat();
+            using var thresh  = new Mat();
+            Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
+            Cv2.GaussianBlur(gray, blurred, new OpenCvSharp.Size(5, 5), 0);
+            Cv2.InRange(blurred, new Scalar(insp.MinThreshold), new Scalar(insp.MaxThreshold), thresh);
+            if (insp.InvertThreshold) Cv2.BitwiseNot(thresh, thresh);
+
+            // Debug canvas: threshold mask in color so overlays are visible
+            using var debug = new Mat();
+            Cv2.CvtColor(thresh, debug, ColorConversionCodes.GRAY2BGR);
+
+            Cv2.FindContours(thresh, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+            int areaPass = 0, matchCount = 0;
+            var orange = new Scalar(0, 140, 255);
+            var green  = new Scalar(0, 210, 0);
+            var gray80 = new Scalar(80, 80, 80);
+
+            foreach (var contour in contours)
+            {
+                double area = Cv2.ContourArea(contour);
+
+                if (area < insp.MinArea || area > insp.MaxArea)
+                {
+                    Cv2.DrawContours(debug, new[] { contour }, -1, gray80, 1);
+                    continue;
+                }
+
+                areaPass++;
+                double peri   = Cv2.ArcLength(contour, true);
+                var    approx = Cv2.ApproxPolyDP(contour, insp.Epsilon * peri, true);
+                var    m      = Cv2.Moments(contour);
+                int    cx     = m.M00 > 0 ? (int)(m.M10 / m.M00) : 0;
+                int    cy     = m.M00 > 0 ? (int)(m.M01 / m.M00) : 0;
+
+                if (approx.Length != insp.Sides)
+                {
+                    Cv2.DrawContours(debug, new[] { approx }, -1, orange, 2);
+                    string sideLabel = $"{approx.Length}s";
+                    Cv2.PutText(debug, sideLabel, new OpenCvSharp.Point(cx + 4, cy), HersheyFonts.HersheySimplex, 0.5, new Scalar(0,0,0), 3);
+                    Cv2.PutText(debug, sideLabel, new OpenCvSharp.Point(cx + 4, cy), HersheyFonts.HersheySimplex, 0.5, orange, 1);
+                }
+                else
+                {
+                    Cv2.DrawContours(debug, new[] { approx }, -1, green, 2);
+                    var    rect      = Cv2.MinAreaRect(approx);
+                    string angleLabel = $"{rect.Angle:F1}deg";
+                    Cv2.PutText(debug, angleLabel, new OpenCvSharp.Point(cx + 4, cy), HersheyFonts.HersheySimplex, 0.5, new Scalar(0,0,0), 3);
+                    Cv2.PutText(debug, angleLabel, new OpenCvSharp.Point(cx + 4, cy), HersheyFonts.HersheySimplex, 0.5, green, 1);
+                    matchCount++;
+                }
+            }
+
+            // Info strip at bottom
+            string[] lines =
+            {
+                $"Thresh {insp.MinThreshold}-{insp.MaxThreshold}{(insp.InvertThreshold ? " (inverted)" : "")}   Eps {insp.Epsilon}   Need {insp.Sides} sides",
+                $"Contours: {contours.Length}   Area pass: {areaPass}   Matched: {matchCount}",
+                "Gray=area fail   Orange=wrong sides   Green=matched",
+            };
+            int stripH = lines.Length * 22 + 8;
+            int stripY = Math.Max(0, h - stripH);
+            debug[new Rect(0, stripY, w, h - stripY)].SetTo(new Scalar(18, 18, 18));
+            int ly = stripY + 18;
+            foreach (var line in lines)
+            {
+                Cv2.PutText(debug, line, new OpenCvSharp.Point(6, ly), HersheyFonts.HersheySimplex, 0.42, new Scalar(180, 180, 180), 1);
+                ly += 22;
+            }
+
+            Cv2.ImEncode(".jpg", debug, out var buf, new[] { (int)ImwriteFlags.JpegQuality, 88 });
+            return buf;
         }
 
         private static void DrawColorZoneBorder(Mat img, VisionZoneGeometry geom, int w, int h, string label)

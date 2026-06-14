@@ -221,6 +221,21 @@ class Program
             await context.Response.Body.WriteAsync(jpeg);
         });
 
+        // Polygon inspection debug frame — threshold mask with color-coded contours
+        app.MapGet("/vision/{id}/debug/polygon/{inspId}", async (string id, string inspId, HttpContext context) =>
+        {
+            var proc = robotController.VisionManager.GetProcessor(id);
+            if (proc == null) { context.Response.StatusCode = 404; return; }
+
+            var jpeg = proc.GetPolygonDebugFrame(inspId);
+            if (jpeg == null) { context.Response.StatusCode = 204; return; }
+
+            context.Response.ContentType = "image/jpeg";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            await context.Response.Body.WriteAsync(jpeg);
+        });
+
         app.Run("http://0.0.0.0:9000");
     }
 }

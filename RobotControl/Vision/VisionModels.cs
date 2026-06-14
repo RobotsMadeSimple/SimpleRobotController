@@ -89,16 +89,47 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("passed")]       public bool   Passed       { get; set; }
     }
 
+    public class PolygonInspection
+    {
+        [JsonPropertyName("id")]           public string  Id           { get; set; } = "";
+        [JsonPropertyName("name")]         public string  Name         { get; set; } = "";
+        [JsonPropertyName("enabled")]      public bool    Enabled      { get; set; } = true;
+        [JsonPropertyName("zoneId")]       public string? ZoneId       { get; set; }
+        [JsonPropertyName("sides")]        public int     Sides        { get; set; } = 4;
+        [JsonPropertyName("minArea")]      public float   MinArea      { get; set; } = 1000;
+        [JsonPropertyName("maxArea")]      public float   MaxArea      { get; set; } = 100000;
+        /// <summary>ApproxPolyDP accuracy factor — fraction of perimeter (0.01–0.1, default 0.04).</summary>
+        [JsonPropertyName("epsilon")]      public double  Epsilon      { get; set; } = 0.04;
+        [JsonPropertyName("minThreshold")]    public float  MinThreshold    { get; set; } = 50;
+        [JsonPropertyName("maxThreshold")]    public float  MaxThreshold    { get; set; } = 200;
+        [JsonPropertyName("invertThreshold")] public bool   InvertThreshold { get; set; } = false;
+    }
+
+    public class PolygonResult
+    {
+        [JsonPropertyName("inspectionId")] public string InspectionId { get; set; } = "";
+        [JsonPropertyName("name")]         public string Name         { get; set; } = "";
+        [JsonPropertyName("count")]        public int    Count        { get; set; }
+        [JsonPropertyName("found")]        public bool   Found        { get; set; }
+        /// <summary>Orientation angle in degrees from MinAreaRect of the largest matching polygon.</summary>
+        [JsonPropertyName("angle")]        public double Angle        { get; set; }
+        /// <summary>Normalized centroid X (0–1) of the largest matching polygon.</summary>
+        [JsonPropertyName("centerX")]      public double CenterX      { get; set; }
+        /// <summary>Normalized centroid Y (0–1) of the largest matching polygon.</summary>
+        [JsonPropertyName("centerY")]      public double CenterY      { get; set; }
+    }
+
     public class VisionProgram
     {
-        [JsonPropertyName("id")]                public string                       Id                { get; set; } = "";
-        [JsonPropertyName("name")]              public string                       Name              { get; set; } = "";
-        [JsonPropertyName("description")]       public string                       Description       { get; set; } = "";
-        [JsonPropertyName("cameraId")]          public string                       CameraId          { get; set; } = "";
-        [JsonPropertyName("zones")]             public List<VisionZone>             Zones             { get; set; } = new();
-        [JsonPropertyName("inspections")]       public List<BlobInspection>         Inspections       { get; set; } = new();
-        [JsonPropertyName("colorInspections")]  public List<ColorCoverageInspection> ColorInspections { get; set; } = new();
-        [JsonPropertyName("lastUpdatedUnixMs")] public long                         LastUpdatedUnixMs { get; set; }
+        [JsonPropertyName("id")]                  public string                        Id                 { get; set; } = "";
+        [JsonPropertyName("name")]                public string                        Name               { get; set; } = "";
+        [JsonPropertyName("description")]         public string                        Description        { get; set; } = "";
+        [JsonPropertyName("cameraId")]            public string                        CameraId           { get; set; } = "";
+        [JsonPropertyName("zones")]               public List<VisionZone>              Zones              { get; set; } = new();
+        [JsonPropertyName("inspections")]         public List<BlobInspection>          Inspections        { get; set; } = new();
+        [JsonPropertyName("colorInspections")]    public List<ColorCoverageInspection> ColorInspections   { get; set; } = new();
+        [JsonPropertyName("polygonInspections")]  public List<PolygonInspection>       PolygonInspections { get; set; } = new();
+        [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs  { get; set; }
     }
 
     // ── Runtime results ───────────────────────────────────────────────────────────
@@ -119,9 +150,10 @@ namespace Controller.RobotControl.Vision
 
     public class VisionResult
     {
-        [JsonPropertyName("programId")]    public string                      ProgramId    { get; set; } = "";
-        [JsonPropertyName("timestampMs")]  public long                        TimestampMs  { get; set; }
-        [JsonPropertyName("inspections")]  public List<InspectionResult>      Inspections  { get; set; } = new();
-        [JsonPropertyName("colorResults")] public List<ColorCoverageResult>   ColorResults { get; set; } = new();
+        [JsonPropertyName("programId")]       public string                    ProgramId      { get; set; } = "";
+        [JsonPropertyName("timestampMs")]     public long                      TimestampMs    { get; set; }
+        [JsonPropertyName("inspections")]     public List<InspectionResult>    Inspections    { get; set; } = new();
+        [JsonPropertyName("colorResults")]    public List<ColorCoverageResult> ColorResults   { get; set; } = new();
+        [JsonPropertyName("polygonResults")]  public List<PolygonResult>       PolygonResults { get; set; } = new();
     }
 }
