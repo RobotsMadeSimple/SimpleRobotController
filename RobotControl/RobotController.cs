@@ -146,6 +146,21 @@ namespace Controller.RobotControl
         public Vision.VisionProgramRepository VisionRepo    { get; private set; } = null!;
         public Vision.VisionManager           VisionManager { get; private set; } = null!;
 
+        // ── Program vision snapshots ──────────────────────────────────────────
+        private readonly Dictionary<string, byte[]> _programVisionSnapshots = new();
+        private readonly object _visionSnapshotLock = new();
+
+        public void SetProgramVisionSnapshot(string visionProgramId, byte[] jpeg)
+        {
+            lock (_visionSnapshotLock) _programVisionSnapshots[visionProgramId] = jpeg;
+        }
+
+        public byte[]? GetProgramVisionSnapshot(string visionProgramId)
+        {
+            lock (_visionSnapshotLock)
+                return _programVisionSnapshots.TryGetValue(visionProgramId, out var b) ? b : null;
+        }
+
         private string? _auxActiveDeviceId;
         private int     _auxActiveAxis;
 

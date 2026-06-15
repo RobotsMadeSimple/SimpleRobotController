@@ -1015,6 +1015,9 @@ namespace Controller.RobotControl
                 }
             }
 
+            var snap = proc.GetLatestAnnotated();
+            if (snap != null) _controller.SetProgramVisionSnapshot(_visionProgramId!, snap);
+
             _controller.VisionManager.StopProgram(_visionProgramId!);
             _awaitingVision  = false;
             _visionProgramId = null;
