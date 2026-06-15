@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using OpenCvSharp.Aruco;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -89,6 +90,7 @@ namespace Controller.RobotControl.Vision
                         Inspections    = new List<InspectionResult>(),
                         ColorResults   = new List<ColorCoverageResult>(),
                         PolygonResults = new List<PolygonResult>(),
+                        ArucoResults   = new List<ArucoResult>(),
                     };
 
                     using var annotated = src.Clone();
@@ -159,6 +161,18 @@ namespace Controller.RobotControl.Vision
                             result.PolygonResults.Add(pr);
                         }
                         catch { /* skip failed polygon inspection */ }
+                    }
+
+                    // Run ArUco inspections
+                    foreach (var arucoInsp in prog.ArucoInspections)
+                    {
+                        if (!arucoInsp.Enabled) continue;
+                        try
+                        {
+                            var ar = RunArucoInspection(src, annotated, arucoInsp, prog.Zones, ref colorLabelY);
+                            result.ArucoResults.Add(ar);
+                        }
+                        catch { /* skip failed ArUco inspection */ }
                     }
 
                     Cv2.ImEncode(".jpg", annotated, out var buf, JpegParams);
@@ -485,6 +499,77 @@ namespace Controller.RobotControl.Vision
                 Angle        = angle,
                 CenterX      = centerX,
                 CenterY      = centerY,
+            };
+        }
+
+        // ── ArUco marker detection ────────────────────────────────────────────────
+
+        private ArucoResult RunArucoInspection(
+            Mat src, Mat annotated, ArucoInspection insp,
+            List<VisionZone> zones, ref int labelY)
+        {
+            int w = src.Width, h = src.Height;
+
+            VisionZone? zone = string.IsNullOrEmpty(insp.ZoneId)
+                ? null
+                : zones.FirstOrDefault(z => z.Id == insp.ZoneId);
+
+            var dict       = CvAruco.GetPredefinedDictionary((PredefinedDictionaryType)insp.DictionaryId);
+            var parameters = new DetectorParameters();
+            var detector   = new ArucoDetector(dict, parameters, new RefineParameters());
+
+            detector.DetectMarkers(src, out var corners, out var ids, out _);
+
+            var markers   = new List<ArucoMarkerResult>();
+            var drawColor = new Scalar(0, 255, 127); // spring green (BGR)
+
+            if (ids != null && ids.Length > 0)
+            {
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    var c = corners[i];
+
+                    float minX = c.Min(p => p.X), maxX = c.Max(p => p.X);
+                    float minY = c.Min(p => p.Y), maxY = c.Max(p => p.Y);
+                    float area = (maxX - minX) * (maxY - minY);
+
+                    if (area < insp.MinMarkerArea || area > insp.MaxMarkerArea) continue;
+
+                    float cx = c.Average(p => p.X);
+                    float cy = c.Average(p => p.Y);
+
+                    if (zone != null && !IsInsideZone(zone.Geometry, cx, cy, w, h)) continue;
+
+                    markers.Add(new ArucoMarkerResult
+                    {
+                        MarkerId = ids[i],
+                        CenterX  = Math.Round(cx / w, 4),
+                        CenterY  = Math.Round(cy / h, 4),
+                    });
+
+                    var pts = c.Select(p => new OpenCvSharp.Point((int)p.X, (int)p.Y)).ToArray();
+                    Cv2.Polylines(annotated, new[] { pts }, isClosed: true, drawColor, 2);
+                    Cv2.PutText(annotated, $"ID:{ids[i]}",
+                        new OpenCvSharp.Point((int)cx + 4, (int)cy - 4),
+                        HersheyFonts.HersheySimplex, 0.5, drawColor, 2);
+                }
+            }
+
+            var labelColor = markers.Count > 0 ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
+            string label   = markers.Count > 0
+                ? $"{insp.Name}: {markers.Count} marker(s) [{string.Join(",", markers.Select(m => m.MarkerId))}]"
+                : $"{insp.Name}: none";
+            Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
+            Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, labelColor, 1);
+            labelY += 22;
+
+            return new ArucoResult
+            {
+                InspectionId = insp.Id,
+                Name         = insp.Name,
+                Count        = markers.Count,
+                Found        = markers.Count > 0,
+                Markers      = markers,
             };
         }
 

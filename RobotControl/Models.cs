@@ -194,6 +194,17 @@ public class PolygonVisionStepOutput
     [JsonPropertyName("centerYVar")]   public string? CenterYVar   { get; set; }
 }
 
+/// <summary>Maps one ArucoInspection's outputs to program variable names.</summary>
+public class ArucoVisionStepOutput
+{
+    [JsonPropertyName("inspectionId")]    public string  InspectionId    { get; set; } = "";
+    [JsonPropertyName("countVar")]        public string? CountVar        { get; set; }
+    [JsonPropertyName("foundVar")]        public string? FoundVar        { get; set; }
+    [JsonPropertyName("firstIdVar")]      public string? FirstIdVar      { get; set; }
+    [JsonPropertyName("firstCenterXVar")] public string? FirstCenterXVar { get; set; }
+    [JsonPropertyName("firstCenterYVar")] public string? FirstCenterYVar { get; set; }
+}
+
 public class ConditionItem
 {
     [JsonPropertyName("id")]       public string Id       { get; set; } = "";
@@ -346,6 +357,7 @@ public class ProgramStep
     [JsonPropertyName("visionOutputs")]     public List<VisionStepOutput>?         VisionOutputs  { get; set; }
     [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>?    ColorOutputs   { get; set; }
     [JsonPropertyName("polygonOutputs")]    public List<PolygonVisionStepOutput>?  PolygonOutputs { get; set; }
+    [JsonPropertyName("arucoOutputs")]      public List<ArucoVisionStepOutput>?    ArucoOutputs   { get; set; }
 
     // Variable point target for move steps — overrides pointName when set
     [JsonPropertyName("varPointName")]  public string? VarPointName  { get; set; }
