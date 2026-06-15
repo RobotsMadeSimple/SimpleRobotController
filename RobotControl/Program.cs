@@ -236,6 +236,18 @@ class Program
             await context.Response.Body.WriteAsync(jpeg);
         });
 
+        // Annotated snapshot captured at the end of the most recent RunVision step for this vision program
+        app.MapGet("/program-vision-snapshot/{visionProgramId}", async (string visionProgramId, HttpContext context) =>
+        {
+            var jpeg = robotController.GetProgramVisionSnapshot(visionProgramId);
+            if (jpeg == null) { context.Response.StatusCode = 404; return; }
+
+            context.Response.ContentType = "image/jpeg";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            await context.Response.Body.WriteAsync(jpeg);
+        });
+
         app.Run("http://0.0.0.0:9000");
     }
 }

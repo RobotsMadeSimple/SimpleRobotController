@@ -119,6 +119,37 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("centerY")]      public double CenterY      { get; set; }
     }
 
+    /// <summary>ArUco marker detection inspection.</summary>
+    public class ArucoInspection
+    {
+        [JsonPropertyName("id")]            public string  Id            { get; set; } = "";
+        [JsonPropertyName("name")]          public string  Name          { get; set; } = "";
+        [JsonPropertyName("enabled")]       public bool    Enabled       { get; set; } = true;
+        [JsonPropertyName("zoneId")]        public string? ZoneId        { get; set; }
+        /// <summary>OpenCV predefined dictionary ID (1=4x4_100 default, see ArUco dictionary list).</summary>
+        [JsonPropertyName("dictionaryId")]  public int     DictionaryId  { get; set; } = 1;
+        [JsonPropertyName("minMarkerArea")] public float   MinMarkerArea { get; set; } = 100;
+        [JsonPropertyName("maxMarkerArea")] public float   MaxMarkerArea { get; set; } = 100000;
+    }
+
+    public class ArucoMarkerResult
+    {
+        [JsonPropertyName("markerId")] public int    MarkerId { get; set; }
+        /// <summary>Normalized (0–1) center X of the detected marker.</summary>
+        [JsonPropertyName("centerX")]  public double CenterX  { get; set; }
+        /// <summary>Normalized (0–1) center Y of the detected marker.</summary>
+        [JsonPropertyName("centerY")]  public double CenterY  { get; set; }
+    }
+
+    public class ArucoResult
+    {
+        [JsonPropertyName("inspectionId")] public string                  InspectionId { get; set; } = "";
+        [JsonPropertyName("name")]         public string                  Name         { get; set; } = "";
+        [JsonPropertyName("count")]        public int                     Count        { get; set; }
+        [JsonPropertyName("found")]        public bool                    Found        { get; set; }
+        [JsonPropertyName("markers")]      public List<ArucoMarkerResult> Markers      { get; set; } = new();
+    }
+
     public class VisionProgram
     {
         [JsonPropertyName("id")]                  public string                        Id                 { get; set; } = "";
@@ -129,6 +160,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("inspections")]         public List<BlobInspection>          Inspections        { get; set; } = new();
         [JsonPropertyName("colorInspections")]    public List<ColorCoverageInspection> ColorInspections   { get; set; } = new();
         [JsonPropertyName("polygonInspections")]  public List<PolygonInspection>       PolygonInspections { get; set; } = new();
+        [JsonPropertyName("arucoInspections")]   public List<ArucoInspection>         ArucoInspections   { get; set; } = new();
         [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs  { get; set; }
     }
 
@@ -155,5 +187,6 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("inspections")]     public List<InspectionResult>    Inspections    { get; set; } = new();
         [JsonPropertyName("colorResults")]    public List<ColorCoverageResult> ColorResults   { get; set; } = new();
         [JsonPropertyName("polygonResults")]  public List<PolygonResult>       PolygonResults { get; set; } = new();
+        [JsonPropertyName("arucoResults")]   public List<ArucoResult>         ArucoResults   { get; set; } = new();
     }
 }

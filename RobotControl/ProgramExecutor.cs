@@ -990,6 +990,34 @@ namespace Controller.RobotControl
                     _variables[output.CenterYVar] = pr.CenterY;
             }
 
+            foreach (var output in step.ArucoOutputs ?? [])
+            {
+                var ar = result.ArucoResults.Find(r => r.InspectionId == output.InspectionId);
+                if (ar == null) continue;
+
+                if (!string.IsNullOrEmpty(output.CountVar))
+                    _variables[output.CountVar] = ar.Count;
+
+                if (!string.IsNullOrEmpty(output.FoundVar))
+                    _variables[output.FoundVar] = ar.Found ? 1 : 0;
+
+                var first = ar.Markers.FirstOrDefault();
+                if (first != null)
+                {
+                    if (!string.IsNullOrEmpty(output.FirstIdVar))
+                        _variables[output.FirstIdVar] = first.MarkerId;
+
+                    if (!string.IsNullOrEmpty(output.FirstCenterXVar))
+                        _variables[output.FirstCenterXVar] = first.CenterX;
+
+                    if (!string.IsNullOrEmpty(output.FirstCenterYVar))
+                        _variables[output.FirstCenterYVar] = first.CenterY;
+                }
+            }
+
+            var snap = proc.GetLatestAnnotated();
+            if (snap != null) _controller.SetProgramVisionSnapshot(_visionProgramId!, snap);
+
             _controller.VisionManager.StopProgram(_visionProgramId!);
             _awaitingVision  = false;
             _visionProgramId = null;

@@ -9,7 +9,9 @@ namespace Controller.RobotControl
     ///
     /// Supported syntax:
     ///   Variables    : $varName
+    ///   List count   : $listName.length  or  $listName.count
     ///   List index   : $listName[indexExpr]
+    ///   Point count  : $pointsVar.length  or  $pointsVar.count
     ///   Point comp.  : $pointsVar[indexExpr].x   (x/y/z/rx/ry/rz)
     ///   Point comp.  : $pointsVar[indexExpr][0]  (0=x 1=y 2=z 3=rx 4=ry 5=rz)
     ///   Literals     : 3.14  -5  100
@@ -93,6 +95,20 @@ namespace Controller.RobotControl
             {
                 i++;
                 string name = tok.Value;
+
+                // .length / .count — returns the number of elements in a list or points variable
+                if (i + 1 < t.Count && t[i].Type == TokType.Dot && t[i + 1].Type == TokType.Word)
+                {
+                    string prop = t[i + 1].Value;
+                    if (prop.Equals("length", StringComparison.OrdinalIgnoreCase) ||
+                        prop.Equals("count",  StringComparison.OrdinalIgnoreCase))
+                    {
+                        i += 2;
+                        if (listVars != null && listVars.TryGetValue(name, out var countList)) return countList.Count;
+                        if (ptVars   != null && ptVars  .TryGetValue(name, out var countPts))  return countPts.Count;
+                        return 0;
+                    }
+                }
 
                 // Array indexing: $name[indexExpr]
                 if (i < t.Count && t[i].Type == TokType.LBracket)
