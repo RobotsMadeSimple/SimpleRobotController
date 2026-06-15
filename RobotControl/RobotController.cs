@@ -14,6 +14,7 @@ namespace Controller.RobotControl
     {
         public PointRepository       pointRepo       = new();
         public ToolRepository        toolRepo        = new();
+        public LocalRepository       localRepo       = new();
         public BuiltProgramRepository builtProgramRepo = new();
         public GridRepository  gridRepo  = new();
         public StackRepository stackRepo = new();
@@ -76,8 +77,24 @@ namespace Controller.RobotControl
 
         // Active tool name — "" means no tool (origin Vector6)
         private string activeTool = "";
+        // Active local name — "" means no local (zero offset)
+        private string activeLocal = "";
+        public Vector6 CurrentLocal = Vector6.Zero;
         public string HomingState => homingState;
         public void TriggerHoming() => startHoming = true;
+        public void ApplyLocal(string? name)
+        {
+            if (string.IsNullOrEmpty(name) || string.Equals(name, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                activeLocal  = "";
+                CurrentLocal = Vector6.Zero;
+            }
+            else
+            {
+                var local = localRepo.Get(name);
+                if (local != null) { activeLocal = name; CurrentLocal = new Vector6(local.X, local.Y, local.Z, local.RX, local.RY, local.RZ); }
+            }
+        }
         public void ApplyTool(string? name)
         {
             if (string.IsNullOrEmpty(name) || name == "none")
@@ -155,7 +172,7 @@ namespace Controller.RobotControl
             stb.Start();
 
 
-            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, builtProgramRepo, gridRepo, stackRepo);
+            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo);
 
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
@@ -797,6 +814,10 @@ namespace Controller.RobotControl
                             lastToolUpdate = toolRepo.LastUpdatedUnixMs,
                             activeTool     = this.activeTool,
 
+                            // Local repository
+                            lastLocalUpdate = localRepo.LastUpdatedUnixMs,
+                            activeLocal     = this.activeLocal,
+
                             // Built program repository
                             lastBuiltProgramUpdate = builtProgramRepo.LastUpdatedUnixMs,
 
@@ -983,6 +1004,68 @@ namespace Controller.RobotControl
                             CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
                             CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
                         }
+                    }
+                    break;
+
+                // ── Local repository ──────────────────────────────────────
+
+                case "GetLocals":
+                    payload = new { locals = localRepo.localsJson };
+                    break;
+
+                case "CreateLocal":
+                    {
+                        var ep = LoadParams<EditLocalParams>(command);
+                        var v  = new Vector6(ep.X ?? 0, ep.Y ?? 0, ep.Z ?? 0,
+                                             ep.RX ?? 0, ep.RY ?? 0, ep.RZ ?? 0);
+                        localRepo.SaveLocal(ep.Name, v);
+                        if (!string.IsNullOrEmpty(ep.Description))
+                        {
+                            localRepo.EditLocal(ep.Name, new()
+                            {
+                                ["Description"] = ep.Description
+                            });
+                        }
+                    }
+                    break;
+
+                case "EditLocal":
+                    {
+                        var ep     = LoadParams<EditLocalParams>(command);
+                        var values = new Dictionary<string, object?>();
+                        if (ep.NewName      != null) values["Name"]        = ep.NewName;
+                        if (ep.Description  != null) values["Description"] = ep.Description;
+                        if (ep.X.HasValue)           values["X"]           = ep.X.Value;
+                        if (ep.Y.HasValue)           values["Y"]           = ep.Y.Value;
+                        if (ep.Z.HasValue)           values["Z"]           = ep.Z.Value;
+                        if (ep.RX.HasValue)          values["RX"]          = ep.RX.Value;
+                        if (ep.RY.HasValue)          values["RY"]          = ep.RY.Value;
+                        if (ep.RZ.HasValue)          values["RZ"]          = ep.RZ.Value;
+                        localRepo.EditLocal(ep.Name, values);
+
+                        // Keep activeLocal name in sync after a rename
+                        if (ep.NewName != null && activeLocal == ep.Name)
+                            activeLocal = ep.NewName;
+                    }
+                    break;
+
+                case "DeleteLocal":
+                    {
+                        var lp = LoadParams<LocalNameParams>(command);
+                        localRepo.DeleteLocal(lp.Name);
+                        // Clear active local if the deleted one was active
+                        if (activeLocal == lp.Name)
+                        {
+                            activeLocal  = "";
+                            CurrentLocal = Vector6.Zero;
+                        }
+                    }
+                    break;
+
+                case "SetActiveLocal":
+                    {
+                        var lp = LoadParams<LocalNameParams>(command);
+                        ApplyLocal(lp.Name);
                     }
                     break;
 
