@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, RunVision }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, RunVision, SetLocal, ClearLocal }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -331,6 +331,9 @@ public class ProgramStep
 
     // SetTool
     [JsonPropertyName("toolName")]        public string? ToolName { get; set; }
+
+    // SetLocal / ClearLocal — also used as per-step local override on move steps
+    [JsonPropertyName("localName")]       public string? LocalName { get; set; }
 
     // JumpL / JumpJ — Z height used for lift and lower legs (mm). JumpZStart/JumpZEnd override each leg independently.
     [JsonPropertyName("jumpZ")]      public double? JumpZ      { get; set; }
@@ -753,6 +756,43 @@ public class EditToolParams
 }
 
 public class ToolNameParams
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = default!;
+}
+
+// ── Local ─────────────────────────────────────────────────────────────────────
+
+/// <summary>Named user/work-frame coordinate system stored in the local repository.</summary>
+public class Local : Vector6, INamedVector
+{
+    public string? Name { get; set; }
+    public string Description { get; set; } = "";
+    public long LastUpdatedUnixMs { get; set; }
+}
+
+public class LocalHistoryEntry
+{
+    public long TimestampUnixMs { get; set; }
+    public Local Local { get; set; } = new();
+}
+
+// ── Local command params ──────────────────────────────────────────────────────
+
+public class EditLocalParams
+{
+    [JsonPropertyName("name")]        public string  Name        { get; set; } = default!;
+    [JsonPropertyName("newName")]     public string? NewName     { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("x")]           public double? X           { get; set; }
+    [JsonPropertyName("y")]           public double? Y           { get; set; }
+    [JsonPropertyName("z")]           public double? Z           { get; set; }
+    [JsonPropertyName("rx")]          public double? RX          { get; set; }
+    [JsonPropertyName("ry")]          public double? RY          { get; set; }
+    [JsonPropertyName("rz")]          public double? RZ          { get; set; }
+}
+
+public class LocalNameParams
 {
     [JsonPropertyName("name")]
     public string Name { get; set; } = default!;

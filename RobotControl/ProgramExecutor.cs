@@ -18,6 +18,7 @@ namespace Controller.RobotControl
         private readonly ProgramCycleManager      _programManager;
         private readonly PointRepository          _pointRepo;
         private readonly ToolRepository           _toolRepo;
+        private readonly LocalRepository          _localRepo;
         private readonly BuiltProgramRepository   _builtProgramRepo;
         private readonly GridRepository           _gridRepo;
         private readonly StackRepository          _stackRepo;
@@ -50,6 +51,9 @@ namespace Controller.RobotControl
         private long   _visionStartMs;
         private string? _visionProgramId;
 
+        // Active local during program execution — null = no local (zero offset)
+        private Vector6? _activeLocal;
+
         // Program variables — initialised from BuiltProgram.Variables on Start(), mutated by SetVariable steps
         private readonly Dictionary<string, double>            _variables        = new();
         private readonly Dictionary<string, List<double>>      _listVariables    = new();
@@ -60,12 +64,13 @@ namespace Controller.RobotControl
         public bool IsPaused  => _isPaused;
         public string? CurrentProgramName => _program?.Name;
 
-        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, BuiltProgramRepository builtProgramRepo, GridRepository gridRepo, StackRepository stackRepo)
+        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, LocalRepository localRepo, BuiltProgramRepository builtProgramRepo, GridRepository gridRepo, StackRepository stackRepo)
         {
             _controller       = controller;
             _programManager   = programManager;
             _pointRepo        = pointRepo;
             _toolRepo         = toolRepo;
+            _localRepo        = localRepo;
             _builtProgramRepo = builtProgramRepo;
             _gridRepo         = gridRepo;
             _stackRepo        = stackRepo;
@@ -122,6 +127,7 @@ namespace Controller.RobotControl
             _pendingAuxStep  = null;
             _awaitingVision  = false;
             _visionProgramId = null;
+            _activeLocal     = null;
             _running         = true;
         }
 
@@ -178,6 +184,7 @@ namespace Controller.RobotControl
             _pendingAuxStep  = null;
             _awaitingVision  = false;
             _visionProgramId = null;
+            _activeLocal     = null;
             _globalStepIndex = 0;
             _loopDepth       = 0;
             _jumpSubStep     = 0;
@@ -332,6 +339,14 @@ namespace Controller.RobotControl
                     ExecuteSetTool(step, frame);
                     break;
 
+                case StepType.SetLocal:
+                    ExecuteSetLocal(step, frame);
+                    break;
+
+                case StepType.ClearLocal:
+                    ExecuteClearLocal(step, frame);
+                    break;
+
                 case StepType.RunHoming:
                     ExecuteRunHoming(step, frame);
                     break;
@@ -482,6 +497,27 @@ namespace Controller.RobotControl
             if (step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
             if (step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
 
+            // Apply active local offset — per-step localName overrides the program-level active local
+            Vector6? effectiveLocal;
+            if (!string.IsNullOrEmpty(step.LocalName))
+            {
+                var stepLocal = _localRepo.Get(step.LocalName);
+                effectiveLocal = stepLocal != null ? new Vector6(stepLocal.X, stepLocal.Y, stepLocal.Z, stepLocal.RX, stepLocal.RY, stepLocal.RZ) : null;
+            }
+            else
+            {
+                effectiveLocal = _activeLocal;
+            }
+            if (effectiveLocal != null)
+            {
+                finalX  += effectiveLocal.X;
+                finalY  += effectiveLocal.Y;
+                finalZ  += effectiveLocal.Z;
+                finalRX += effectiveLocal.RX;
+                finalRY += effectiveLocal.RY;
+                finalRZ += effectiveLocal.RZ;
+            }
+
             var cmd = new RobotCommand
             {
                 CommandType = step.Type == StepType.MoveL ? "MoveL" : "MoveJ",
@@ -608,6 +644,27 @@ namespace Controller.RobotControl
                 if (step.OverrideRX.HasValue || step.Expressions?.ContainsKey("overrideRX") == true) finalRX = EvalField(step, "overrideRX", step.OverrideRX ?? 0);
                 if (step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
                 if (step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
+
+                // Apply active local offset
+                Vector6? jumpEffectiveLocal;
+                if (!string.IsNullOrEmpty(step.LocalName))
+                {
+                    var stepLocal = _localRepo.Get(step.LocalName);
+                    jumpEffectiveLocal = stepLocal != null ? new Vector6(stepLocal.X, stepLocal.Y, stepLocal.Z, stepLocal.RX, stepLocal.RY, stepLocal.RZ) : null;
+                }
+                else
+                {
+                    jumpEffectiveLocal = _activeLocal;
+                }
+                if (jumpEffectiveLocal != null)
+                {
+                    finalX  += jumpEffectiveLocal.X;
+                    finalY  += jumpEffectiveLocal.Y;
+                    finalZ  += jumpEffectiveLocal.Z;
+                    finalRX += jumpEffectiveLocal.RX;
+                    finalRY += jumpEffectiveLocal.RY;
+                    finalRZ += jumpEffectiveLocal.RZ;
+                }
 
                 bool hasJumpZ      = step.JumpZ.HasValue      || step.Expressions?.ContainsKey("jumpZ")      == true;
                 bool hasJumpZStart = step.JumpZStart.HasValue || step.Expressions?.ContainsKey("jumpZStart") == true;
@@ -1164,6 +1221,29 @@ namespace Controller.RobotControl
             frame.Index++;
         }
 
+        private void ExecuteSetLocal(ProgramStep step, StepListFrame frame)
+        {
+            if (string.IsNullOrEmpty(step.LocalName))
+            {
+                _activeLocal = null;
+            }
+            else
+            {
+                var local = _localRepo.Get(step.LocalName);
+                if (local is null) { Finish(global::ProgramStatus.Error, $"Local not found: {step.LocalName}"); return; }
+                _activeLocal = new Vector6(local.X, local.Y, local.Z, local.RX, local.RY, local.RZ);
+            }
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteClearLocal(ProgramStep step, StepListFrame frame)
+        {
+            _activeLocal = null;
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
         private bool _homingTriggered = false;
         private void ExecuteRunHoming(ProgramStep step, StepListFrame frame)
         {
@@ -1440,6 +1520,8 @@ namespace Controller.RobotControl
                     ? $"If [{step.Condition.Combinator} · {step.Condition.Items.Count} condition(s)]"
                     : "If Condition",
                 StepType.SetTool      => $"Set Tool → {(string.IsNullOrEmpty(step.ToolName) ? "None" : step.ToolName)}",
+                StepType.SetLocal     => $"Set Local → {(string.IsNullOrEmpty(step.LocalName) ? "None" : step.LocalName)}",
+                StepType.ClearLocal   => "Clear Local",
                 StepType.RunHoming     => "Run Homing",
                 StepType.AuxMove       => !string.IsNullOrEmpty(step.AuxUnit) && step.AuxDistance.HasValue
                     ? $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxDistance} {step.AuxUnit}"
