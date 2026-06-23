@@ -4,6 +4,7 @@ using Controller.RobotControl.Nano;
 using Controller.RobotControl.Robots.ASTRO;
 using Controller.RobotControl.UsbRelay;
 using System.Diagnostics;
+using System.Linq;
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -25,6 +26,7 @@ namespace Controller.RobotControl
         public ASTROKinematics ASTRO = new();
         private readonly ProgramCycleManager programManager = new();
         private ProgramExecutor? programExecutor;
+        private BackgroundProgramManager backgroundProgramManager = null!;
 
         // Shared deserialisation options — handles string enums and camelCase from the client
         private static readonly JsonSerializerOptions _jsonOptions = new()
@@ -129,6 +131,9 @@ namespace Controller.RobotControl
 
         public List<RobotCommand> QueuedCommands = new();
 
+        // Speed override: 0.05–2.0 (5%–200%), default 1.0 (100%)
+        public double SpeedOverrideFactor { get; private set; } = 1.0;
+
         // ── Nano IO ───────────────────────────────────────────────────────────
         public NanoManager NanoManager { get; private set; } = null!;
         private long _lastStatusLightMs = 0;
@@ -187,7 +192,12 @@ namespace Controller.RobotControl
             stb.Start();
 
 
-            programExecutor = new ProgramExecutor(this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo);
+            backgroundProgramManager = new BackgroundProgramManager(
+                this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo);
+
+            programExecutor = new ProgramExecutor(
+                this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo,
+                isBackground: false, globalVars: backgroundProgramManager.GlobalVars, backgroundManager: backgroundProgramManager);
 
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
@@ -229,6 +239,9 @@ namespace Controller.RobotControl
 
                 // Step through any active built program
                 programExecutor?.Update();
+
+                // Step through all background programs
+                backgroundProgramManager.Update();
 
                 // Run the robot motion control
                 RunMotion();
@@ -578,6 +591,13 @@ namespace Controller.RobotControl
                     break;
                 }
 
+                case "SetSpeedOverride":
+                {
+                    var p = LoadParams<SetSpeedOverrideParams>(command);
+                    SpeedOverrideFactor = Math.Clamp(p.Percent / 100.0, 0.05, 2.0);
+                    break;
+                }
+
                 case "Home":
                     startHoming = true;
                     break;
@@ -833,6 +853,11 @@ namespace Controller.RobotControl
                             lastLocalUpdate = localRepo.LastUpdatedUnixMs,
                             activeLocal     = this.activeLocal,
 
+                            // Background programs currently running
+                            backgroundPrograms = backgroundProgramManager.GetStatuses()
+                                .Select(s => new { name = s.Name, currentStep = s.CurrentStep })
+                                .ToList(),
+
                             // Built program repository
                             lastBuiltProgramUpdate = builtProgramRepo.LastUpdatedUnixMs,
 
@@ -841,6 +866,8 @@ namespace Controller.RobotControl
 
                             // Stack repository
                             lastStackUpdate = stackRepo.LastUpdatedUnixMs,
+
+                            speedOverridePercent = SpeedOverrideFactor * 100.0,
 
                             version = _version,
                             isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
@@ -1091,12 +1118,43 @@ namespace Controller.RobotControl
                         var p = LoadParams<SaveBuiltProgramParams>(command);
                         builtProgramRepo.Save(new BuiltProgram
                         {
-                            Name        = p.Name,
-                            Description = p.Description,
-                            Steps       = p.Steps,
-                            Variables   = p.Variables,
-                            IsRoutine   = p.IsRoutine,
+                            Name                = p.Name,
+                            Description         = p.Description,
+                            Steps               = p.Steps,
+                            Variables           = p.Variables,
+                            IsRoutine           = p.IsRoutine,
+                            IsBackground        = p.IsBackground,
+                            KillBackgroundOnStop = p.KillBackgroundOnStop,
                         });
+                    }
+                    break;
+
+                case "StartBackgroundProgram":
+                    {
+                        var p    = LoadParams<ProgramActionParams>(command);
+                        var built = builtProgramRepo.Get(p.ProgramName);
+                        if (built != null && built.IsBackground)
+                            backgroundProgramManager.TryStart(built);
+                    }
+                    break;
+
+                case "StopBackgroundProgram":
+                    {
+                        var p = LoadParams<ProgramActionParams>(command);
+                        backgroundProgramManager.Stop(p.ProgramName);
+                    }
+                    break;
+
+                case "GetProgramVariables":
+                    {
+                        var p    = LoadParams<BuiltProgramNameParams>(command);
+                        var vars = (programExecutor?.CurrentProgramName?.Equals(p.Name, StringComparison.OrdinalIgnoreCase) == true)
+                            ? programExecutor.GetDisplayVariables()
+                            : backgroundProgramManager.GetDisplayVariables(p.Name);
+                        payload = new
+                        {
+                            variables = vars.Select(v => new { name = v.Name, value = v.Value, isBoolean = v.IsBoolean }).ToList()
+                        };
                     }
                     break;
 

@@ -60,21 +60,165 @@ namespace Controller.RobotControl
         private readonly Dictionary<string, List<Vector6Val>>  _pointVariables   = new();
         private readonly HashSet<string>                       _booleanVariables = new(StringComparer.OrdinalIgnoreCase);
 
+        // Background execution support
+        private readonly bool                    _isBackground;
+        private readonly GlobalVariableStore?    _globalVars;
+        private readonly BackgroundProgramManager? _backgroundManager;
+        private readonly HashSet<string>         _globalVarNames = new(StringComparer.OrdinalIgnoreCase);
+
+        // WaitForBackground: set to a program name while blocking on it
+        private string? _waitingForBackground;
+
+        // Persistent variables — names saved here; values written to disk on Finish()
+        private readonly HashSet<string> _persistentVarNames = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly string   _persistPath        = System.IO.Path.Combine(AppContext.BaseDirectory, "persistent_vars.json");
+        private static readonly object   _persistLock        = new();
+
+        // Stopwatch state per variable name
+        private struct StopwatchEntry { public bool Running; public long AccumMs; public long StartTick; }
+        private readonly Dictionary<string, StopwatchEntry> _stopwatches = new(StringComparer.OrdinalIgnoreCase);
+
         public bool IsRunning => _running;
         public bool IsPaused  => _isPaused;
         public string? CurrentProgramName => _program?.Name;
+        public string  CurrentStepDescription { get; private set; } = "";
 
-        public ProgramExecutor(RobotController controller, ProgramCycleManager programManager, PointRepository pointRepo, ToolRepository toolRepo, LocalRepository localRepo, BuiltProgramRepository builtProgramRepo, GridRepository gridRepo, StackRepository stackRepo)
+        /// <summary>Returns current values for all scalar variables flagged DisplayOnMonitor.</summary>
+        public IReadOnlyList<(string Name, double Value, bool IsBoolean)> GetDisplayVariables()
         {
-            _controller       = controller;
-            _programManager   = programManager;
-            _pointRepo        = pointRepo;
-            _toolRepo         = toolRepo;
-            _localRepo        = localRepo;
-            _builtProgramRepo = builtProgramRepo;
-            _gridRepo         = gridRepo;
-            _stackRepo        = stackRepo;
+            if (_program?.Variables == null) return [];
+            var merged = MergedVars();
+            var result = new List<(string, double, bool)>();
+            foreach (var v in _program.Variables)
+            {
+                if (v.DisplayOnMonitor != true) continue;
+                if (v.Values != null || v.Points != null) continue; // lists and point arrays not supported
+                merged.TryGetValue(v.Name, out double val);
+                result.Add((v.Name, val, v.IsBoolean == true));
+            }
+            return result;
         }
+
+        public ProgramExecutor(
+            RobotController controller, ProgramCycleManager programManager,
+            PointRepository pointRepo, ToolRepository toolRepo, LocalRepository localRepo,
+            BuiltProgramRepository builtProgramRepo, GridRepository gridRepo, StackRepository stackRepo,
+            bool isBackground = false, GlobalVariableStore? globalVars = null, BackgroundProgramManager? backgroundManager = null)
+        {
+            _controller        = controller;
+            _programManager    = programManager;
+            _pointRepo         = pointRepo;
+            _toolRepo          = toolRepo;
+            _localRepo         = localRepo;
+            _builtProgramRepo  = builtProgramRepo;
+            _gridRepo          = gridRepo;
+            _stackRepo         = stackRepo;
+            _isBackground      = isBackground;
+            _globalVars        = globalVars;
+            _backgroundManager = backgroundManager;
+        }
+
+        /// <summary>Returns a merged snapshot of local + global variables for expression evaluation.
+        /// Always injects the built-in <c>time_ms</c> variable (current Unix timestamp in milliseconds).</summary>
+        private Dictionary<string, double> MergedVars()
+        {
+            var merged = new Dictionary<string, double>(_variables, StringComparer.OrdinalIgnoreCase);
+            if (_globalVars != null)
+                foreach (var kv in _globalVars.Snapshot()) merged[kv.Key] = kv.Value;
+            merged["time_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return merged;
+        }
+
+        // ── Persistent variable helpers ───────────────────────────────────────
+
+        private static Dictionary<string, double> LoadPersistentVars()
+        {
+            lock (_persistLock)
+            {
+                try
+                {
+                    if (!System.IO.File.Exists(_persistPath)) return new();
+                    var json = System.IO.File.ReadAllText(_persistPath);
+                    return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, double>>(json)
+                           ?? new();
+                }
+                catch { return new(); }
+            }
+        }
+
+        private static void WritePersistentVars(Dictionary<string, double> values)
+        {
+            lock (_persistLock)
+            {
+                try
+                {
+                    var json = System.Text.Json.JsonSerializer.Serialize(values);
+                    System.IO.File.WriteAllText(_persistPath, json);
+                }
+                catch { /* best-effort */ }
+            }
+        }
+
+        private void SavePersistentVars()
+        {
+            if (_persistentVarNames.Count == 0) return;
+            var existing = LoadPersistentVars();
+            foreach (var name in _persistentVarNames)
+            {
+                var val = _globalVarNames.Contains(name) && _globalVars != null && _globalVars.TryGet(name, out var gv)
+                    ? gv
+                    : _variables.TryGetValue(name, out var v) ? v : 0;
+                existing[name] = val;
+            }
+            WritePersistentVars(existing);
+        }
+
+        // ── Variable write helper — respects global store ─────────────────────
+
+        private void SetVariable(string name, double value)
+        {
+            if (_globalVarNames.Contains(name) && _globalVars != null)
+                _globalVars.Set(name, value);
+            else
+                _variables[name] = value;
+        }
+
+        // ── ForEach helpers ───────────────────────────────────────────────────
+
+        private bool EvalWhileCondition(ConditionGroup condition)
+        {
+            var allVars = MergedVars();
+            foreach (var kv in BuildIoVariables()) allVars[kv.Key] = kv.Value;
+            return EvaluateConditionGroup(condition, allVars);
+        }
+
+        private void InjectForEachVars(StepListFrame frame)
+        {
+            if (!frame.IsForEach) return;
+
+            int idx = frame.ForEachCurrentIndex;
+
+            // Write index variable if configured
+            if (!string.IsNullOrEmpty(frame.ForEachIndexVar))
+                SetVariable(frame.ForEachIndexVar, idx);
+
+            // Write value variable — for point arrays the value is the index itself
+            if (!string.IsNullOrEmpty(frame.ForEachValueVar))
+            {
+                if (_listVariables.TryGetValue(frame.ForEachSourceVar, out var list))
+                    SetVariable(frame.ForEachValueVar, idx < list.Count ? list[idx] : 0);
+                else
+                    SetVariable(frame.ForEachValueVar, idx); // point array or unknown: expose index
+            }
+        }
+
+        private static bool IsRestrictedInBackground(StepType type) => type switch
+        {
+            StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ => true,
+            StepType.SetTool or StepType.SetSpeedL or StepType.SetSpeedJ => true,
+            StepType.SetLocal or StepType.ClearLocal or StepType.RunHoming => true,
+            _ => false,
+        };
 
         // ── Public control ───────────────────────────────────────────────────
 
@@ -106,15 +250,42 @@ namespace Controller.RobotControl
             _listVariables.Clear();
             _pointVariables.Clear();
             _booleanVariables.Clear();
+            _globalVarNames.Clear();
+            _persistentVarNames.Clear();
+            _stopwatches.Clear();
+            _waitingForBackground = null;
+
+            var savedPersistent = LoadPersistentVars();
+
             foreach (var v in program.Variables ?? [])
             {
+                bool isGlobal     = v.IsGlobal == true && _globalVars != null;
+                bool isPersistent = v.IsPersistent == true;
                 if (v.Points != null)
                     _pointVariables[v.Name] = new List<Vector6Val>(v.Points);
                 else if (v.Values != null && v.Values.Count > 0)
                     _listVariables[v.Name] = v.Values;
+                else if (v.IsStopwatch == true)
+                {
+                    _stopwatches[v.Name] = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
+                    _variables[v.Name] = 0; // elapsed ms, updated each tick
+                }
                 else
                 {
-                    _variables[v.Name] = v.Value;
+                    // Persistent: restore saved value if available, else use declared default
+                    double initialValue = isPersistent && savedPersistent.TryGetValue(v.Name, out var saved)
+                        ? saved
+                        : v.Value;
+
+                    if (isGlobal)
+                    {
+                        _globalVarNames.Add(v.Name);
+                        _globalVars!.InitIfAbsent(v.Name, initialValue);
+                    }
+                    else
+                        _variables[v.Name] = initialValue;
+
+                    if (isPersistent) _persistentVarNames.Add(v.Name);
                     if (v.IsBoolean == true) _booleanVariables.Add(v.Name);
                 }
             }
@@ -150,20 +321,25 @@ namespace Controller.RobotControl
         {
             if (!_running) return;
 
-            // Request a queue drain on the control loop thread — calling Clear() directly
-            // here would race with RunCommands() which reads QueuedCommands on the loop thread.
-            _controller.RequestQueueDrain();
+            if (!_isBackground)
+            {
+                // Request a queue drain on the control loop thread — calling Clear() directly
+                // here would race with RunCommands() which reads QueuedCommands on the loop thread.
+                _controller.RequestQueueDrain();
+                // Hard-stop any active motion profiler so IsMoving clears immediately.
+                _controller.HardStop();
+            }
+
+            if (_awaitingVision && _visionProgramId != null)
+                _controller.VisionManager.StopProgram(_visionProgramId);
+
             _awaitingMove    = false;
             _pendingStep     = null;
             _awaitingAuxMove = false;
             _pendingAuxStep  = null;
             _awaitingVision  = false;
             _visionProgramId = null;
-
-            // Hard-stop any active motion profiler so IsMoving clears immediately.
-            // Without this, a stuck profiler (e.g. zero-speed) would leave the
-            // controller in a permanent "moving" state even after the program stops.
-            _controller.HardStop();
+            _waitingForBackground = null;
 
             // Emit Stopped status immediately rather than waiting for the next Update() tick.
             Finish(global::ProgramStatus.Stopped, "Stopped by user");
@@ -175,24 +351,28 @@ namespace Controller.RobotControl
         /// </summary>
         public void Reset()
         {
-            _running         = false;
-            _stopRequested   = false;
-            _isPaused        = false;
-            _awaitingMove    = false;
-            _pendingStep     = null;
-            _awaitingAuxMove = false;
-            _pendingAuxStep  = null;
-            _awaitingVision  = false;
-            _visionProgramId = null;
-            _activeLocal     = null;
-            _globalStepIndex = 0;
-            _loopDepth       = 0;
-            _jumpSubStep     = 0;
+            _running              = false;
+            _stopRequested        = false;
+            _isPaused             = false;
+            _awaitingMove         = false;
+            _pendingStep          = null;
+            _awaitingAuxMove      = false;
+            _pendingAuxStep       = null;
+            _awaitingVision       = false;
+            _visionProgramId      = null;
+            _activeLocal          = null;
+            _globalStepIndex      = 0;
+            _loopDepth            = 0;
+            _jumpSubStep          = 0;
+            _waitingForBackground = null;
             _frameStack.Clear();
             _variables.Clear();
             _listVariables.Clear();
             _pointVariables.Clear();
+            _stopwatches.Clear();
             _booleanVariables.Clear();
+            _globalVarNames.Clear();
+            _persistentVarNames.Clear();
         }
 
         // ── Main update — called every control loop tick ──────────────────────
@@ -200,6 +380,26 @@ namespace Controller.RobotControl
         public void Update()
         {
             if (!_running || _program is null) return;
+
+            // Blocking on a background program finishing
+            if (_waitingForBackground != null)
+            {
+                if (_backgroundManager == null || !_backgroundManager.IsRunning(_waitingForBackground))
+                    _waitingForBackground = null; // done or never started — advance
+                else
+                    return;
+            }
+
+            // Refresh stopwatch variable values so expressions always see the current elapsed time
+            if (_stopwatches.Count > 0)
+            {
+                var nowTick = System.Environment.TickCount64;
+                foreach (var name in _stopwatches.Keys)
+                {
+                    var sw = _stopwatches[name];
+                    _variables[name] = sw.Running ? sw.AccumMs + (nowTick - sw.StartTick) : sw.AccumMs;
+                }
+            }
 
             // If we dispatched a robot move, wait until the queue is clear and the robot is idle
             if (_awaitingMove)
@@ -251,17 +451,55 @@ namespace Controller.RobotControl
                 // If this was a loop frame, decrement and possibly re-push
                 if (frame.IsLoop)
                 {
-                    frame.LoopRemaining--;
-                    if (frame.LoopRemaining == 0)
+                    if (frame.WhileCondition != null)
                     {
-                        // Loop finished; outer frame already advanced past the loop step
-                        _loopDepth--;
+                        // While loop: re-push only if condition still holds
+                        if (EvalWhileCondition(frame.WhileCondition))
+                            _frameStack.Push(new StepListFrame(frame.Steps, 0, isLoop: true,
+                                loopRemaining: int.MaxValue, whileCondition: frame.WhileCondition));
+                        else
+                            _loopDepth--;
+                    }
+                    else if (frame.IsForEach)
+                    {
+                        frame.ForEachCurrentIndex++;
+                        if (frame.ForEachCurrentIndex >= frame.ForEachCount)
+                        {
+                            _loopDepth--;
+                        }
+                        else
+                        {
+                            var nextFrame = new StepListFrame(frame.Steps, 0, isLoop: true,
+                                loopRemaining: 1, isForEach: true,
+                                forEachCount: frame.ForEachCount,
+                                forEachCurrentIndex: frame.ForEachCurrentIndex,
+                                forEachSourceVar: frame.ForEachSourceVar,
+                                forEachValueVar: frame.ForEachValueVar,
+                                forEachIndexVar: frame.ForEachIndexVar);
+                            _frameStack.Push(nextFrame);
+                            InjectForEachVars(nextFrame);
+                        }
                     }
                     else
                     {
-                        // Re-run the loop body
-                        _frameStack.Push(new StepListFrame(frame.Steps, 0, isLoop: true,
-                            loopRemaining: frame.LoopRemaining));
+                        frame.LoopRemaining--;
+                        if (frame.LoopRemaining == 0)
+                        {
+                            // Loop finished; outer frame already advanced past the loop step
+                            _loopDepth--;
+                        }
+                        else
+                        {
+                            // Increment count-loop index variable if configured
+                            if (!string.IsNullOrEmpty(frame.ForEachIndexVar))
+                                SetVariable(frame.ForEachIndexVar,
+                                    (frame.ForEachCount - frame.LoopRemaining)); // iteration number (0-based)
+
+                            _frameStack.Push(new StepListFrame(frame.Steps, 0, isLoop: true,
+                                loopRemaining: frame.LoopRemaining,
+                                forEachIndexVar: frame.ForEachIndexVar,
+                                forEachCount: frame.ForEachCount));
+                        }
                     }
                 }
                 return; // Re-enter next tick with updated stack
@@ -275,6 +513,20 @@ namespace Controller.RobotControl
 
         private void ExecuteStep(ProgramStep step, StepListFrame frame)
         {
+            // Background programs skip motion/tool/homing steps rather than error
+            if (_isBackground && IsRestrictedInBackground(step.Type))
+            {
+                _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+                {
+                    ProgramName     = _program!.Name,
+                    StepDescription = $"[Skipped — background] {step.Type}",
+                    ShouldLog       = true,
+                });
+                ReportStepCompleted(step);
+                frame.Index++;
+                return;
+            }
+
             switch (step.Type)
             {
                 case StepType.MoveL:
@@ -366,6 +618,26 @@ namespace Controller.RobotControl
                 case StepType.RunVision:
                     ExecuteRunVision(step, frame);
                     break;
+
+                case StepType.StartBackground:
+                    ExecuteStartBackground(step, frame);
+                    break;
+
+                case StepType.StopBackground:
+                    ExecuteStopBackground(step, frame);
+                    break;
+
+                case StepType.WaitForBackground:
+                    ExecuteWaitForBackground(step, frame);
+                    break;
+
+                case StepType.StopwatchControl:
+                    ExecuteStopwatchControl(step, frame);
+                    break;
+
+                case StepType.SaveImage:
+                    ExecuteSaveImage(step, frame);
+                    break;
             }
         }
 
@@ -452,7 +724,7 @@ namespace Controller.RobotControl
                 int ptIdx = 0;
                 if (!string.IsNullOrEmpty(step.VarPointIndex))
                 {
-                    try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(step.VarPointIndex, _variables, _listVariables, _pointVariables)); }
+                    try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(step.VarPointIndex, MergedVars(), _listVariables, _pointVariables)); }
                     catch { /* default 0 */ }
                 }
                 ptIdx = Math.Clamp(ptIdx, 0, ptList.Count - 1);
@@ -534,7 +806,7 @@ namespace Controller.RobotControl
                 TRX = hasToolOffset ? EvalField(step, "toolOffsetRX", step.ToolOffsetRX ?? 0) : null,
                 TRY = hasToolOffset ? EvalField(step, "toolOffsetRY", step.ToolOffsetRY ?? 0) : null,
                 TRZ = hasToolOffset ? EvalField(step, "toolOffsetRZ", step.ToolOffsetRZ ?? 0) : null,
-                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null,
+                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor : (double?)null,
                 Accel = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
                 Decel = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null,
             };
@@ -682,7 +954,7 @@ namespace Controller.RobotControl
                 _jumpZStart   = hasJumpZStart ? EvalField(step, "jumpZStart", step.JumpZStart ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
                 _jumpZEnd     = hasJumpZEnd   ? EvalField(step, "jumpZEnd",   step.JumpZEnd   ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
                 _jumpCmdType  = step.Type == StepType.JumpJ ? "MoveJ" : "MoveL";
-                _jumpSpeed    = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null;
+                _jumpSpeed    = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor : (double?)null;
                 _jumpAccel    = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null;
                 _jumpDecel    = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null;
                 _jumpSubStep  = 1;
@@ -758,6 +1030,7 @@ namespace Controller.RobotControl
         private string InterpolateVariables(string template)
         {
             // Matches: $name, $name[expr], $name[expr].component
+            var allVarsForTemplate = MergedVars();
             return Regex.Replace(template, @"\$(\w+)(?:\[([^\]]*)\](?:\.(\w+))?)?", m =>
             {
                 var name     = m.Groups[1].Value;
@@ -769,7 +1042,7 @@ namespace Controller.RobotControl
                 if (!hasIndex)
                 {
                     // Plain $name — scalar → value, list → count, points → "N points"
-                    if (_variables.TryGetValue(name, out var sv))
+                    if (allVarsForTemplate.TryGetValue(name, out var sv))
                         return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : sv.ToString("G6");
                     if (_listVariables.ContainsKey(name))
                         return $"{_listVariables[name].Count} items";
@@ -782,7 +1055,7 @@ namespace Controller.RobotControl
                 int idx = 0;
                 if (!string.IsNullOrEmpty(idxExpr))
                 {
-                    try { idx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, _variables, _listVariables, _pointVariables)); }
+                    try { idx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, allVarsForTemplate, _listVariables, _pointVariables)); }
                     catch { idx = 0; }
                 }
 
@@ -881,17 +1154,40 @@ namespace Controller.RobotControl
             {
                 _waitStartMs      = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 frame.WaitStarted = true;
-                // Announce the wait is in progress without counting it yet
                 ReportStepStarted(step);
                 return;
             }
 
-            var elapsed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _waitStartMs;
-            if (elapsed >= EvalField(step, "waitMs", step.WaitMs ?? 0))
+            var nowMs   = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var elapsed = nowMs - _waitStartMs;
+
+            if (step.WaitMode == "condition" && step.WaitCondition != null)
             {
-                frame.WaitStarted = false;
-                frame.Index++;
-                ReportStepCompleted(step); // count it now that the wait has elapsed
+                // Build combined variable dict (program vars + IO)
+                var allVars = MergedVars();
+                foreach (var kv in BuildIoVariables()) allVars[kv.Key] = kv.Value;
+
+                bool condMet  = EvaluateConditionGroup(step.WaitCondition, allVars);
+                int  timeout  = step.WaitTimeoutMs ?? 0;
+                bool timedOut = timeout > 0 && elapsed >= timeout;
+
+                if (condMet || timedOut)
+                {
+                    if (!string.IsNullOrEmpty(step.WaitTimeoutVariableName))
+                        SetVariable(step.WaitTimeoutVariableName, timedOut ? 1 : 0);
+                    frame.WaitStarted = false;
+                    frame.Index++;
+                    ReportStepCompleted(step);
+                }
+            }
+            else
+            {
+                if (elapsed >= EvalField(step, "waitMs", step.WaitMs ?? 0))
+                {
+                    frame.WaitStarted = false;
+                    frame.Index++;
+                    ReportStepCompleted(step);
+                }
             }
         }
 
@@ -1047,14 +1343,53 @@ namespace Controller.RobotControl
             var innerSteps = step.LoopSteps ?? new();
             if (innerSteps.Count == 0) { frame.Index++; ReportStepCompleted(step); return; }
 
-            int count     = (int)EvalField(step, "loopCount", step.LoopCount ?? 1);
-            int remaining = count == 0 ? int.MaxValue : count; // 0 = infinite
-
             ReportStepCompleted(step); // the loop header itself is done; body steps count separately
             frame.Index++;
 
-            // Push a new frame for the loop body
-            _frameStack.Push(new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: remaining));
+            if (step.LoopMode == "while" && step.LoopWhileCondition != null)
+            {
+                // Pre-check: if condition is already false, skip the body entirely
+                if (!EvalWhileCondition(step.LoopWhileCondition))
+                {
+                    _loopDepth++; _loopDepth--;
+                    return;
+                }
+                _frameStack.Push(new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: int.MaxValue,
+                    whileCondition: step.LoopWhileCondition));
+            }
+            else if (step.LoopMode == "forEach" && !string.IsNullOrEmpty(step.ForEachVariableName))
+            {
+                // Determine iteration count from the source collection
+                int count = 0;
+                if (_listVariables.TryGetValue(step.ForEachVariableName, out var lst))
+                    count = lst.Count;
+                else if (_pointVariables.TryGetValue(step.ForEachVariableName, out var pts))
+                    count = pts.Count;
+
+                if (count == 0) { _loopDepth++; _loopDepth--; return; } // empty — skip body
+
+                var bodyFrame = new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: 1,
+                    isForEach: true, forEachCount: count, forEachCurrentIndex: 0,
+                    forEachSourceVar: step.ForEachVariableName,
+                    forEachValueVar:  step.ForEachValueVariableName ?? "",
+                    forEachIndexVar:  step.ForEachIndexVariableName ?? "");
+                _frameStack.Push(bodyFrame);
+                InjectForEachVars(bodyFrame);
+            }
+            else
+            {
+                int count     = (int)EvalField(step, "loopCount", step.LoopCount ?? 1);
+                int remaining = count == 0 ? int.MaxValue : count; // 0 = infinite
+
+                // Initialise the count-loop index variable to 0 on first entry
+                string indexVar = step.ForEachIndexVariableName ?? "";
+                if (!string.IsNullOrEmpty(indexVar))
+                    SetVariable(indexVar, 0);
+
+                _frameStack.Push(new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: remaining,
+                    forEachIndexVar: indexVar, forEachCount: count == 0 ? int.MaxValue : count));
+            }
+
             _loopDepth++;
         }
 
@@ -1064,7 +1399,7 @@ namespace Controller.RobotControl
             bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
             bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
             if (hasSpeed)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor });
             if (hasAccel || hasDecel)
                 _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelS",
                     Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
@@ -1079,7 +1414,7 @@ namespace Controller.RobotControl
             bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
             bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
             if (hasSpeed)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor });
             if (hasAccel || hasDecel)
                 _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelJ",
                     Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
@@ -1219,7 +1554,7 @@ namespace Controller.RobotControl
             frame.Index++;
             ReportStepCompleted(step);
 
-            var allVars = new Dictionary<string, double>(_variables, StringComparer.OrdinalIgnoreCase);
+            var allVars = MergedVars();
             foreach (var kv in BuildIoVariables()) allVars[kv.Key] = kv.Value;
 
             if (step.Condition != null && EvaluateConditionGroup(step.Condition, allVars))
@@ -1413,13 +1748,122 @@ namespace Controller.RobotControl
             {
                 try
                 {
-                    _variables[step.VariableName] = ExpressionEvaluator.Evaluate(step.VariableExpr, _variables, _listVariables);
+                    double value = ExpressionEvaluator.Evaluate(step.VariableExpr, MergedVars(), _listVariables, _pointVariables);
+                    if (_globalVars != null && _globalVarNames.Contains(step.VariableName))
+                        _globalVars.Set(step.VariableName, value);
+                    else
+                        _variables[step.VariableName] = value;
                 }
                 catch
                 {
                     // If expression fails, leave variable unchanged
                 }
             }
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        // ── Background program step handlers ─────────────────────────────────
+
+        private void ExecuteStartBackground(ProgramStep step, StepListFrame frame)
+        {
+            if (_backgroundManager != null && !string.IsNullOrEmpty(step.BackgroundProgramName))
+            {
+                var prog = _builtProgramRepo.Get(step.BackgroundProgramName);
+                if (prog != null) _backgroundManager.TryStart(prog);
+            }
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteStopBackground(ProgramStep step, StepListFrame frame)
+        {
+            if (_backgroundManager != null && !string.IsNullOrEmpty(step.BackgroundProgramName))
+                _backgroundManager.Stop(step.BackgroundProgramName);
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteWaitForBackground(ProgramStep step, StepListFrame frame)
+        {
+            if (_backgroundManager == null || string.IsNullOrEmpty(step.BackgroundProgramName)
+                || !_backgroundManager.IsRunning(step.BackgroundProgramName))
+            {
+                ReportStepCompleted(step);
+                frame.Index++;
+                return;
+            }
+            // Still running — set the wait flag and yield; Update() will clear it when done
+            _waitingForBackground = step.BackgroundProgramName;
+        }
+
+        private void ExecuteStopwatchControl(ProgramStep step, StepListFrame frame)
+        {
+            var varName = step.StopwatchVariableName;
+            if (!string.IsNullOrEmpty(varName))
+            {
+                if (!_stopwatches.TryGetValue(varName, out var sw))
+                    sw = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
+
+                var now = System.Environment.TickCount64;
+                sw = step.StopwatchAction switch
+                {
+                    "Start" when !sw.Running => new StopwatchEntry { Running = true,  AccumMs = sw.AccumMs, StartTick = now },
+                    "Stop"  when  sw.Running => new StopwatchEntry { Running = false, AccumMs = sw.AccumMs + (now - sw.StartTick), StartTick = 0 },
+                    "Reset"                  => new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 },
+                    _                        => sw, // Start when already running / Stop when already stopped — no-op
+                };
+                _stopwatches[varName] = sw;
+                _variables[varName]   = sw.Running ? sw.AccumMs + (now - sw.StartTick) : sw.AccumMs;
+            }
+
+            ReportStepStarted(step);
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteSaveImage(ProgramStep step, StepListFrame frame)
+        {
+            var pathTemplate = step.SaveImagePath ?? "";
+            if (string.IsNullOrEmpty(pathTemplate))
+            {
+                ReportStepStarted(step);
+                ReportStepCompleted(step);
+                frame.Index++;
+                return;
+            }
+
+            var resolvedPath = InterpolateVariables(pathTemplate);
+            if (!System.IO.Path.IsPathRooted(resolvedPath))
+                resolvedPath = System.IO.Path.Combine(AppContext.BaseDirectory, resolvedPath);
+
+            var cameraId = step.SaveImageCameraId ?? "";
+            var camera = string.IsNullOrEmpty(cameraId)
+                ? _controller.CameraManager.GetFirstCamera()
+                : _controller.CameraManager.GetCamera(cameraId);
+
+            var frameBytes = camera?.GetLatestFrame();
+            if (frameBytes == null || frameBytes.Length == 0)
+            {
+                Finish(global::ProgramStatus.Error,
+                    $"SaveImage: no frame available from camera '{(string.IsNullOrEmpty(cameraId) ? "default" : cameraId)}'");
+                return;
+            }
+
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(resolvedPath);
+                if (!string.IsNullOrEmpty(dir))
+                    System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.WriteAllBytes(resolvedPath, frameBytes);
+            }
+            catch (Exception ex)
+            {
+                Finish(global::ProgramStatus.Error, $"SaveImage failed writing '{resolvedPath}': {ex.Message}");
+                return;
+            }
+
+            ReportStepStarted(step);
             ReportStepCompleted(step);
             frame.Index++;
         }
@@ -1435,7 +1879,7 @@ namespace Controller.RobotControl
         {
             if (step.Expressions != null && step.Expressions.TryGetValue(fieldName, out var expr))
             {
-                try { return ExpressionEvaluator.Evaluate(expr, _variables, _listVariables, _pointVariables); }
+                try { return ExpressionEvaluator.Evaluate(expr, MergedVars(), _listVariables, _pointVariables); }
                 catch { /* fall through */ }
             }
             return fallback;
@@ -1455,12 +1899,15 @@ namespace Controller.RobotControl
                     ? EvalField(step, key, raw ?? 0)
                     : (double?)null;
 
+            var desc = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step);
+            CurrentStepDescription = desc;
+
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName          = _program!.Name,
                 ProgramStatus        = global::ProgramStatus.Running,
                 CurrentStepNumber    = _globalStepIndex,
-                StepDescription      = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step),
+                StepDescription      = desc,
                 WarningDescription   = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
                 ErrorDescription     = string.IsNullOrEmpty(step.StatusError)   ? null : step.StatusError,
                 CurrentPointName     = isMove ? (step.PointName ?? "") : null,
@@ -1497,15 +1944,24 @@ namespace Controller.RobotControl
 
         private void Finish(global::ProgramStatus status, string description)
         {
-            _running         = false;
-            _stopRequested   = false;
-            _awaitingMove    = false;
-            _pendingStep     = null;
-            _awaitingAuxMove = false;
-            _pendingAuxStep  = null;
-            _awaitingVision  = false;
-            _visionProgramId = null;
+            SavePersistentVars();
+            _running              = false;
+            _stopRequested        = false;
+            _awaitingMove         = false;
+            _pendingStep          = null;
+            _awaitingAuxMove      = false;
+            _pendingAuxStep       = null;
+            _awaitingVision       = false;
+            _visionProgramId      = null;
+            _waitingForBackground = null;
             _frameStack.Clear();
+
+            // Main program finishing: optionally kill all background programs
+            if (!_isBackground && (_program?.KillBackgroundOnStop ?? true))
+                _backgroundManager?.StopAll();
+
+            // Notify manager so it removes this executor from the running set
+            _backgroundManager?.OnExecutorFinished(_program?.Name ?? "");
 
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
@@ -1556,8 +2012,13 @@ namespace Controller.RobotControl
                     : $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxSteps} steps",
                 StepType.AuxContinuous => $"Aux Continuous · axis {step.AuxAxisIndex}",
                 StepType.AuxStop       => $"Aux Stop · device {step.AuxDeviceId ?? "default"}",
-                StepType.RunVision     => $"Vision → {step.VisionProgramName ?? step.VisionProgramId ?? "?"}",
-                _                      => step.Type.ToString(),
+                StepType.RunVision          => $"Vision → {step.VisionProgramName ?? step.VisionProgramId ?? "?"}",
+                StepType.StartBackground    => $"Start Background → {step.BackgroundProgramName ?? "?"}",
+                StepType.StopBackground     => $"Stop Background → {step.BackgroundProgramName ?? "?"}",
+                StepType.WaitForBackground  => $"Wait for Background → {step.BackgroundProgramName ?? "?"}",
+                StepType.StopwatchControl   => $"Stopwatch {step.StopwatchAction ?? "?"} → ${step.StopwatchVariableName ?? "?"}",
+                StepType.SaveImage          => $"Save Image → {step.SaveImagePath ?? "?"}",
+                _                           => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
         }
@@ -1600,18 +2061,41 @@ namespace Controller.RobotControl
         // ── Inner frame class ─────────────────────────────────────────────────
         private class StepListFrame
         {
-            public List<ProgramStep> Steps       { get; }
-            public int               Index       { get; set; }
-            public bool              IsLoop      { get; }
-            public int               LoopRemaining { get; set; }
-            public bool              WaitStarted { get; set; }
+            public List<ProgramStep> Steps             { get; }
+            public int               Index             { get; set; }
+            public bool              IsLoop            { get; }
+            public int               LoopRemaining     { get; set; }
+            public bool              WaitStarted       { get; set; }
 
-            public StepListFrame(List<ProgramStep> steps, int index, bool isLoop = false, int loopRemaining = 0)
+            // ForEach loop support
+            public bool   IsForEach          { get; }
+            public int    ForEachCount        { get; }
+            public int    ForEachCurrentIndex { get; set; }
+            public string ForEachSourceVar    { get; }
+            public string ForEachValueVar     { get; }
+            public string ForEachIndexVar     { get; }
+
+            // While loop support
+            public ConditionGroup? WhileCondition { get; }
+
+            public StepListFrame(
+                List<ProgramStep> steps, int index,
+                bool isLoop = false, int loopRemaining = 0,
+                bool isForEach = false, int forEachCount = 0, int forEachCurrentIndex = 0,
+                string forEachSourceVar = "", string forEachValueVar = "", string forEachIndexVar = "",
+                ConditionGroup? whileCondition = null)
             {
-                Steps         = steps;
-                Index         = index;
-                IsLoop        = isLoop;
-                LoopRemaining = loopRemaining;
+                Steps               = steps;
+                Index               = index;
+                IsLoop              = isLoop;
+                LoopRemaining       = loopRemaining;
+                IsForEach           = isForEach;
+                ForEachCount        = forEachCount;
+                ForEachCurrentIndex = forEachCurrentIndex;
+                ForEachSourceVar    = forEachSourceVar;
+                ForEachValueVar     = forEachValueVar;
+                ForEachIndexVar     = forEachIndexVar;
+                WhileCondition      = whileCondition;
             }
         }
     }
