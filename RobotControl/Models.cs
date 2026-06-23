@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, RunVision, SetLocal, ClearLocal }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -290,12 +290,32 @@ public class ProgramStep
     // Wait
     [JsonPropertyName("waitMs")]
     public int? WaitMs { get; set; }
+    // Wait condition mode: "duration" (default) | "condition"
+    [JsonPropertyName("waitMode")]
+    public string? WaitMode { get; set; }
+    [JsonPropertyName("waitCondition")]
+    public ConditionGroup? WaitCondition { get; set; }
+    [JsonPropertyName("waitTimeoutMs")]
+    public int? WaitTimeoutMs { get; set; }
+    [JsonPropertyName("waitTimeoutVariableName")]
+    public string? WaitTimeoutVariableName { get; set; }
 
     // Loop
     [JsonPropertyName("loopCount")]
     public int? LoopCount { get; set; }          // 0 = infinite
     [JsonPropertyName("loopSteps")]
     public List<ProgramStep>? LoopSteps { get; set; }
+    // Loop mode: "count" (default) | "forEach" | "while"
+    [JsonPropertyName("loopMode")]
+    public string? LoopMode { get; set; }
+    [JsonPropertyName("forEachVariableName")]
+    public string? ForEachVariableName { get; set; }
+    [JsonPropertyName("forEachValueVariableName")]
+    public string? ForEachValueVariableName { get; set; }
+    [JsonPropertyName("forEachIndexVariableName")]
+    public string? ForEachIndexVariableName { get; set; }
+    [JsonPropertyName("loopWhileCondition")]
+    public ConditionGroup? LoopWhileCondition { get; set; }
 
     // StatusUpdate
     [JsonPropertyName("statusMessage")]
@@ -363,6 +383,22 @@ public class ProgramStep
     [JsonPropertyName("varPointName")]  public string? VarPointName  { get; set; }
     [JsonPropertyName("varPointIndex")] public string? VarPointIndex { get; set; }
 
+    // StartBackground / StopBackground / WaitForBackground
+    [JsonPropertyName("backgroundProgramName")]
+    public string? BackgroundProgramName { get; set; }
+
+    // StopwatchControl — action: "Start" | "Stop" | "Reset"
+    [JsonPropertyName("stopwatchAction")]
+    public string? StopwatchAction { get; set; }
+    [JsonPropertyName("stopwatchVariableName")]
+    public string? StopwatchVariableName { get; set; }
+
+    // SaveImage — path supports $variable interpolation (including built-in $time_ms)
+    [JsonPropertyName("saveImagePath")]
+    public string? SaveImagePath { get; set; }
+    [JsonPropertyName("saveImageCameraId")]
+    public string? SaveImageCameraId { get; set; }
+
     // AuxMove / AuxContinuous / AuxStop
     // auxSteps:    steps to move; sign determines direction (positive=CW, negative=CCW)
     // auxVelocity: peak velocity in steps/sec  (AuxMove + AuxContinuous)
@@ -399,6 +435,18 @@ public class ProgramVariable
     public string? Description { get; set; }
     [JsonPropertyName("isBoolean")]
     public bool? IsBoolean { get; set; }
+    /// <summary>When true, this scalar variable is shared across all concurrently running programs via the global variable store.</summary>
+    [JsonPropertyName("isGlobal")]
+    public bool? IsGlobal { get; set; }
+    /// <summary>When true, the current runtime value of this variable is shown on the monitor page while the program runs.</summary>
+    [JsonPropertyName("displayOnMonitor")]
+    public bool? DisplayOnMonitor { get; set; }
+    /// <summary>When true, this variable is a stopwatch; its value holds elapsed milliseconds at runtime.</summary>
+    [JsonPropertyName("isStopwatch")]
+    public bool? IsStopwatch { get; set; }
+    /// <summary>When true, the runtime value is saved to disk when the program finishes and restored on the next run.</summary>
+    [JsonPropertyName("isPersistent")]
+    public bool? IsPersistent { get; set; }
 }
 
 public class BuiltProgram
@@ -416,15 +464,23 @@ public class BuiltProgram
     /// <summary>Routines are hidden from the program list and can only be called from a program step.</summary>
     [JsonPropertyName("isRoutine")]
     public bool IsRoutine { get; set; } = false;
+    /// <summary>Background programs run in parallel with the main program; motion/tool/homing steps are skipped.</summary>
+    [JsonPropertyName("isBackground")]
+    public bool IsBackground { get; set; } = false;
+    /// <summary>When true (default), all running background programs are stopped when the main program finishes.</summary>
+    [JsonPropertyName("killBackgroundOnStop")]
+    public bool KillBackgroundOnStop { get; set; } = true;
 }
 
 public class SaveBuiltProgramParams
 {
-    [JsonPropertyName("name")]        public string Name        { get; set; } = "";
-    [JsonPropertyName("description")] public string Description { get; set; } = "";
-    [JsonPropertyName("steps")]       public List<ProgramStep> Steps { get; set; } = new();
-    [JsonPropertyName("variables")]   public List<ProgramVariable>? Variables { get; set; }
-    [JsonPropertyName("isRoutine")]   public bool IsRoutine     { get; set; } = false;
+    [JsonPropertyName("name")]                 public string Name                 { get; set; } = "";
+    [JsonPropertyName("description")]          public string Description          { get; set; } = "";
+    [JsonPropertyName("steps")]                public List<ProgramStep> Steps     { get; set; } = new();
+    [JsonPropertyName("variables")]            public List<ProgramVariable>? Variables { get; set; }
+    [JsonPropertyName("isRoutine")]            public bool IsRoutine              { get; set; } = false;
+    [JsonPropertyName("isBackground")]         public bool IsBackground           { get; set; } = false;
+    [JsonPropertyName("killBackgroundOnStop")] public bool KillBackgroundOnStop   { get; set; } = true;
 }
 
 public class BuiltProgramNameParams
@@ -1053,4 +1109,9 @@ public class DeleteVisionProgramParams
 public class StartStopVisionParams
 {
     [JsonPropertyName("id")] public string Id { get; set; } = "";
+}
+
+public class SetSpeedOverrideParams
+{
+    [JsonPropertyName("percent")] public double Percent { get; set; } = 100.0;
 }

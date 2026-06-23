@@ -46,6 +46,9 @@ namespace Controller.RobotControl.Camera
         public CameraDevice? GetCamera(string id) =>
             _devices.FirstOrDefault(d => d.Id == id);
 
+        public CameraDevice? GetFirstCamera() =>
+            _devices.FirstOrDefault();
+
         // ── State query ───────────────────────────────────────────────────────
 
         public List<CameraState> GetState() =>
