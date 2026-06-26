@@ -42,11 +42,12 @@ namespace Controller.RobotControl.AuxAxis
 
     public class AuxAxisState
     {
-        [JsonPropertyName("connected")]   public bool                     Connected   { get; set; }
-        [JsonPropertyName("deviceId")]    public string                   DeviceId    { get; set; } = "";
-        [JsonPropertyName("deviceName")]  public string                   DeviceName  { get; set; } = "";
-        [JsonPropertyName("portName")]    public string?                  PortName    { get; set; }
-        [JsonPropertyName("axes")]        public List<AuxAxisChannelState> Axes        { get; set; } = new();
+        [JsonPropertyName("connected")]     public bool                     Connected     { get; set; }
+        [JsonPropertyName("motorEnabled")]  public bool                     MotorEnabled  { get; set; } = true;
+        [JsonPropertyName("deviceId")]      public string                   DeviceId      { get; set; } = "";
+        [JsonPropertyName("deviceName")]    public string                   DeviceName    { get; set; } = "";
+        [JsonPropertyName("portName")]      public string?                  PortName      { get; set; }
+        [JsonPropertyName("axes")]          public List<AuxAxisChannelState> Axes         { get; set; } = new();
     }
 
     public class AuxAxisChannelState

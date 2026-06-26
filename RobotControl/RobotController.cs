@@ -738,6 +738,14 @@ namespace Controller.RobotControl
                     break;
                 }
 
+                case "EnableAux":
+                {
+                    var p = JsonSerializer.Deserialize<EnableAuxParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    AuxAxisManager.Enable(p.DeviceId, p.Enable);
+                    break;
+                }
+
                 // ── End aux axis commands ──────────────────────────────────────────
 
                 case "StopJog":
@@ -1118,6 +1126,7 @@ namespace Controller.RobotControl
                         var p = LoadParams<SaveBuiltProgramParams>(command);
                         builtProgramRepo.Save(new BuiltProgram
                         {
+                            Id                  = p.Id,
                             Name                = p.Name,
                             Description         = p.Description,
                             Steps               = p.Steps,
@@ -1140,8 +1149,9 @@ namespace Controller.RobotControl
 
                 case "StopBackgroundProgram":
                     {
-                        var p = LoadParams<ProgramActionParams>(command);
-                        backgroundProgramManager.Stop(p.ProgramName);
+                        var p     = LoadParams<ProgramActionParams>(command);
+                        var built = builtProgramRepo.Get(p.ProgramName);
+                        if (built != null) backgroundProgramManager.Stop(built.Id);
                     }
                     break;
 

@@ -38,7 +38,19 @@ public class BuiltProgramRepository
             var json = File.ReadAllText(_file);
             var list = JsonSerializer.Deserialize<List<BuiltProgram>>(json, _opts);
             if (list != null)
+            {
+                bool migrated = false;
+                foreach (var p in list)
+                {
+                    if (string.IsNullOrEmpty(p.Id))
+                    {
+                        p.Id = Guid.NewGuid().ToString();
+                        migrated = true;
+                    }
+                }
                 _programs = list.ToDictionary(p => p.Name, p => p);
+                if (migrated) Save();
+            }
         }
         catch { /* corrupt file — start fresh */ }
     }
@@ -56,6 +68,8 @@ public class BuiltProgramRepository
     {
         lock (_lock)
         {
+            if (string.IsNullOrEmpty(program.Id))
+                program.Id = Guid.NewGuid().ToString();
             program.LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             _programs[program.Name] = program;
             Save();
@@ -81,6 +95,14 @@ public class BuiltProgramRepository
         {
             _programs.TryGetValue(name, out var p);
             return p;
+        }
+    }
+
+    public BuiltProgram? GetById(string id)
+    {
+        lock (_lock)
+        {
+            return _programs.Values.FirstOrDefault(p => p.Id == id);
         }
     }
 

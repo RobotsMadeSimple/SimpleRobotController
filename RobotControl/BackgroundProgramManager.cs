@@ -43,6 +43,7 @@ namespace Controller.RobotControl
     /// <summary>Status snapshot for one running background program.</summary>
     public class BackgroundProgramStatus
     {
+        public string Id          { get; set; } = "";
         public string Name        { get; set; } = "";
         public string CurrentStep { get; set; } = "";
     }
@@ -90,30 +91,30 @@ namespace Controller.RobotControl
 
         /// <summary>
         /// Attempts to start the given program as a background task.
-        /// Returns false (no-op) if an instance with the same name is already running.
+        /// Returns false (no-op) if an instance with the same ID is already running.
         /// </summary>
         public bool TryStart(BuiltProgram program, string? imageBase64 = null)
         {
             lock (_lock)
             {
-                if (_running.ContainsKey(program.Name)) return false;
+                if (_running.ContainsKey(program.Id)) return false;
 
                 var executor = new ProgramExecutor(
                     _controller, _programManager, _pointRepo, _toolRepo, _localRepo,
                     _builtProgramRepo, _gridRepo, _stackRepo,
                     isBackground: true, globalVars: GlobalVars, backgroundManager: this);
 
-                _running[program.Name] = executor;
+                _running[program.Id] = executor;
                 executor.Start(program, imageBase64);
                 return true;
             }
         }
 
-        /// <summary>Stops the named background program. No-op if not running.</summary>
-        public void Stop(string name)
+        /// <summary>Stops the background program with the given ID. No-op if not running.</summary>
+        public void Stop(string id)
         {
             ProgramExecutor? executor;
-            lock (_lock) _running.TryGetValue(name, out executor);
+            lock (_lock) _running.TryGetValue(id, out executor);
             executor?.Stop();
         }
 
@@ -126,15 +127,15 @@ namespace Controller.RobotControl
         }
 
         /// <summary>Called by a background executor when it finishes (any terminal state).</summary>
-        public void OnExecutorFinished(string name)
+        public void OnExecutorFinished(string id)
         {
-            lock (_lock) _running.Remove(name);
+            lock (_lock) _running.Remove(id);
         }
 
-        /// <returns>True if a background program with this name is currently running.</returns>
-        public bool IsRunning(string name)
+        /// <returns>True if a background program with this ID is currently running.</returns>
+        public bool IsRunning(string id)
         {
-            lock (_lock) return _running.TryGetValue(name, out var e) && e.IsRunning;
+            lock (_lock) return _running.TryGetValue(id, out var e) && e.IsRunning;
         }
 
         /// <summary>Advances all background executors by one tick. Must be called from the control-loop thread.</summary>
@@ -145,28 +146,31 @@ namespace Controller.RobotControl
             foreach (var e in executors) e.Update();
         }
 
-        /// <summary>Returns a status snapshot for the UI (names of currently running programs + current step).</summary>
+        /// <summary>Returns a status snapshot for the UI (IDs and names of currently running programs + current step).</summary>
         public List<BackgroundProgramStatus> GetStatuses()
         {
             lock (_lock)
                 return _running.Select(kv => new BackgroundProgramStatus
                 {
-                    Name        = kv.Key,
+                    Id          = kv.Key,
+                    Name        = kv.Value.CurrentProgramName ?? kv.Key,
                     CurrentStep = kv.Value.CurrentStepDescription,
                 }).ToList();
         }
 
-        /// <summary>Returns just the names of running background programs.</summary>
-        public List<string> GetRunningNames()
+        /// <summary>Returns just the IDs of running background programs.</summary>
+        public List<string> GetRunningIds()
         {
             lock (_lock) return _running.Keys.ToList();
         }
 
-        /// <summary>Returns display variables for a named running background program.</summary>
+        /// <summary>Returns display variables for a background program identified by display name.</summary>
         public IReadOnlyList<(string Name, double Value, bool IsBoolean)> GetDisplayVariables(string name)
         {
             ProgramExecutor? executor;
-            lock (_lock) _running.TryGetValue(name, out executor);
+            lock (_lock)
+                executor = _running.Values.FirstOrDefault(e =>
+                    string.Equals(e.CurrentProgramName, name, StringComparison.OrdinalIgnoreCase));
             return executor?.GetDisplayVariables() ?? [];
         }
 

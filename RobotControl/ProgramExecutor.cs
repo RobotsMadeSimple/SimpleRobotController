@@ -59,6 +59,7 @@ namespace Controller.RobotControl
         private readonly Dictionary<string, List<double>>      _listVariables    = new();
         private readonly Dictionary<string, List<Vector6Val>>  _pointVariables   = new();
         private readonly HashSet<string>                       _booleanVariables = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string>            _stringVariables  = new(StringComparer.OrdinalIgnoreCase);
 
         // Background execution support
         private readonly bool                    _isBackground;
@@ -92,7 +93,7 @@ namespace Controller.RobotControl
             foreach (var v in _program.Variables)
             {
                 if (v.DisplayOnMonitor != true) continue;
-                if (v.Values != null || v.Points != null) continue; // lists and point arrays not supported
+                if (v.Values != null || v.Points != null || v.IsString == true) continue; // non-scalar types not supported in numeric display
                 merged.TryGetValue(v.Name, out double val);
                 result.Add((v.Name, val, v.IsBoolean == true));
             }
@@ -163,12 +164,13 @@ namespace Controller.RobotControl
         {
             if (_persistentVarNames.Count == 0) return;
             var existing = LoadPersistentVars();
+            var prefix = string.IsNullOrEmpty(_program?.Id) ? "" : _program.Id + ":";
             foreach (var name in _persistentVarNames)
             {
                 var val = _globalVarNames.Contains(name) && _globalVars != null && _globalVars.TryGet(name, out var gv)
                     ? gv
                     : _variables.TryGetValue(name, out var v) ? v : 0;
-                existing[name] = val;
+                existing[prefix + name] = val;
             }
             WritePersistentVars(existing);
         }
@@ -250,12 +252,14 @@ namespace Controller.RobotControl
             _listVariables.Clear();
             _pointVariables.Clear();
             _booleanVariables.Clear();
+            _stringVariables.Clear();
             _globalVarNames.Clear();
             _persistentVarNames.Clear();
             _stopwatches.Clear();
             _waitingForBackground = null;
 
             var savedPersistent = LoadPersistentVars();
+            var persistPrefix = string.IsNullOrEmpty(program.Id) ? "" : program.Id + ":";
 
             foreach (var v in program.Variables ?? [])
             {
@@ -270,10 +274,14 @@ namespace Controller.RobotControl
                     _stopwatches[v.Name] = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
                     _variables[v.Name] = 0; // elapsed ms, updated each tick
                 }
+                else if (v.IsString == true)
+                {
+                    _stringVariables[v.Name] = v.StringValue ?? "";
+                }
                 else
                 {
-                    // Persistent: restore saved value if available, else use declared default
-                    double initialValue = isPersistent && savedPersistent.TryGetValue(v.Name, out var saved)
+                    // Persistent: restore saved value if available (keyed by programId:varName), else use declared default
+                    double initialValue = isPersistent && savedPersistent.TryGetValue(persistPrefix + v.Name, out var saved)
                         ? saved
                         : v.Value;
 
@@ -371,6 +379,7 @@ namespace Controller.RobotControl
             _pointVariables.Clear();
             _stopwatches.Clear();
             _booleanVariables.Clear();
+            _stringVariables.Clear();
             _globalVarNames.Clear();
             _persistentVarNames.Clear();
         }
@@ -613,6 +622,10 @@ namespace Controller.RobotControl
 
                 case StepType.AuxStop:
                     ExecuteAuxStop(step, frame);
+                    break;
+
+                case StepType.AuxEnable:
+                    ExecuteAuxEnable(step, frame);
                     break;
 
                 case StepType.RunVision:
@@ -1041,9 +1054,11 @@ namespace Controller.RobotControl
 
                 if (!hasIndex)
                 {
-                    // Plain $name — scalar → value, list → count, points → "N points"
+                    // Plain $name — scalar → value, list → count, points → "N points", string → value
                     if (allVarsForTemplate.TryGetValue(name, out var sv))
                         return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : sv.ToString("G6");
+                    if (_stringVariables.TryGetValue(name, out var strVal))
+                        return strVal;
                     if (_listVariables.ContainsKey(name))
                         return $"{_listVariables[name].Count} items";
                     if (_pointVariables.ContainsKey(name))
@@ -1533,6 +1548,23 @@ namespace Controller.RobotControl
 
         private bool EvaluateConditionItem(ConditionItem item, Dictionary<string, double> vars)
         {
+            // String operator path — also used when left side is a string variable
+            bool isStringOp = item.Operator is "contains" or "startsWith" or "endsWith";
+            if (isStringOp || IsStringVarRef(item.Left))
+            {
+                string ls = ResolveStringValue(item.Left);
+                string rs = ResolveStringValue(item.Right);
+                return item.Operator switch
+                {
+                    "==" => string.Equals(ls, rs, StringComparison.Ordinal),
+                    "!=" => !string.Equals(ls, rs, StringComparison.Ordinal),
+                    "contains"   => ls.Contains(rs, StringComparison.Ordinal),
+                    "startsWith" => ls.StartsWith(rs, StringComparison.Ordinal),
+                    "endsWith"   => ls.EndsWith(rs, StringComparison.Ordinal),
+                    _    => false,
+                };
+            }
+
             double left, right;
             try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables, _pointVariables); } catch { left  = 0; }
             try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables, _pointVariables); } catch { right = 0; }
@@ -1547,6 +1579,18 @@ namespace Controller.RobotControl
                 "<=" => left <= right,
                 _    => false,
             };
+        }
+
+        private bool IsStringVarRef(string expr) =>
+            !string.IsNullOrEmpty(expr) && expr.StartsWith('$') &&
+            _stringVariables.ContainsKey(expr.Substring(1));
+
+        private string ResolveStringValue(string expr)
+        {
+            if (string.IsNullOrEmpty(expr)) return "";
+            if (expr.StartsWith('$') && _stringVariables.TryGetValue(expr.Substring(1), out var sv))
+                return sv;
+            return InterpolateVariables(expr);
         }
 
         private void ExecuteIfCondition(ProgramStep step, StepListFrame frame)
@@ -1668,6 +1712,12 @@ namespace Controller.RobotControl
                 decel    = EvalField(step, "auxDecel",    step.AuxDecel    ?? accel);
             }
 
+            if (step.AuxAbsolute == true)
+            {
+                long currentPos = _controller.AuxAxisManager.GetPosition(deviceId, axisIndex);
+                steps = steps - currentPos;
+            }
+
             if (steps == 0) { ReportStepCompleted(step); frame.Index++; return; }
 
             bool ccw      = steps < 0;
@@ -1727,8 +1777,36 @@ namespace Controller.RobotControl
 
         private void ExecuteAuxStop(ProgramStep step, StepListFrame frame)
         {
-            double decel = EvalField(step, "auxDecel", step.AuxDecel ?? 10000);
-            _controller.StopAux(decel);
+            double decel     = EvalField(step, "auxDecel", step.AuxDecel ?? 10000);
+            bool   immediate = step.AuxImmediate ?? false;
+
+            if (!string.IsNullOrEmpty(step.AuxDeviceId) && step.AuxAxisIndex.HasValue)
+            {
+                // Stop a specific axis on a specific device
+                if (immediate)
+                    _controller.AuxAxisManager.StopAll(step.AuxDeviceId);
+                else
+                    _controller.AuxAxisManager.StopSmooth(step.AuxDeviceId, step.AuxAxisIndex.Value, (int)Math.Max(1, decel));
+            }
+            else
+            {
+                // Stop all axes on all devices
+                if (immediate)
+                    _controller.AuxAxisManager.StopAllDevices();
+                else
+                    _controller.StopAux(decel, false);
+            }
+
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private void ExecuteAuxEnable(ProgramStep step, StepListFrame frame)
+        {
+            string deviceId = step.AuxDeviceId ?? _controller.AuxAxisManager.GetFirstDevice()?.Id ?? "";
+            bool   enable   = step.AuxEnable ?? true;
+            if (!string.IsNullOrEmpty(deviceId))
+                _controller.AuxAxisManager.Enable(deviceId, enable);
             ReportStepCompleted(step);
             frame.Index++;
         }
@@ -1746,17 +1824,25 @@ namespace Controller.RobotControl
         {
             if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
             {
-                try
+                if (_stringVariables.ContainsKey(step.VariableName))
                 {
-                    double value = ExpressionEvaluator.Evaluate(step.VariableExpr, MergedVars(), _listVariables, _pointVariables);
-                    if (_globalVars != null && _globalVarNames.Contains(step.VariableName))
-                        _globalVars.Set(step.VariableName, value);
-                    else
-                        _variables[step.VariableName] = value;
+                    // String variable — treat expr as a template and interpolate $var tokens
+                    _stringVariables[step.VariableName] = InterpolateVariables(step.VariableExpr);
                 }
-                catch
+                else
                 {
-                    // If expression fails, leave variable unchanged
+                    try
+                    {
+                        double value = ExpressionEvaluator.Evaluate(step.VariableExpr, MergedVars(), _listVariables, _pointVariables);
+                        if (_globalVars != null && _globalVarNames.Contains(step.VariableName))
+                            _globalVars.Set(step.VariableName, value);
+                        else
+                            _variables[step.VariableName] = value;
+                    }
+                    catch
+                    {
+                        // If expression fails, leave variable unchanged
+                    }
                 }
             }
             ReportStepCompleted(step);
@@ -1765,11 +1851,20 @@ namespace Controller.RobotControl
 
         // ── Background program step handlers ─────────────────────────────────
 
+        private BuiltProgram? ResolveBackgroundProgram(ProgramStep step)
+        {
+            if (!string.IsNullOrEmpty(step.BackgroundProgramId))
+                return _builtProgramRepo.GetById(step.BackgroundProgramId);
+            if (!string.IsNullOrEmpty(step.BackgroundProgramName))
+                return _builtProgramRepo.Get(step.BackgroundProgramName);
+            return null;
+        }
+
         private void ExecuteStartBackground(ProgramStep step, StepListFrame frame)
         {
-            if (_backgroundManager != null && !string.IsNullOrEmpty(step.BackgroundProgramName))
+            if (_backgroundManager != null)
             {
-                var prog = _builtProgramRepo.Get(step.BackgroundProgramName);
+                var prog = ResolveBackgroundProgram(step);
                 if (prog != null) _backgroundManager.TryStart(prog);
             }
             ReportStepCompleted(step);
@@ -1778,23 +1873,32 @@ namespace Controller.RobotControl
 
         private void ExecuteStopBackground(ProgramStep step, StepListFrame frame)
         {
-            if (_backgroundManager != null && !string.IsNullOrEmpty(step.BackgroundProgramName))
-                _backgroundManager.Stop(step.BackgroundProgramName);
+            if (_backgroundManager != null)
+            {
+                var prog = ResolveBackgroundProgram(step);
+                if (prog != null) _backgroundManager.Stop(prog.Id);
+            }
             ReportStepCompleted(step);
             frame.Index++;
         }
 
         private void ExecuteWaitForBackground(ProgramStep step, StepListFrame frame)
         {
-            if (_backgroundManager == null || string.IsNullOrEmpty(step.BackgroundProgramName)
-                || !_backgroundManager.IsRunning(step.BackgroundProgramName))
+            if (_backgroundManager == null)
+            {
+                ReportStepCompleted(step);
+                frame.Index++;
+                return;
+            }
+            var prog = ResolveBackgroundProgram(step);
+            if (prog == null || !_backgroundManager.IsRunning(prog.Id))
             {
                 ReportStepCompleted(step);
                 frame.Index++;
                 return;
             }
             // Still running — set the wait flag and yield; Update() will clear it when done
-            _waitingForBackground = step.BackgroundProgramName;
+            _waitingForBackground = prog.Id;
         }
 
         private void ExecuteStopwatchControl(ProgramStep step, StepListFrame frame)
@@ -1960,8 +2064,8 @@ namespace Controller.RobotControl
             if (!_isBackground && (_program?.KillBackgroundOnStop ?? true))
                 _backgroundManager?.StopAll();
 
-            // Notify manager so it removes this executor from the running set
-            _backgroundManager?.OnExecutorFinished(_program?.Name ?? "");
+            // Notify manager so it removes this executor from the running set (keyed by ID)
+            _backgroundManager?.OnExecutorFinished(_program?.Id ?? "");
 
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
@@ -2012,6 +2116,7 @@ namespace Controller.RobotControl
                     : $"Aux Move · axis {step.AuxAxisIndex} · {step.AuxSteps} steps",
                 StepType.AuxContinuous => $"Aux Continuous · axis {step.AuxAxisIndex}",
                 StepType.AuxStop       => $"Aux Stop · device {step.AuxDeviceId ?? "default"}",
+                StepType.AuxEnable     => $"Aux Motors {(step.AuxEnable == true ? "ON" : "OFF")}",
                 StepType.RunVision          => $"Vision → {step.VisionProgramName ?? step.VisionProgramId ?? "?"}",
                 StepType.StartBackground    => $"Start Background → {step.BackgroundProgramName ?? "?"}",
                 StepType.StopBackground     => $"Stop Background → {step.BackgroundProgramName ?? "?"}",

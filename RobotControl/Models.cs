@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -386,6 +386,8 @@ public class ProgramStep
     // StartBackground / StopBackground / WaitForBackground
     [JsonPropertyName("backgroundProgramName")]
     public string? BackgroundProgramName { get; set; }
+    [JsonPropertyName("backgroundProgramId")]
+    public string? BackgroundProgramId { get; set; }
 
     // StopwatchControl — action: "Start" | "Stop" | "Reset"
     [JsonPropertyName("stopwatchAction")]
@@ -416,6 +418,10 @@ public class ProgramStep
     [JsonPropertyName("auxAccel")]       public double? AuxAccel       { get; set; }
     [JsonPropertyName("auxDecel")]       public double? AuxDecel       { get; set; }
     [JsonPropertyName("auxWaitForDone")] public bool?   AuxWaitForDone { get; set; }
+    [JsonPropertyName("auxImmediate")]   public bool?   AuxImmediate   { get; set; }
+    [JsonPropertyName("auxAbsolute")]    public bool?   AuxAbsolute    { get; set; }
+    // AuxEnable — enable or disable motor drivers
+    [JsonPropertyName("auxEnable")]      public bool?   AuxEnable      { get; set; }
 }
 
 public class ProgramVariable
@@ -447,10 +453,18 @@ public class ProgramVariable
     /// <summary>When true, the runtime value is saved to disk when the program finishes and restored on the next run.</summary>
     [JsonPropertyName("isPersistent")]
     public bool? IsPersistent { get; set; }
+    /// <summary>When true, this variable holds a string value stored in StringValue.</summary>
+    [JsonPropertyName("isString")]
+    public bool? IsString { get; set; }
+    /// <summary>String variable initial/default value — only meaningful when IsString is true.</summary>
+    [JsonPropertyName("stringValue")]
+    public string? StringValue { get; set; }
 }
 
 public class BuiltProgram
 {
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
     [JsonPropertyName("name")]
     public string Name { get; set; } = "";
     [JsonPropertyName("description")]
@@ -474,6 +488,7 @@ public class BuiltProgram
 
 public class SaveBuiltProgramParams
 {
+    [JsonPropertyName("id")]                   public string Id                   { get; set; } = "";
     [JsonPropertyName("name")]                 public string Name                 { get; set; } = "";
     [JsonPropertyName("description")]          public string Description          { get; set; } = "";
     [JsonPropertyName("steps")]                public List<ProgramStep> Steps     { get; set; } = new();
@@ -1048,6 +1063,12 @@ public class StopAuxParams
     [JsonPropertyName("axis")]      public int?   Axis      { get; set; }
     [JsonPropertyName("decel")]     public double Decel     { get; set; } = 10000;
     [JsonPropertyName("immediate")] public bool   Immediate { get; set; } = false;
+}
+
+public class EnableAuxParams
+{
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "AUX_STEPPER_001";
+    [JsonPropertyName("enable")]   public bool   Enable   { get; set; } = true;
 }
 
 // ── Camera command params ─────────────────────────────────────────────────────
