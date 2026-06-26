@@ -31,6 +31,17 @@ namespace Controller.RobotControl.AuxAxis
         // Counts M commands sent but not yet DONE — drives IsMoving.
         private volatile int _inflightCount = 0;
 
+        // Tracks whether motor drivers are currently enabled.
+        private volatile bool _motorEnabled = true;
+        public bool MotorEnabled => _motorEnabled;
+
+        // Per-axis position tracking (in steps, updated when DONE is received).
+        private readonly long[]       _position     = new long[4];
+        private readonly bool[]       _dirCcw       = new bool[4];
+        private readonly Queue<long>[] _pendingMoves = new[] {
+            new Queue<long>(), new Queue<long>(), new Queue<long>(), new Queue<long>()
+        };
+
         /// <summary>True while an indexed M move is executing on the Arduino.</summary>
         public bool IsMoving => _inflightCount > 0;
 
@@ -136,6 +147,7 @@ namespace Controller.RobotControl.AuxAxis
             ConnectionChanged?.Invoke(true);
             Console.WriteLine($"[AuxAxis:{Id}] Connected on {portName}");
 
+            _motorEnabled = true;
             SafeWrite("E:1");
 
             string readBuf = "";
@@ -183,6 +195,14 @@ namespace Controller.RobotControl.AuxAxis
             if (line.StartsWith("DONE:") && int.TryParse(line.Substring(5), out int axis))
             {
                 if (_inflightCount > 0) _inflightCount--;
+                if ((uint)axis < 4)
+                {
+                    lock (_lock)
+                    {
+                        if (_pendingMoves[axis].Count > 0)
+                            _position[axis] += _pendingMoves[axis].Dequeue();
+                    }
+                }
                 MoveDone?.Invoke(axis);
             }
         }
@@ -195,8 +215,13 @@ namespace Controller.RobotControl.AuxAxis
         public void StartMove(int axis, long steps, int velocityHz, int accelHz, int decelHz)
         {
             if (steps <= 0) return;
+            bool ccw = (uint)axis < 4 && _dirCcw[axis];
+            long signedSteps = (ccw ? -1L : 1L) * steps;
             lock (_lock)
+            {
+                if ((uint)axis < 4) _pendingMoves[axis].Enqueue(signedSteps);
                 _commandQueue.Enqueue($"M:{axis},{steps},{Math.Max(1, velocityHz)},{Math.Max(1, accelHz)},{Math.Max(1, decelHz)}");
+            }
         }
 
         /// <summary>Start continuous stepping on axis, ramping up to velocityHz at accelHz.</summary>
@@ -216,12 +241,14 @@ namespace Controller.RobotControl.AuxAxis
         /// <summary>Set direction for an axis (false=CW, true=CCW).</summary>
         public void SetDirection(int axis, bool ccw)
         {
+            if ((uint)axis < 4) _dirCcw[axis] = ccw;
             lock (_lock) _commandQueue.Enqueue($"D:{axis},{(ccw ? 1 : 0)}");
         }
 
         /// <summary>Enable or disable all stepper drivers.</summary>
         public void Enable(bool enable)
         {
+            _motorEnabled = enable;
             lock (_lock) _commandQueue.Enqueue($"E:{(enable ? 1 : 0)}");
         }
 
@@ -233,7 +260,20 @@ namespace Controller.RobotControl.AuxAxis
                 _commandQueue.Clear();
                 _inflightCount = 0;
                 _commandQueue.Enqueue("X");
+                foreach (var q in _pendingMoves) q.Clear();
             }
+        }
+
+        /// <summary>Returns the tracked step position for an axis (updated on each DONE event).</summary>
+        public long GetPosition(int axis)
+        {
+            lock (_lock) return (uint)axis < 4 ? _position[axis] : 0;
+        }
+
+        /// <summary>Reset the tracked position for an axis to zero (e.g. after homing).</summary>
+        public void ZeroPosition(int axis)
+        {
+            lock (_lock) { if ((uint)axis < 4) _position[axis] = 0; }
         }
     }
 }

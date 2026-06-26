@@ -236,6 +236,21 @@ class Program
             await context.Response.Body.WriteAsync(jpeg);
         });
 
+        // Line inspection debug frame — Canny edge map with matched and angle-filtered segments
+        app.MapGet("/vision/{id}/debug/line/{inspId}", async (string id, string inspId, HttpContext context) =>
+        {
+            var proc = robotController.VisionManager.GetProcessor(id);
+            if (proc == null) { context.Response.StatusCode = 404; return; }
+
+            var jpeg = proc.GetLineDebugFrame(inspId);
+            if (jpeg == null) { context.Response.StatusCode = 204; return; }
+
+            context.Response.ContentType = "image/jpeg";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            await context.Response.Body.WriteAsync(jpeg);
+        });
+
         // Annotated snapshot captured at the end of the most recent RunVision step for this vision program
         app.MapGet("/program-vision-snapshot/{visionProgramId}", async (string visionProgramId, HttpContext context) =>
         {

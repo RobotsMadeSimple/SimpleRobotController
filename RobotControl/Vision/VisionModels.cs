@@ -119,6 +119,48 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("centerY")]      public double CenterY      { get; set; }
     }
 
+    /// <summary>Line detection inspection using Canny + HoughLinesP.</summary>
+    public class LineInspection
+    {
+        [JsonPropertyName("id")]              public string  Id              { get; set; } = "";
+        [JsonPropertyName("name")]            public string  Name            { get; set; } = "";
+        [JsonPropertyName("enabled")]         public bool    Enabled         { get; set; } = true;
+        [JsonPropertyName("zoneId")]          public string? ZoneId          { get; set; }
+        [JsonPropertyName("cannyThreshold1")] public double  CannyThreshold1 { get; set; } = 50;
+        [JsonPropertyName("cannyThreshold2")] public double  CannyThreshold2 { get; set; } = 150;
+        [JsonPropertyName("houghThreshold")]  public int     HoughThreshold  { get; set; } = 50;
+        [JsonPropertyName("minLineLength")]   public double  MinLineLength   { get; set; } = 30;
+        [JsonPropertyName("maxLineGap")]      public double  MaxLineGap      { get; set; } = 10;
+        [JsonPropertyName("filterByAngle")]   public bool    FilterByAngle   { get; set; } = false;
+        [JsonPropertyName("minAngle")]        public double  MinAngle        { get; set; } = 0;
+        [JsonPropertyName("maxAngle")]        public double  MaxAngle        { get; set; } = 180;
+    }
+
+    public class LineSegment
+    {
+        /// <summary>Normalized (0–1) start X.</summary>
+        [JsonPropertyName("x1")]     public double X1     { get; set; }
+        /// <summary>Normalized (0–1) start Y.</summary>
+        [JsonPropertyName("y1")]     public double Y1     { get; set; }
+        /// <summary>Normalized (0–1) end X.</summary>
+        [JsonPropertyName("x2")]     public double X2     { get; set; }
+        /// <summary>Normalized (0–1) end Y.</summary>
+        [JsonPropertyName("y2")]     public double Y2     { get; set; }
+        /// <summary>Undirected angle in degrees (0–180): 0=horizontal, 90=vertical.</summary>
+        [JsonPropertyName("angle")]  public double Angle  { get; set; }
+        /// <summary>Pixel length of the detected segment.</summary>
+        [JsonPropertyName("length")] public double Length { get; set; }
+    }
+
+    public class LineResult
+    {
+        [JsonPropertyName("inspectionId")] public string            InspectionId { get; set; } = "";
+        [JsonPropertyName("name")]         public string            Name         { get; set; } = "";
+        [JsonPropertyName("count")]        public int               Count        { get; set; }
+        [JsonPropertyName("found")]        public bool              Found        { get; set; }
+        [JsonPropertyName("lines")]        public List<LineSegment> Lines        { get; set; } = new();
+    }
+
     /// <summary>ArUco marker detection inspection.</summary>
     public class ArucoInspection
     {
@@ -160,7 +202,8 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("inspections")]         public List<BlobInspection>          Inspections        { get; set; } = new();
         [JsonPropertyName("colorInspections")]    public List<ColorCoverageInspection> ColorInspections   { get; set; } = new();
         [JsonPropertyName("polygonInspections")]  public List<PolygonInspection>       PolygonInspections { get; set; } = new();
-        [JsonPropertyName("arucoInspections")]   public List<ArucoInspection>         ArucoInspections   { get; set; } = new();
+        [JsonPropertyName("arucoInspections")]    public List<ArucoInspection>         ArucoInspections   { get; set; } = new();
+        [JsonPropertyName("lineInspections")]     public List<LineInspection>          LineInspections    { get; set; } = new();
         [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs  { get; set; }
     }
 
@@ -187,6 +230,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("inspections")]     public List<InspectionResult>    Inspections    { get; set; } = new();
         [JsonPropertyName("colorResults")]    public List<ColorCoverageResult> ColorResults   { get; set; } = new();
         [JsonPropertyName("polygonResults")]  public List<PolygonResult>       PolygonResults { get; set; } = new();
-        [JsonPropertyName("arucoResults")]   public List<ArucoResult>         ArucoResults   { get; set; } = new();
+        [JsonPropertyName("arucoResults")]    public List<ArucoResult>         ArucoResults   { get; set; } = new();
+        [JsonPropertyName("lineResults")]     public List<LineResult>          LineResults    { get; set; } = new();
     }
 }

@@ -84,6 +84,15 @@ namespace Controller.RobotControl.AuxAxis
             foreach (var d in _devices) d.StopAll();
         }
 
+        public void Enable(string deviceId, bool enable) =>
+            GetDevice(deviceId)?.Enable(enable);
+
+        public long GetPosition(string deviceId, int axis) =>
+            GetDevice(deviceId)?.GetPosition(axis) ?? 0;
+
+        public void ZeroPosition(string deviceId, int axis) =>
+            GetDevice(deviceId)?.ZeroPosition(axis);
+
         // ── State query ───────────────────────────────────────────────────────
 
         public List<AuxAxisState> GetState()
@@ -94,10 +103,11 @@ namespace Controller.RobotControl.AuxAxis
                 var cfg   = _config.Devices.FirstOrDefault(c => c.Id == device.Id);
                 result.Add(new AuxAxisState
                 {
-                    Connected  = device.Connected,
-                    DeviceId   = device.Id,
-                    DeviceName = device.Name,
-                    PortName   = device.PortName,
+                    Connected    = device.Connected,
+                    MotorEnabled = device.MotorEnabled,
+                    DeviceId     = device.Id,
+                    DeviceName   = device.Name,
+                    PortName     = device.PortName,
                     Axes       = cfg?.Axes.Select(a => new AuxAxisChannelState
                     {
                         AxisIndex       = a.AxisIndex,
