@@ -526,6 +526,7 @@ public class SetRobotIdentityParams
 
 public class SetRobotConfigParams
 {
+    [JsonPropertyName("robotType")]                 public string? RobotType                 { get; set; }
     [JsonPropertyName("homingSpeed")]               public double? HomingSpeed               { get; set; }
     [JsonPropertyName("homingSlowSpeed")]           public double? HomingSlowSpeed           { get; set; }
     [JsonPropertyName("homingBackoffMm")]           public double? HomingBackoffMm           { get; set; }
@@ -544,6 +545,17 @@ public class SetRobotConfigParams
     [JsonPropertyName("enableRelayCard")]           public bool?   EnableRelayCard           { get; set; }
     [JsonPropertyName("enableAuxAxis")]             public bool?   EnableAuxAxis             { get; set; }
     [JsonPropertyName("enableCameras")]             public bool?   EnableCameras             { get; set; }
+    [JsonPropertyName("cncMotorDegsPerMmX")]        public double? CncMotorDegsPerMmX        { get; set; }
+    [JsonPropertyName("cncMotorDegsPerMmY")]        public double? CncMotorDegsPerMmY        { get; set; }
+    [JsonPropertyName("cncMotorDegsPerMmZ")]        public double? CncMotorDegsPerMmZ        { get; set; }
+    [JsonPropertyName("cncMotorDegsPerDegRz")]      public double? CncMotorDegsPerDegRz      { get; set; }
+    [JsonPropertyName("cncXHomePosition")]          public double? CncXHomePosition          { get; set; }
+    [JsonPropertyName("cncYHomePosition")]          public double? CncYHomePosition          { get; set; }
+    [JsonPropertyName("cncZHomePosition")]          public double? CncZHomePosition          { get; set; }
+    [JsonPropertyName("cncRzHomePosition")]         public double? CncRzHomePosition         { get; set; }
+    [JsonPropertyName("cncXHomingDirection")]       public int?    CncXHomingDirection       { get; set; }
+    [JsonPropertyName("cncYHomingDirection")]       public int?    CncYHomingDirection       { get; set; }
+    [JsonPropertyName("cncZHomingDirection")]       public int?    CncZHomingDirection       { get; set; }
 }
 
 public class CommandMessage

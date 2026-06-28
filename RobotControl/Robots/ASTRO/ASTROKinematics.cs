@@ -1,9 +1,10 @@
-﻿using System;
+using System;
 using System.Numerics;
+using Controller.RobotControl.Robots;
 
 namespace Controller.RobotControl.Robots.ASTRO
 {
-    internal class ASTROKinematics
+    internal class ASTROKinematics : IRobotKinematics
     {
         private static readonly double pulley30tPcd = 19.099;
 
@@ -26,12 +27,14 @@ namespace Controller.RobotControl.Robots.ASTRO
         public CoreXYStage CurrentJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
         public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(10.0);
 
+        public string RobotTypeName => "ASTRO";
+
         public ASTROKinematics() { }
 
         // ============================================================
         // FORWARD KINEMATICS
         // ============================================================
-        public Vector6 TcpPosition(Vector6 toolOffset)
+        public Vector6 ForwardKinematics(Vector6 toolOffset)
         {
             double j1Rad = CurrentJoint1.JointAngleRad;
             double j4Rad = CurrentJoint4.JointAngleRad;
@@ -80,7 +83,7 @@ namespace Controller.RobotControl.Robots.ASTRO
         // ============================================================
         // INVERSE KINEMATICS
         // ============================================================
-        public static Vector6 InverseKinematics(
+        public Vector6 InverseKinematics(
             Vector6 tcp,
             Vector6 toolOffset
         )
@@ -192,8 +195,8 @@ namespace Controller.RobotControl.Robots.ASTRO
         // ============================================================
         // MOTOR TARGET UPDATE
         // ============================================================
-        public void UpdateJointTargets(
-            Vector6 JointTargets,
+        public void UpdateMotorTargets(
+            Vector6 joints,
             out double m1Deg,
             out double m2Deg,
             out double m3Deg,
@@ -201,15 +204,15 @@ namespace Controller.RobotControl.Robots.ASTRO
         )
         {
             // J1
-            InterpolatedJoint1.JointAngleDeg = JointTargets.X;
+            InterpolatedJoint1.JointAngleDeg = joints.X;
             m1Deg = InterpolatedJoint1.MotorAngleDeg;
 
             // CoreXY
-            InterpolatedJoint2.Cartesian = (JointTargets.Y, JointTargets.Z);
+            InterpolatedJoint2.Cartesian = (joints.Y, joints.Z);
             (m2Deg, m3Deg) = InterpolatedJoint2.GetLinears();
 
             // J4
-            InterpolatedJoint4.JointAngleDeg = JointTargets.RZ;
+            InterpolatedJoint4.JointAngleDeg = joints.RZ;
             m4Deg = InterpolatedJoint4.MotorAngleDeg;
 
             // Update current states
@@ -219,7 +222,7 @@ namespace Controller.RobotControl.Robots.ASTRO
             CurrentJoint4.MotorAngleDeg  = m4Deg;
         }
 
-        public Vector6 GetVisualRobotPose(Vector6 currentTcp, Vector6 toolOffset)
+        public Vector6? GetVisualRobotPose(Vector6 currentTcp, Vector6 toolOffset)
         {
             double j1Deg = CurrentJoint1.JointAngleDeg;
             double j4Deg = CurrentJoint4.JointAngleDeg;
@@ -286,5 +289,11 @@ namespace Controller.RobotControl.Robots.ASTRO
                 -j4Deg
             );
         }
+
+        public (double joint1, double joint2x, double joint2z, double joint4) GetJointAngles()
+            => (CurrentJoint1.JointAngleDeg,
+                CurrentJoint2.Cartesian.x,
+                CurrentJoint2.Cartesian.z,
+                CurrentJoint4.JointAngleDeg);
     }
 }
