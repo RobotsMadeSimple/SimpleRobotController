@@ -140,8 +140,7 @@ namespace Controller.RobotControl
 
     public static class RobotConfigService
     {
-        private static readonly string ConfigFilePath =
-            Path.Combine(AppContext.BaseDirectory, "robot-config.json");
+        private static readonly string ConfigFilePath = "robot-config.json";
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {

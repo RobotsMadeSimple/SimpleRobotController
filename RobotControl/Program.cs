@@ -8,11 +8,24 @@ class Program
 {
     static void Main(string[] args)
     {
-        // Ensure config files load relative to the exe when launched from startup folder
-        Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+        // ── Parse CLI args ─────────────────────────────────────────────────────
+        int    port    = 9000;
+        string dataDir = AppContext.BaseDirectory;
+
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--port" && int.TryParse(args[i + 1], out int p)) port = p;
+            if (args[i] == "--data") dataDir = Path.GetFullPath(args[i + 1]);
+        }
+
+        Directory.CreateDirectory(dataDir);
+        // All relative-path file operations (repos, config, identity, relay) resolve
+        // against this directory, so each robot instance gets its own isolated data.
+        Directory.SetCurrentDirectory(dataDir);
 
         var version = Controller.RobotControl.RobotController.Version;
         Console.WriteLine($"[Boot] Simple Robot Controller {version}");
+        Console.WriteLine($"[Boot] Port: {port}  Data: {dataDir}");
         Console.WriteLine($"[Boot] OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
         Console.WriteLine($"[Boot] Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
 
@@ -38,7 +51,7 @@ class Program
 
         ServiceProfile BuildProfile(RobotIdentity id)
         {
-            var p = new ServiceProfile(id.SerialNumber, "_robot._tcp", 9000);
+            var p = new ServiceProfile(id.SerialNumber, "_robot._tcp", (ushort)port);
             p.AddProperty("ControlEndpoint", "/control");
             p.AddProperty("SerialNumber",    id.SerialNumber);
             p.AddProperty("RobotType",       id.RobotType);
@@ -264,6 +277,7 @@ class Program
         });
 
         // ── DXF file endpoints ─────────────────────────────────────────────────
+        // Relative to dataDir (already the CWD), so each robot instance has its own dxf/ folder.
         const string DxfDir = "dxf";
         Directory.CreateDirectory(DxfDir);
 
@@ -319,6 +333,6 @@ class Program
             context.Response.StatusCode = 200;
         });
 
-        app.Run("http://0.0.0.0:9000");
+        app.Run($"http://0.0.0.0:{port}");
     }
 }

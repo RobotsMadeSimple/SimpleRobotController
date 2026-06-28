@@ -15,8 +15,7 @@ namespace Controller.RobotControl.UsbRelay
 
     public static class RelayConfigService
     {
-        private static readonly string ConfigFilePath =
-            Path.Combine(AppContext.BaseDirectory, "relay-config.json");
+        private static readonly string ConfigFilePath = "relay-config.json";
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {

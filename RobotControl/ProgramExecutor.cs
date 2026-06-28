@@ -72,7 +72,7 @@ namespace Controller.RobotControl
 
         // Persistent variables — names saved here; values written to disk on Finish()
         private readonly HashSet<string> _persistentVarNames = new(StringComparer.OrdinalIgnoreCase);
-        private static readonly string   _persistPath        = System.IO.Path.Combine(AppContext.BaseDirectory, "persistent_vars.json");
+        private static readonly string   _persistPath        = "persistent_vars.json";
         private static readonly object   _persistLock        = new();
 
         // Stopwatch state per variable name
