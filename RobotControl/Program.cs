@@ -8,11 +8,24 @@ class Program
 {
     static void Main(string[] args)
     {
-        // Ensure config files load relative to the exe when launched from startup folder
-        Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+        // ── Parse CLI args ─────────────────────────────────────────────────────
+        int    port    = 9000;
+        string dataDir = AppContext.BaseDirectory;
+
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--port" && int.TryParse(args[i + 1], out int p)) port = p;
+            if (args[i] == "--data") dataDir = Path.GetFullPath(args[i + 1]);
+        }
+
+        Directory.CreateDirectory(dataDir);
+        // All relative-path file operations (repos, config, identity, relay) resolve
+        // against this directory, so each robot instance gets its own isolated data.
+        Directory.SetCurrentDirectory(dataDir);
 
         var version = Controller.RobotControl.RobotController.Version;
         Console.WriteLine($"[Boot] Simple Robot Controller {version}");
+        Console.WriteLine($"[Boot] Port: {port}  Data: {dataDir}");
         Console.WriteLine($"[Boot] OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
         Console.WriteLine($"[Boot] Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
 
@@ -38,7 +51,7 @@ class Program
 
         ServiceProfile BuildProfile(RobotIdentity id)
         {
-            var p = new ServiceProfile(id.SerialNumber, "_robot._tcp", 9000);
+            var p = new ServiceProfile(id.SerialNumber, "_robot._tcp", (ushort)port);
             p.AddProperty("ControlEndpoint", "/control");
             p.AddProperty("SerialNumber",    id.SerialNumber);
             p.AddProperty("RobotType",       id.RobotType);
@@ -263,6 +276,63 @@ class Program
             await context.Response.Body.WriteAsync(jpeg);
         });
 
-        app.Run("http://0.0.0.0:9000");
+        // ── DXF file endpoints ─────────────────────────────────────────────────
+        // Relative to dataDir (already the CWD), so each robot instance has its own dxf/ folder.
+        const string DxfDir = "dxf";
+        Directory.CreateDirectory(DxfDir);
+
+        // Upload a DXF file — body is raw text (DXF), query param ?name=filename.dxf
+        app.MapPost("/dxf", async (HttpContext context) =>
+        {
+            var name = context.Request.Query["name"].ToString();
+            if (string.IsNullOrWhiteSpace(name) || !name.EndsWith(".dxf", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.StatusCode = 400;
+                await context.Response.WriteAsync("Missing or invalid ?name= query parameter.");
+                return;
+            }
+            // Sanitize: strip path separators
+            name = Path.GetFileName(name);
+            var path = Path.Combine(DxfDir, name);
+            using var fs = File.Create(path);
+            await context.Request.Body.CopyToAsync(fs);
+            context.Response.StatusCode = 200;
+            await context.Response.WriteAsync(name);
+        });
+
+        // List available DXF files
+        app.MapGet("/dxf", (HttpContext context) =>
+        {
+            var files = Directory.GetFiles(DxfDir, "*.dxf")
+                                 .Select(f => Path.GetFileName(f))
+                                 .OrderBy(f => f)
+                                 .ToArray();
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            return Results.Json(files);
+        });
+
+        // Download a specific DXF file by name
+        app.MapGet("/dxf/{name}", async (string name, HttpContext context) =>
+        {
+            name = Path.GetFileName(name);
+            var path = Path.Combine(DxfDir, name);
+            if (!File.Exists(path)) { context.Response.StatusCode = 404; return; }
+            context.Response.ContentType = "application/octet-stream";
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+            await context.Response.SendFileAsync(path);
+        });
+
+        // Delete a DXF file
+        app.MapDelete("/dxf/{name}", (string name, HttpContext context) =>
+        {
+            name = Path.GetFileName(name);
+            var path = Path.Combine(DxfDir, name);
+            if (!File.Exists(path)) { context.Response.StatusCode = 404; return; }
+            File.Delete(path);
+            context.Response.StatusCode = 200;
+        });
+
+        app.Run($"http://0.0.0.0:{port}");
     }
 }

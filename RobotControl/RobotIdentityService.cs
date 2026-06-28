@@ -19,8 +19,7 @@ namespace Controller.RobotControl
 
     public static class RobotIdentityService
     {
-        private static readonly string IdentityFilePath =
-            Path.Combine(AppContext.BaseDirectory, "identity.json");
+        private static readonly string IdentityFilePath = "identity.json";
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {

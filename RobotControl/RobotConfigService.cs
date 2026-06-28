@@ -87,23 +87,53 @@ namespace Controller.RobotControl
         [JsonPropertyName("enableCameras")]
         public bool EnableCameras { get; set; } = false;
 
-        // ── CNC4Axis motor scaling ────────────────────────────────────────────────
+        // ── Jog speeds ────────────────────────────────────────────────────────────────
 
-        /// <summary>Motor shaft degrees per mm of X travel (CNC4Axis only).</summary>
-        [JsonPropertyName("cncMotorDegsPerMmX")]
-        public double CncMotorDegsPerMmX { get; set; } = 1.0;
+        /// <summary>Slow jog speed (mm/s or deg/s).</summary>
+        [JsonPropertyName("jogSlowSpeed")]
+        public double JogSlowSpeed { get; set; } = 10;
 
-        /// <summary>Motor shaft degrees per mm of Y travel (CNC4Axis only).</summary>
-        [JsonPropertyName("cncMotorDegsPerMmY")]
-        public double CncMotorDegsPerMmY { get; set; } = 1.0;
+        /// <summary>Normal jog speed (mm/s or deg/s).</summary>
+        [JsonPropertyName("jogNormalSpeed")]
+        public double JogNormalSpeed { get; set; } = 100;
 
-        /// <summary>Motor shaft degrees per mm of Z travel (CNC4Axis only).</summary>
-        [JsonPropertyName("cncMotorDegsPerMmZ")]
-        public double CncMotorDegsPerMmZ { get; set; } = 1.0;
+        /// <summary>Fast jog speed (mm/s or deg/s).</summary>
+        [JsonPropertyName("jogFastSpeed")]
+        public double JogFastSpeed { get; set; } = 300;
 
-        /// <summary>Motor shaft degrees per degree of RZ rotation (CNC4Axis only).</summary>
-        [JsonPropertyName("cncMotorDegsPerDegRz")]
-        public double CncMotorDegsPerDegRz { get; set; } = 1.0;
+        // ── CNC4Axis motor configuration ──────────────────────────────────────────────
+
+        /// <summary>Motor steps per revolution for the X axis (microstepping setting).</summary>
+        [JsonPropertyName("cncStepsPerRevX")]
+        public int CncStepsPerRevX { get; set; } = 1600;
+
+        /// <summary>Motor steps per revolution for the Y axis.</summary>
+        [JsonPropertyName("cncStepsPerRevY")]
+        public int CncStepsPerRevY { get; set; } = 1600;
+
+        /// <summary>Motor steps per revolution for the Z axis.</summary>
+        [JsonPropertyName("cncStepsPerRevZ")]
+        public int CncStepsPerRevZ { get; set; } = 1600;
+
+        /// <summary>Motor steps per revolution for the RZ spindle axis.</summary>
+        [JsonPropertyName("cncStepsPerRevRZ")]
+        public int CncStepsPerRevRZ { get; set; } = 1600;
+
+        /// <summary>Leadscrew travel in mm per motor revolution for the X axis.</summary>
+        [JsonPropertyName("cncMmPerRevX")]
+        public double CncMmPerRevX { get; set; } = 5.0;
+
+        /// <summary>Leadscrew travel in mm per motor revolution for the Y axis.</summary>
+        [JsonPropertyName("cncMmPerRevY")]
+        public double CncMmPerRevY { get; set; } = 5.0;
+
+        /// <summary>Leadscrew travel in mm per motor revolution for the Z axis.</summary>
+        [JsonPropertyName("cncMmPerRevZ")]
+        public double CncMmPerRevZ { get; set; } = 5.0;
+
+        /// <summary>Degrees of RZ output rotation per motor revolution (gear ratio).</summary>
+        [JsonPropertyName("cncDegPerRevRZ")]
+        public double CncDegPerRevRZ { get; set; } = 360.0;
 
         // ── CNC4Axis home positions ───────────────────────────────────────────────
 
@@ -140,8 +170,7 @@ namespace Controller.RobotControl
 
     public static class RobotConfigService
     {
-        private static readonly string ConfigFilePath =
-            Path.Combine(AppContext.BaseDirectory, "robot-config.json");
+        private static readonly string ConfigFilePath = "robot-config.json";
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
