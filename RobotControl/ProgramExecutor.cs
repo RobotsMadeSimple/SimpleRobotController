@@ -657,6 +657,10 @@ namespace Controller.RobotControl
                 case StepType.ThreadMove:
                     ExecuteThreadMove(step, frame);
                     break;
+
+                case StepType.CncProgram:
+                    ExecuteCncProgram(step, frame);
+                    break;
             }
         }
 
@@ -1465,6 +1469,17 @@ namespace Controller.RobotControl
 
             // Push the routine's steps as a plain (non-loop) frame
             _frameStack.Push(new StepListFrame(routine.Steps, 0));
+        }
+
+        private void ExecuteCncProgram(ProgramStep step, StepListFrame frame)
+        {
+            var innerSteps = step.CncProgramSteps ?? new();
+            if (innerSteps.Count == 0) { frame.Index++; ReportStepCompleted(step); return; }
+
+            ReportStepCompleted(step);
+            frame.Index++;
+
+            _frameStack.Push(new StepListFrame(innerSteps, 0));
         }
 
         private void ExecuteLoop(ProgramStep step, StepListFrame frame)
