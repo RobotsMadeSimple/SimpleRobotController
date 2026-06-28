@@ -3,7 +3,10 @@ using OpenCvSharp.Aruco;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
+using ZXing;
+using ZXing.Common;
 
 namespace Controller.RobotControl.Vision
 {
@@ -92,6 +95,7 @@ namespace Controller.RobotControl.Vision
                         PolygonResults = new List<PolygonResult>(),
                         ArucoResults   = new List<ArucoResult>(),
                         LineResults    = new List<LineResult>(),
+                        BarcodeResults = new List<BarcodeResult>(),
                     };
 
                     using var annotated = src.Clone();
@@ -186,6 +190,18 @@ namespace Controller.RobotControl.Vision
                             result.LineResults.Add(lr);
                         }
                         catch { /* skip failed line inspection */ }
+                    }
+
+                    // Run barcode/QR inspections
+                    foreach (var barcodeInsp in prog.BarcodeInspections)
+                    {
+                        if (!barcodeInsp.Enabled) continue;
+                        try
+                        {
+                            var br = RunBarcodeInspection(src, annotated, barcodeInsp, prog.Zones, ref colorLabelY);
+                            result.BarcodeResults.Add(br);
+                        }
+                        catch { /* skip failed barcode inspection */ }
                     }
 
                     Cv2.ImEncode(".jpg", annotated, out var buf, JpegParams);
@@ -527,17 +543,25 @@ namespace Controller.RobotControl.Vision
                 ? null
                 : zones.FirstOrDefault(z => z.Id == insp.ZoneId);
 
-            var dict       = CvAruco.GetPredefinedDictionary((PredefinedDictionaryType)insp.DictionaryId);
             var parameters = new DetectorParameters();
-            var detector   = new ArucoDetector(dict, parameters, new RefineParameters());
+            var markers    = new List<ArucoMarkerResult>();
+            var drawColor  = new Scalar(0, 255, 127); // spring green (BGR)
 
-            detector.DetectMarkers(src, out var corners, out var ids, out _);
+            IEnumerable<int> dictIds = insp.DictionaryId == -1
+                ? Enumerable.Range(0, 17)
+                : new[] { insp.DictionaryId };
 
-            var markers   = new List<ArucoMarkerResult>();
-            var drawColor = new Scalar(0, 255, 127); // spring green (BGR)
+            var seenCenters = new HashSet<(int x, int y)>();
 
-            if (ids != null && ids.Length > 0)
+            foreach (var dictId in dictIds)
             {
+                var dict     = CvAruco.GetPredefinedDictionary((PredefinedDictionaryType)dictId);
+                var detector = new ArucoDetector(dict, parameters, new RefineParameters());
+
+                detector.DetectMarkers(src, out var corners, out var ids, out _);
+
+                if (ids == null || ids.Length == 0) continue;
+
                 for (int i = 0; i < ids.Length; i++)
                 {
                     var c = corners[i];
@@ -552,6 +576,10 @@ namespace Controller.RobotControl.Vision
                     float cy = c.Average(p => p.Y);
 
                     if (zone != null && !IsInsideZone(zone.Geometry, cx, cy, w, h)) continue;
+
+                    // deduplicate by pixel center to avoid multi-dict double-counting
+                    var key = ((int)cx, (int)cy);
+                    if (!seenCenters.Add(key)) continue;
 
                     markers.Add(new ArucoMarkerResult
                     {
@@ -583,6 +611,138 @@ namespace Controller.RobotControl.Vision
                 Count        = markers.Count,
                 Found        = markers.Count > 0,
                 Markers      = markers,
+            };
+        }
+
+        // ── Barcode / QR code detection ──────────────────────────────────────────
+
+        private BarcodeResult RunBarcodeInspection(
+            Mat src, Mat annotated, BarcodeInspection insp,
+            List<VisionZone> zones, ref int labelY)
+        {
+            int w = src.Width, h = src.Height;
+
+            VisionZone? zone = string.IsNullOrEmpty(insp.ZoneId)
+                ? null
+                : zones.FirstOrDefault(z => z.Id == insp.ZoneId);
+
+            // Compute ROI bounding rect from zone geometry
+            int roiX = 0, roiY = 0, roiW = w, roiH = h;
+            if (zone != null)
+            {
+                var g = zone.Geometry;
+                if (g.Shape == VisionZoneShape.Rectangle)
+                {
+                    roiX = (int)(g.X * w);
+                    roiY = (int)(g.Y * h);
+                    roiW = (int)(g.Width  * w);
+                    roiH = (int)(g.Height * h);
+                }
+                else if (g.Shape == VisionZoneShape.Circle)
+                {
+                    var rad = g.Radius * Math.Min(w, h);
+                    roiX = (int)Math.Max(0, g.Cx * w - rad);
+                    roiY = (int)Math.Max(0, g.Cy * h - rad);
+                    roiW = (int)(rad * 2);
+                    roiH = (int)(rad * 2);
+                }
+                else if (g.Shape == VisionZoneShape.Polygon && g.Points.Count >= 3)
+                {
+                    var xs = g.Points.Select(p => p[0] * w).ToList();
+                    var ys = g.Points.Select(p => p[1] * h).ToList();
+                    roiX = (int)xs.Min();
+                    roiY = (int)ys.Min();
+                    roiW = (int)(xs.Max() - roiX);
+                    roiH = (int)(ys.Max() - roiY);
+                }
+                roiW = Math.Max(1, Math.Min(roiW, w - roiX));
+                roiH = Math.Max(1, Math.Min(roiH, h - roiY));
+            }
+
+            using var roi = (roiX == 0 && roiY == 0 && roiW == w && roiH == h)
+                ? src.Clone()
+                : src.SubMat(roiY, roiY + roiH, roiX, roiX + roiW).Clone();
+
+            using var gray = new Mat();
+            Cv2.CvtColor(roi, gray, ColorConversionCodes.BGR2GRAY);
+
+            var pixelBytes = new byte[gray.Width * gray.Height];
+            Marshal.Copy(gray.Data, pixelBytes, 0, pixelBytes.Length);
+
+            var luminance = new RGBLuminanceSource(pixelBytes, gray.Width, gray.Height,
+                RGBLuminanceSource.BitmapFormat.Gray8);
+
+            var reader = new BarcodeReaderGeneric { Options = { TryHarder = true, TryInverted = true } };
+            if (insp.Formats.Count > 0)
+            {
+                reader.Options.PossibleFormats = insp.Formats
+                    .Where(f => Enum.TryParse<BarcodeFormat>(f, out _))
+                    .Select(f => Enum.Parse<BarcodeFormat>(f))
+                    .ToList();
+            }
+
+            var rawResults = reader.DecodeMultiple(luminance) ?? Array.Empty<ZXing.Result>();
+
+            var codes     = new List<BarcodeCodeResult>();
+            var drawColor = new Scalar(30, 144, 255); // dodger blue (BGR)
+
+            foreach (var r in rawResults)
+            {
+                if (r?.Text == null) continue;
+
+                // Map result point centers back to full-image coordinates
+                double cx, cy;
+                if (r.ResultPoints is { Length: > 0 })
+                {
+                    cx = roiX + r.ResultPoints.Where(p => p != null).Average(p => p.X);
+                    cy = roiY + r.ResultPoints.Where(p => p != null).Average(p => p.Y);
+                }
+                else
+                {
+                    cx = roiX + roiW / 2.0;
+                    cy = roiY + roiH / 2.0;
+                }
+
+                codes.Add(new BarcodeCodeResult
+                {
+                    Value   = r.Text,
+                    Format  = r.BarcodeFormat.ToString(),
+                    CenterX = Math.Round(cx / w, 4),
+                    CenterY = Math.Round(cy / h, 4),
+                });
+
+                // Draw outline and label on annotated frame
+                if (r.ResultPoints is { Length: >= 2 })
+                {
+                    var pts = r.ResultPoints
+                        .Where(p => p != null)
+                        .Select(p => new OpenCvSharp.Point((int)(p.X + roiX), (int)(p.Y + roiY)))
+                        .ToArray();
+                    Cv2.Polylines(annotated, new[] { pts }, isClosed: pts.Length > 2, drawColor, 2);
+                }
+                Cv2.PutText(annotated, $"{r.BarcodeFormat}: {r.Text}",
+                    new OpenCvSharp.Point((int)cx + 4, (int)cy - 4),
+                    HersheyFonts.HersheySimplex, 0.45, new Scalar(0, 0, 0), 3);
+                Cv2.PutText(annotated, $"{r.BarcodeFormat}: {r.Text}",
+                    new OpenCvSharp.Point((int)cx + 4, (int)cy - 4),
+                    HersheyFonts.HersheySimplex, 0.45, drawColor, 1);
+            }
+
+            var labelColor = codes.Count > 0 ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
+            string label = codes.Count > 0
+                ? $"{insp.Name}: {codes.Count} code(s) [{string.Join(", ", codes.Select(c => c.Format))}]"
+                : $"{insp.Name}: none";
+            Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
+            Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, labelColor, 1);
+            labelY += 22;
+
+            return new BarcodeResult
+            {
+                InspectionId = insp.Id,
+                Name         = insp.Name,
+                Count        = codes.Count,
+                Found        = codes.Count > 0,
+                Codes        = codes,
             };
         }
 

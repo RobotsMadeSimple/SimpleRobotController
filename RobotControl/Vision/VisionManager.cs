@@ -62,6 +62,8 @@ namespace Controller.RobotControl.Vision
             lock (_lock) { _processors.TryGetValue(programId, out var p); return p; }
         }
 
+        public VisionProgram? GetProgram(string programId) => _repo.Get(programId);
+
         public List<string> GetRunningIds()
         {
             lock (_lock) { return _processors.Keys.ToList(); }

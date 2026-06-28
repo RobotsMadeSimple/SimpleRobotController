@@ -374,6 +374,8 @@ public class ProgramStep
     // RunVision
     [JsonPropertyName("visionProgramId")]   public string? VisionProgramId   { get; set; }
     [JsonPropertyName("visionProgramName")] public string? VisionProgramName { get; set; }
+    [JsonPropertyName("visionZoneId")]      public string? VisionZoneId      { get; set; }
+    [JsonPropertyName("visionZoneVar")]     public string? VisionZoneVar     { get; set; }
     [JsonPropertyName("visionOutputs")]     public List<VisionStepOutput>?         VisionOutputs  { get; set; }
     [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>?    ColorOutputs   { get; set; }
     [JsonPropertyName("polygonOutputs")]    public List<PolygonVisionStepOutput>?  PolygonOutputs { get; set; }
