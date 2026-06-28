@@ -7,6 +7,10 @@ namespace Controller.RobotControl
 {
     public class RobotConfig
     {
+        /// <summary>Selects the kinematics model: "ASTRO" (default) or "CNC4Axis".</summary>
+        [JsonPropertyName("robotType")]
+        public string RobotType { get; set; } = "ASTRO";
+
         /// <summary>Speed used for all axes during the fast homing approach (mm/s or deg/s).</summary>
         [JsonPropertyName("homingSpeed")]
         public double HomingSpeed { get; set; } = 20;
@@ -82,6 +86,56 @@ namespace Controller.RobotControl
         /// <summary>Show USB camera cards in the app.</summary>
         [JsonPropertyName("enableCameras")]
         public bool EnableCameras { get; set; } = false;
+
+        // ── CNC4Axis motor scaling ────────────────────────────────────────────────
+
+        /// <summary>Motor shaft degrees per mm of X travel (CNC4Axis only).</summary>
+        [JsonPropertyName("cncMotorDegsPerMmX")]
+        public double CncMotorDegsPerMmX { get; set; } = 1.0;
+
+        /// <summary>Motor shaft degrees per mm of Y travel (CNC4Axis only).</summary>
+        [JsonPropertyName("cncMotorDegsPerMmY")]
+        public double CncMotorDegsPerMmY { get; set; } = 1.0;
+
+        /// <summary>Motor shaft degrees per mm of Z travel (CNC4Axis only).</summary>
+        [JsonPropertyName("cncMotorDegsPerMmZ")]
+        public double CncMotorDegsPerMmZ { get; set; } = 1.0;
+
+        /// <summary>Motor shaft degrees per degree of RZ rotation (CNC4Axis only).</summary>
+        [JsonPropertyName("cncMotorDegsPerDegRz")]
+        public double CncMotorDegsPerDegRz { get; set; } = 1.0;
+
+        // ── CNC4Axis home positions ───────────────────────────────────────────────
+
+        /// <summary>X coordinate (mm) set when the X axis limit switch is hit during homing.</summary>
+        [JsonPropertyName("cncXHomePosition")]
+        public double CncXHomePosition { get; set; } = 0;
+
+        /// <summary>Y coordinate (mm) set when the Y axis limit switch is hit during homing.</summary>
+        [JsonPropertyName("cncYHomePosition")]
+        public double CncYHomePosition { get; set; } = 0;
+
+        /// <summary>Z coordinate (mm) set when the Z axis limit switch is hit during homing.</summary>
+        [JsonPropertyName("cncZHomePosition")]
+        public double CncZHomePosition { get; set; } = 0;
+
+        /// <summary>RZ angle (deg) applied at the end of CNC homing (no limit switch — just zeroed).</summary>
+        [JsonPropertyName("cncRzHomePosition")]
+        public double CncRzHomePosition { get; set; } = 0;
+
+        // ── CNC4Axis homing directions ────────────────────────────────────────────
+
+        /// <summary>Direction to jog during X homing (1 = positive, -1 = negative).</summary>
+        [JsonPropertyName("cncXHomingDirection")]
+        public int CncXHomingDirection { get; set; } = -1;
+
+        /// <summary>Direction to jog during Y homing (1 = positive, -1 = negative).</summary>
+        [JsonPropertyName("cncYHomingDirection")]
+        public int CncYHomingDirection { get; set; } = -1;
+
+        /// <summary>Direction to jog during Z homing (1 = positive, -1 = negative).</summary>
+        [JsonPropertyName("cncZHomingDirection")]
+        public int CncZHomingDirection { get; set; } = 1;
     }
 
     public static class RobotConfigService

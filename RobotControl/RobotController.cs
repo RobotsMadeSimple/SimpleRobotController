@@ -1,7 +1,9 @@
 ﻿using Controller.RobotControl.AuxAxis;
 using Controller.RobotControl.MotionProfilers;
 using Controller.RobotControl.Nano;
+using Controller.RobotControl.Robots;
 using Controller.RobotControl.Robots.ASTRO;
+using Controller.RobotControl.Robots.CNC4Axis;
 using Controller.RobotControl.UsbRelay;
 using System.Diagnostics;
 using System.Linq;
@@ -23,7 +25,7 @@ namespace Controller.RobotControl
         private RobotIdentity _identity = new();
         public Action<RobotIdentity>? OnIdentityChanged;
         public ScalarMotionProfiler mp = new();
-        public ASTROKinematics ASTRO = new();
+        private IRobotKinematics _kinematics = new ASTROKinematics();
         private readonly ProgramCycleManager programManager = new();
         private ProgramExecutor? programExecutor;
         private BackgroundProgramManager backgroundProgramManager = null!;
@@ -109,8 +111,8 @@ namespace Controller.RobotControl
                 var tool = toolRepo.Get(name);
                 if (tool != null) { activeTool = name; CurrentTool = new Vector6(tool.X, tool.Y, tool.Z, tool.RX, tool.RY, tool.RZ); }
             }
-            CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
-            CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+            CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+            CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
         }
 
         // Robot configuration (homing offsets, speeds, etc.)
@@ -315,7 +317,7 @@ namespace Controller.RobotControl
                 }
 
                 // Calculate IK to get the joint targets for the next interpolated linear movement
-                CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
             }
             else if (jointMotionProfiler is not null)
@@ -338,13 +340,13 @@ namespace Controller.RobotControl
                 UpdateJointTargets();
 
                 // Recalculate the Cartesian Coordinate position to keep it current
-                CurrentPosition = ASTRO.TcpPosition(CurrentTool);
+                CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
             }
             else if (IsJogging)
             {
                 CurrentPosition = joggingMotionProfiler.Update(CurrentPosition);
                 // Calculate IK to get the joint targets for the next Jog movement
-                CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
             }
             else if (IsJointJogging)
@@ -356,22 +358,19 @@ namespace Controller.RobotControl
                 UpdateJointTargets();
 
                 // Recalculate the Cartesian Coordinate position to keep it current
-                CurrentPosition = ASTRO.TcpPosition(CurrentTool);
+                CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
             }
             else if (IsToolJogging)
             {
                 CurrentPosition = toolJoggingMotionProfiler.Update(CurrentPosition);
                 // Calculate IK to get the joint targets for the next Jog movement
-                CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
             }
         }
         public void UpdateJointTargets()
         {
-            // Have the robot update its joints
-            ASTRO.UpdateJointTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
-
-            // Drive the motors to the target
+            _kinematics.UpdateMotorTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
             stb.SetMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
         }
 
@@ -430,6 +429,25 @@ namespace Controller.RobotControl
         {
             _config = config;
             ApplyMotorDirections();
+            InitializeKinematics();
+        }
+
+        private void InitializeKinematics()
+        {
+            if (_config.RobotType == "CNC4Axis")
+            {
+                _kinematics = new CNC4AxisKinematics
+                {
+                    MotorDegsPerMmX   = _config.CncMotorDegsPerMmX,
+                    MotorDegsPerMmY   = _config.CncMotorDegsPerMmY,
+                    MotorDegsPerMmZ   = _config.CncMotorDegsPerMmZ,
+                    MotorDegsPerDegRZ = _config.CncMotorDegsPerDegRz,
+                };
+            }
+            else
+            {
+                _kinematics = new ASTROKinematics();
+            }
         }
 
         private void ApplyMotorDirections()
@@ -544,6 +562,7 @@ namespace Controller.RobotControl
                 case "GetRobotConfig":
                     payload = new
                     {
+                        robotType                 = _config.RobotType,
                         homingSpeed               = _config.HomingSpeed,
                         homingSlowSpeed           = _config.HomingSlowSpeed,
                         homingBackoffMm           = _config.HomingBackoffMm,
@@ -562,6 +581,17 @@ namespace Controller.RobotControl
                         enableRelayCard           = _config.EnableRelayCard,
                         enableAuxAxis             = _config.EnableAuxAxis,
                         enableCameras             = _config.EnableCameras,
+                        cncMotorDegsPerMmX        = _config.CncMotorDegsPerMmX,
+                        cncMotorDegsPerMmY        = _config.CncMotorDegsPerMmY,
+                        cncMotorDegsPerMmZ        = _config.CncMotorDegsPerMmZ,
+                        cncMotorDegsPerDegRz      = _config.CncMotorDegsPerDegRz,
+                        cncXHomePosition          = _config.CncXHomePosition,
+                        cncYHomePosition          = _config.CncYHomePosition,
+                        cncZHomePosition          = _config.CncZHomePosition,
+                        cncRzHomePosition         = _config.CncRzHomePosition,
+                        cncXHomingDirection       = _config.CncXHomingDirection,
+                        cncYHomingDirection       = _config.CncYHomingDirection,
+                        cncZHomingDirection       = _config.CncZHomingDirection,
                     };
                     break;
 
@@ -587,6 +617,18 @@ namespace Controller.RobotControl
                     if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
                     if (p.EnableAuxAxis.HasValue)             _config.EnableAuxAxis             = p.EnableAuxAxis.Value;
                     if (p.EnableCameras.HasValue)             _config.EnableCameras             = p.EnableCameras.Value;
+                    if (p.RobotType != null)                  { _config.RobotType               = p.RobotType;             InitializeKinematics(); }
+                    if (p.CncMotorDegsPerMmX.HasValue)        _config.CncMotorDegsPerMmX        = p.CncMotorDegsPerMmX.Value;
+                    if (p.CncMotorDegsPerMmY.HasValue)        _config.CncMotorDegsPerMmY        = p.CncMotorDegsPerMmY.Value;
+                    if (p.CncMotorDegsPerMmZ.HasValue)        _config.CncMotorDegsPerMmZ        = p.CncMotorDegsPerMmZ.Value;
+                    if (p.CncMotorDegsPerDegRz.HasValue)      _config.CncMotorDegsPerDegRz      = p.CncMotorDegsPerDegRz.Value;
+                    if (p.CncXHomePosition.HasValue)          _config.CncXHomePosition          = p.CncXHomePosition.Value;
+                    if (p.CncYHomePosition.HasValue)          _config.CncYHomePosition          = p.CncYHomePosition.Value;
+                    if (p.CncZHomePosition.HasValue)          _config.CncZHomePosition          = p.CncZHomePosition.Value;
+                    if (p.CncRzHomePosition.HasValue)         _config.CncRzHomePosition         = p.CncRzHomePosition.Value;
+                    if (p.CncXHomingDirection.HasValue)       _config.CncXHomingDirection       = p.CncXHomingDirection.Value;
+                    if (p.CncYHomingDirection.HasValue)       _config.CncYHomingDirection       = p.CncYHomingDirection.Value;
+                    if (p.CncZHomingDirection.HasValue)       _config.CncZHomingDirection       = p.CncZHomingDirection.Value;
                     RobotConfigService.Save(_config);
                     break;
                 }
@@ -792,7 +834,8 @@ namespace Controller.RobotControl
 
                 case "GetStatus":
                     {
-                        Vector6 pose = ASTRO.GetVisualRobotPose(CurrentPosition, CurrentTool);
+                        Vector6? pose = _kinematics.GetVisualRobotPose(CurrentPosition, CurrentTool);
+                        var (j1, j2x, j2z, j4) = _kinematics.GetJointAngles();
 
                         payload = new
                         {
@@ -818,17 +861,17 @@ namespace Controller.RobotControl
                             targetRY = this.TargetPosition.RY,
                             targetRZ = this.TargetPosition.RZ,
 
-                            joint1Angle = this.ASTRO.CurrentJoint1.JointAngleDeg,
-                            joint2X = this.ASTRO.CurrentJoint2.Cartesian.x,
-                            joint2Z = this.ASTRO.CurrentJoint2.Cartesian.z,
-                            joint4Angle = this.ASTRO.CurrentJoint4.JointAngleDeg,
+                            joint1Angle = j1,
+                            joint2X = j2x,
+                            joint2Z = j2z,
+                            joint4Angle = j4,
 
-                            poseX = pose.X,
-                            poseY = pose.Y,
-                            poseZ = pose.Z,
-                            poseRX = pose.RX,
-                            poseRY = pose.RY,
-                            poseRZ = pose.RZ,
+                            poseX = pose?.X ?? 0,
+                            poseY = pose?.Y ?? 0,
+                            poseZ = pose?.Z ?? 0,
+                            poseRX = pose?.RX ?? 0,
+                            poseRY = pose?.RY ?? 0,
+                            poseRZ = pose?.RZ ?? 0,
 
                             speedS = SpeedS,
                             accelS = AccelS,
@@ -1051,8 +1094,8 @@ namespace Controller.RobotControl
                         {
                             activeTool          = "";
                             CurrentTool         = Vector6.Zero;
-                            CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
-                            CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                            CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                            CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                         }
                     }
                     break;
@@ -1307,8 +1350,8 @@ namespace Controller.RobotControl
                             }
                         }
                         // Recalculate position with new tool offset
-                        CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
-                        CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                        CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                        CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                     }
                     break;
 
@@ -1544,8 +1587,8 @@ namespace Controller.RobotControl
 
                 case "SetTool":
                     this.CurrentTool    = Command.Vector6;
-                    CurrentPosition     = ASTRO.TcpPosition(CurrentTool);
-                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                     break;
 
                 case "SpeedS":
@@ -1589,24 +1632,36 @@ namespace Controller.RobotControl
         public void SetAllHomed()
         {
             double m1Deg, m2Deg, m3Deg, m4Deg;
-            // Offset the current joint angle
-            ASTRO.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
-            ASTRO.CurrentJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
-            ASTRO.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
-            ASTRO.CurrentJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
-            ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
-            ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, _config.VerticalHomePosition);
-            ASTRO.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
-            ASTRO.CurrentJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
 
-            // Recalculate the position and joint targets
-            CurrentPosition = ASTRO.TcpPosition(CurrentTool);
-            CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
+            if (_kinematics is ASTROKinematics astro)
+            {
+                astro.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
+                astro.CurrentJoint1.JointAngleDeg      = _config.J1HomeOffsetDeg;
+                astro.InterpolatedJoint2.Cartesian     = (_config.HorizontalHomePosition, astro.InterpolatedJoint2.Cartesian.z);
+                astro.CurrentJoint2.Cartesian          = (_config.HorizontalHomePosition, astro.CurrentJoint2.Cartesian.z);
+                astro.InterpolatedJoint2.Cartesian     = (astro.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
+                astro.CurrentJoint2.Cartesian          = (astro.CurrentJoint2.Cartesian.x,      _config.VerticalHomePosition);
+                astro.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
+                astro.CurrentJoint4.JointAngleDeg      = _config.J4HomeOffsetDeg;
 
-            // Have the robot update its joints
-            ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+            }
+            else
+            {
+                // CNC4Axis: apply configured home positions directly as joint targets
+                CurrentJointTargets = new Vector6(
+                    _config.CncXHomePosition,
+                    _config.CncYHomePosition,
+                    _config.CncZHomePosition,
+                    0, 0,
+                    _config.CncRzHomePosition
+                );
+                _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
+            }
 
-            // Drive the motors to the target
             stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
         }
         public void RunHoming()
@@ -1617,7 +1672,7 @@ namespace Controller.RobotControl
             {
                 case "WaitingForStart":
                     if (startHoming)
-                        homingState = "HomeVertical";
+                        homingState = _kinematics is CNC4AxisKinematics ? "CNC_HomeZ" : "HomeVertical";
                     break;
 
                 case "HomeVertical":
@@ -1676,21 +1731,19 @@ namespace Controller.RobotControl
                     break;
 
                 case "SetVerticalHomed":
-                    // Offset the current joint angle
-                    ASTRO.InterpolatedJoint2.Cartesian = (ASTRO.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
-                    ASTRO.CurrentJoint2.Cartesian = (ASTRO.CurrentJoint2.Cartesian.x, _config.VerticalHomePosition);
+                {
+                    var astro = (ASTROKinematics)_kinematics;
+                    astro.InterpolatedJoint2.Cartesian = (astro.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
+                    astro.CurrentJoint2.Cartesian      = (astro.CurrentJoint2.Cartesian.x,      _config.VerticalHomePosition);
 
-                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
-                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
-
-                    // Have the robot update its joints
-                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-
-                    // Drive the motors to the target
+                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
 
                     homingState = "HomeHorizontal";
                     break;
+                }
 
                 case "HomeHorizontal":
                     if (stb.Input3)
@@ -1747,21 +1800,19 @@ namespace Controller.RobotControl
                     break;
 
                 case "SetHorizontalHomed":
-                    // Offset the current joint angle
-                    ASTRO.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
-                    ASTRO.CurrentJoint2.Cartesian = (_config.HorizontalHomePosition, ASTRO.InterpolatedJoint2.Cartesian.z);
+                {
+                    var astro = (ASTROKinematics)_kinematics;
+                    astro.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, astro.InterpolatedJoint2.Cartesian.z);
+                    astro.CurrentJoint2.Cartesian      = (_config.HorizontalHomePosition, astro.CurrentJoint2.Cartesian.z);
 
-                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
-                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
-
-                    // Have the robot update its joints
-                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-
-                    // Drive the motors to the target
+                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
 
                     homingState = "HomeJ1";
                     break;
+                }
 
                 case "HomeJ1":
                     if (stb.Input1)
@@ -1818,21 +1869,19 @@ namespace Controller.RobotControl
                     break;
 
                 case "SetJ1MotorHomed":
-                    // Offset the current joint angle
-                    ASTRO.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
-                    ASTRO.CurrentJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
+                {
+                    var astro = (ASTROKinematics)_kinematics;
+                    astro.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
+                    astro.CurrentJoint1.JointAngleDeg      = _config.J1HomeOffsetDeg;
 
-                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
-                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
-
-                    // Have the robot update its joints
-                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-
-                    // Set the motors to the target
+                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
 
                     homingState = "HomeJ4";
                     break;
+                }
 
                 case "HomeJ4":
                 {
@@ -1862,23 +1911,213 @@ namespace Controller.RobotControl
                     break;
 
                 case "SetJ4Homed":
-                    // Apply the configured J4 home offset now that the axis is at mechanical zero
-                    ASTRO.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
-                    ASTRO.CurrentJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
+                {
+                    var astro = (ASTROKinematics)_kinematics;
+                    astro.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
+                    astro.CurrentJoint4.JointAngleDeg      = _config.J4HomeOffsetDeg;
 
-                    CurrentPosition = ASTRO.TcpPosition(CurrentTool);
-                    CurrentJointTargets = ASTROKinematics.InverseKinematics(CurrentPosition, CurrentTool);
-
-                    ASTRO.UpdateJointTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
                     stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
 
                     homingState = "HomingComplete";
                     break;
+                }
 
                 case "HomingComplete":
                     startHoming = false;
                     homingState = "WaitingForStart";
                     homed = true;
+                    break;
+
+                // ── CNC4Axis homing ─────────────────────────────────────────────────
+                // Sequence: Z (Input3) → X (Input1) → Y (Input2) → zero RZ
+
+                case "CNC_HomeZ":
+                    if (stb.Input3)
+                    {
+                        homingState = "CNC_BackOffZ";
+                        break;
+                    }
+                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    if (stb.Input3)
+                    {
+                        ExecuteHardStop();
+                        homingState = "CNC_WaitZStop";
+                    }
+                    break;
+
+                case "CNC_WaitZStop":
+                    if (!IsMoving) homingState = "CNC_BackOffZ";
+                    break;
+
+                case "CNC_BackOffZ":
+                {
+                    var t = new Vector6(
+                        CurrentJointTargets.X,
+                        CurrentJointTargets.Y,
+                        CurrentJointTargets.Z - (_config.HomingBackoffMm * _config.CncZHomingDirection),
+                        CurrentJointTargets.RX,
+                        CurrentJointTargets.RY,
+                        CurrentJointTargets.RZ
+                    );
+                    TargetJoints = t;
+                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
+                    homingState = "CNC_WaitZBackoff";
+                    break;
+                }
+
+                case "CNC_WaitZBackoff":
+                    if (!IsMoving) homingState = "CNC_HomeZSlow";
+                    break;
+
+                case "CNC_HomeZSlow":
+                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    if (stb.Input3)
+                    {
+                        ExecuteHardStop();
+                        homingState = "CNC_WaitZMoveDone";
+                    }
+                    break;
+
+                case "CNC_WaitZMoveDone":
+                    if (!IsMoving) homingState = "CNC_SetZHomed";
+                    break;
+
+                case "CNC_SetZHomed":
+                    CurrentJointTargets.Z = _config.CncZHomePosition;
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
+                    homingState = "CNC_HomeX";
+                    break;
+
+                case "CNC_HomeX":
+                    if (stb.Input1)
+                    {
+                        homingState = "CNC_BackOffX";
+                        break;
+                    }
+                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    if (stb.Input1)
+                    {
+                        ExecuteHardStop();
+                        homingState = "CNC_WaitXStop";
+                    }
+                    break;
+
+                case "CNC_WaitXStop":
+                    if (!IsMoving) homingState = "CNC_BackOffX";
+                    break;
+
+                case "CNC_BackOffX":
+                {
+                    var t = new Vector6(
+                        CurrentJointTargets.X - (_config.HomingBackoffMm * _config.CncXHomingDirection),
+                        CurrentJointTargets.Y,
+                        CurrentJointTargets.Z,
+                        CurrentJointTargets.RX,
+                        CurrentJointTargets.RY,
+                        CurrentJointTargets.RZ
+                    );
+                    TargetJoints = t;
+                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
+                    homingState = "CNC_WaitXBackoff";
+                    break;
+                }
+
+                case "CNC_WaitXBackoff":
+                    if (!IsMoving) homingState = "CNC_HomeXSlow";
+                    break;
+
+                case "CNC_HomeXSlow":
+                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    if (stb.Input1)
+                    {
+                        ExecuteHardStop();
+                        homingState = "CNC_WaitXMoveDone";
+                    }
+                    break;
+
+                case "CNC_WaitXMoveDone":
+                    if (!IsMoving) homingState = "CNC_SetXHomed";
+                    break;
+
+                case "CNC_SetXHomed":
+                    CurrentJointTargets.X = _config.CncXHomePosition;
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
+                    homingState = "CNC_HomeY";
+                    break;
+
+                case "CNC_HomeY":
+                    if (stb.Input2)
+                    {
+                        homingState = "CNC_BackOffY";
+                        break;
+                    }
+                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    if (stb.Input2)
+                    {
+                        ExecuteHardStop();
+                        homingState = "CNC_WaitYStop";
+                    }
+                    break;
+
+                case "CNC_WaitYStop":
+                    if (!IsMoving) homingState = "CNC_BackOffY";
+                    break;
+
+                case "CNC_BackOffY":
+                {
+                    var t = new Vector6(
+                        CurrentJointTargets.X,
+                        CurrentJointTargets.Y - (_config.HomingBackoffMm * _config.CncYHomingDirection),
+                        CurrentJointTargets.Z,
+                        CurrentJointTargets.RX,
+                        CurrentJointTargets.RY,
+                        CurrentJointTargets.RZ
+                    );
+                    TargetJoints = t;
+                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
+                    homingState = "CNC_WaitYBackoff";
+                    break;
+                }
+
+                case "CNC_WaitYBackoff":
+                    if (!IsMoving) homingState = "CNC_HomeYSlow";
+                    break;
+
+                case "CNC_HomeYSlow":
+                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    if (stb.Input2)
+                    {
+                        ExecuteHardStop();
+                        homingState = "CNC_WaitYMoveDone";
+                    }
+                    break;
+
+                case "CNC_WaitYMoveDone":
+                    if (!IsMoving) homingState = "CNC_SetYHomed";
+                    break;
+
+                case "CNC_SetYHomed":
+                    CurrentJointTargets.Y = _config.CncYHomePosition;
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
+                    homingState = "CNC_ZeroRZ";
+                    break;
+
+                case "CNC_ZeroRZ":
+                    // RZ (threading spindle) has no limit switch — zero it at current position
+                    CurrentJointTargets.RZ = _config.CncRzHomePosition;
+                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
+                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
+                    homingState = "HomingComplete";
                     break;
 
                 default:
@@ -1967,7 +2206,7 @@ namespace Controller.RobotControl
             }
 
             // Calculate the joint positions for the target position and the current tooling
-            this.TargetJoints = ASTROKinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
+            this.TargetJoints = _kinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
 
             // Generate a joint motion profile using the current and target joint positions
             jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, jointSpeed, jointAccel, jointDecel);
