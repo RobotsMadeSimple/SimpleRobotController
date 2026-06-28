@@ -436,12 +436,17 @@ namespace Controller.RobotControl
         {
             if (_config.RobotType == "CNC4Axis")
             {
+                stb.Motor1.Reconfigure(_config.CncStepsPerRevX);
+                stb.Motor2.Reconfigure(_config.CncStepsPerRevY);
+                stb.Motor3.Reconfigure(_config.CncStepsPerRevZ);
+                stb.Motor4.Reconfigure(_config.CncStepsPerRevRZ);
+
                 _kinematics = new CNC4AxisKinematics
                 {
-                    MotorDegsPerMmX   = _config.CncMotorDegsPerMmX,
-                    MotorDegsPerMmY   = _config.CncMotorDegsPerMmY,
-                    MotorDegsPerMmZ   = _config.CncMotorDegsPerMmZ,
-                    MotorDegsPerDegRZ = _config.CncMotorDegsPerDegRz,
+                    MotorDegsPerMmX   = _config.CncMmPerRevX  > 0 ? 360.0 / _config.CncMmPerRevX  : 1.0,
+                    MotorDegsPerMmY   = _config.CncMmPerRevY  > 0 ? 360.0 / _config.CncMmPerRevY  : 1.0,
+                    MotorDegsPerMmZ   = _config.CncMmPerRevZ  > 0 ? 360.0 / _config.CncMmPerRevZ  : 1.0,
+                    MotorDegsPerDegRZ = _config.CncDegPerRevRZ > 0 ? 360.0 / _config.CncDegPerRevRZ : 1.0,
                 };
             }
             else
@@ -581,10 +586,17 @@ namespace Controller.RobotControl
                         enableRelayCard           = _config.EnableRelayCard,
                         enableAuxAxis             = _config.EnableAuxAxis,
                         enableCameras             = _config.EnableCameras,
-                        cncMotorDegsPerMmX        = _config.CncMotorDegsPerMmX,
-                        cncMotorDegsPerMmY        = _config.CncMotorDegsPerMmY,
-                        cncMotorDegsPerMmZ        = _config.CncMotorDegsPerMmZ,
-                        cncMotorDegsPerDegRz      = _config.CncMotorDegsPerDegRz,
+                        jogSlowSpeed              = _config.JogSlowSpeed,
+                        jogNormalSpeed            = _config.JogNormalSpeed,
+                        jogFastSpeed              = _config.JogFastSpeed,
+                        cncStepsPerRevX           = _config.CncStepsPerRevX,
+                        cncStepsPerRevY           = _config.CncStepsPerRevY,
+                        cncStepsPerRevZ           = _config.CncStepsPerRevZ,
+                        cncStepsPerRevRZ          = _config.CncStepsPerRevRZ,
+                        cncMmPerRevX              = _config.CncMmPerRevX,
+                        cncMmPerRevY              = _config.CncMmPerRevY,
+                        cncMmPerRevZ              = _config.CncMmPerRevZ,
+                        cncDegPerRevRZ            = _config.CncDegPerRevRZ,
                         cncXHomePosition          = _config.CncXHomePosition,
                         cncYHomePosition          = _config.CncYHomePosition,
                         cncZHomePosition          = _config.CncZHomePosition,
@@ -617,11 +629,20 @@ namespace Controller.RobotControl
                     if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
                     if (p.EnableAuxAxis.HasValue)             _config.EnableAuxAxis             = p.EnableAuxAxis.Value;
                     if (p.EnableCameras.HasValue)             _config.EnableCameras             = p.EnableCameras.Value;
+                    if (p.JogSlowSpeed.HasValue)              _config.JogSlowSpeed              = p.JogSlowSpeed.Value;
+                    if (p.JogNormalSpeed.HasValue)            _config.JogNormalSpeed            = p.JogNormalSpeed.Value;
+                    if (p.JogFastSpeed.HasValue)              _config.JogFastSpeed              = p.JogFastSpeed.Value;
                     if (p.RobotType != null)                  { _config.RobotType               = p.RobotType;             InitializeKinematics(); }
-                    if (p.CncMotorDegsPerMmX.HasValue)        _config.CncMotorDegsPerMmX        = p.CncMotorDegsPerMmX.Value;
-                    if (p.CncMotorDegsPerMmY.HasValue)        _config.CncMotorDegsPerMmY        = p.CncMotorDegsPerMmY.Value;
-                    if (p.CncMotorDegsPerMmZ.HasValue)        _config.CncMotorDegsPerMmZ        = p.CncMotorDegsPerMmZ.Value;
-                    if (p.CncMotorDegsPerDegRz.HasValue)      _config.CncMotorDegsPerDegRz      = p.CncMotorDegsPerDegRz.Value;
+                    bool cncMotorConfigChanged = false;
+                    if (p.CncStepsPerRevX.HasValue)  { _config.CncStepsPerRevX  = p.CncStepsPerRevX.Value;  cncMotorConfigChanged = true; }
+                    if (p.CncStepsPerRevY.HasValue)  { _config.CncStepsPerRevY  = p.CncStepsPerRevY.Value;  cncMotorConfigChanged = true; }
+                    if (p.CncStepsPerRevZ.HasValue)  { _config.CncStepsPerRevZ  = p.CncStepsPerRevZ.Value;  cncMotorConfigChanged = true; }
+                    if (p.CncStepsPerRevRZ.HasValue) { _config.CncStepsPerRevRZ = p.CncStepsPerRevRZ.Value; cncMotorConfigChanged = true; }
+                    if (p.CncMmPerRevX.HasValue)     { _config.CncMmPerRevX     = p.CncMmPerRevX.Value;     cncMotorConfigChanged = true; }
+                    if (p.CncMmPerRevY.HasValue)     { _config.CncMmPerRevY     = p.CncMmPerRevY.Value;     cncMotorConfigChanged = true; }
+                    if (p.CncMmPerRevZ.HasValue)     { _config.CncMmPerRevZ     = p.CncMmPerRevZ.Value;     cncMotorConfigChanged = true; }
+                    if (p.CncDegPerRevRZ.HasValue)   { _config.CncDegPerRevRZ   = p.CncDegPerRevRZ.Value;   cncMotorConfigChanged = true; }
+                    if (cncMotorConfigChanged)        InitializeKinematics();
                     if (p.CncXHomePosition.HasValue)          _config.CncXHomePosition          = p.CncXHomePosition.Value;
                     if (p.CncYHomePosition.HasValue)          _config.CncYHomePosition          = p.CncYHomePosition.Value;
                     if (p.CncZHomePosition.HasValue)          _config.CncZHomePosition          = p.CncZHomePosition.Value;
@@ -2240,32 +2261,28 @@ namespace Controller.RobotControl
 
         public void JogJ(Vector6 jogJointDirection, double? Speed, double? Accel, double? Decel)
         {
-            // Gather the commands motion params if there specified otherwise default to the last set ones
             double jointSpeed = Speed ??= this.SpeedJ;
             double jointAccel = Accel ??= this.AccelJ;
             double jointDecel = Decel ??= this.DecelJ;
-
-
+            if (_config.RobotType == "CNC4Axis") jointSpeed /= 3.0;
             jointJoggingProfiler.Jog(jogJointDirection, jointSpeed, jointAccel, jointDecel);
         }
 
         public void JogL(Vector6 jogDirection, double? Speed, double? Accel, double? Decel)
         {
-            // Gather the commands motion params if there specified otherwise default to the last set ones
             double lineSpeed = Speed ??= this.SpeedS;
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
-
+            if (_config.RobotType == "CNC4Axis") lineSpeed /= 3.0;
             joggingMotionProfiler.Jog(jogDirection, lineSpeed, lineAccel, lineDecel);
         }
 
         public void JogTool(Vector6 jogDirection, double? Speed, double? Accel, double? Decel)
         {
-            // Gather the commands motion params if there specified otherwise default to the last set ones
             double lineSpeed = Speed ??= this.SpeedS;
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
-
+            if (_config.RobotType == "CNC4Axis") lineSpeed /= 3.0;
             toolJoggingMotionProfiler.Jog(jogDirection, lineSpeed, lineAccel, lineDecel);
         }
 

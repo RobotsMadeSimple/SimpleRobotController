@@ -550,10 +550,17 @@ public class SetRobotConfigParams
     [JsonPropertyName("enableRelayCard")]           public bool?   EnableRelayCard           { get; set; }
     [JsonPropertyName("enableAuxAxis")]             public bool?   EnableAuxAxis             { get; set; }
     [JsonPropertyName("enableCameras")]             public bool?   EnableCameras             { get; set; }
-    [JsonPropertyName("cncMotorDegsPerMmX")]        public double? CncMotorDegsPerMmX        { get; set; }
-    [JsonPropertyName("cncMotorDegsPerMmY")]        public double? CncMotorDegsPerMmY        { get; set; }
-    [JsonPropertyName("cncMotorDegsPerMmZ")]        public double? CncMotorDegsPerMmZ        { get; set; }
-    [JsonPropertyName("cncMotorDegsPerDegRz")]      public double? CncMotorDegsPerDegRz      { get; set; }
+    [JsonPropertyName("jogSlowSpeed")]              public double? JogSlowSpeed              { get; set; }
+    [JsonPropertyName("jogNormalSpeed")]            public double? JogNormalSpeed            { get; set; }
+    [JsonPropertyName("jogFastSpeed")]              public double? JogFastSpeed              { get; set; }
+    [JsonPropertyName("cncStepsPerRevX")]           public int?    CncStepsPerRevX           { get; set; }
+    [JsonPropertyName("cncStepsPerRevY")]           public int?    CncStepsPerRevY           { get; set; }
+    [JsonPropertyName("cncStepsPerRevZ")]           public int?    CncStepsPerRevZ           { get; set; }
+    [JsonPropertyName("cncStepsPerRevRZ")]          public int?    CncStepsPerRevRZ          { get; set; }
+    [JsonPropertyName("cncMmPerRevX")]              public double? CncMmPerRevX              { get; set; }
+    [JsonPropertyName("cncMmPerRevY")]              public double? CncMmPerRevY              { get; set; }
+    [JsonPropertyName("cncMmPerRevZ")]              public double? CncMmPerRevZ              { get; set; }
+    [JsonPropertyName("cncDegPerRevRZ")]            public double? CncDegPerRevRZ            { get; set; }
     [JsonPropertyName("cncXHomePosition")]          public double? CncXHomePosition          { get; set; }
     [JsonPropertyName("cncYHomePosition")]          public double? CncYHomePosition          { get; set; }
     [JsonPropertyName("cncZHomePosition")]          public double? CncZHomePosition          { get; set; }
