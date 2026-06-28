@@ -192,6 +192,33 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("markers")]      public List<ArucoMarkerResult> Markers      { get; set; } = new();
     }
 
+    public class BarcodeInspection
+    {
+        [JsonPropertyName("id")]      public string       Id      { get; set; } = "";
+        [JsonPropertyName("name")]    public string       Name    { get; set; } = "";
+        [JsonPropertyName("enabled")] public bool         Enabled { get; set; } = true;
+        [JsonPropertyName("zoneId")]  public string?      ZoneId  { get; set; }
+        /// <summary>ZXing BarcodeFormat names to scan for; empty = all formats.</summary>
+        [JsonPropertyName("formats")] public List<string> Formats { get; set; } = new();
+    }
+
+    public class BarcodeCodeResult
+    {
+        [JsonPropertyName("value")]   public string Value   { get; set; } = "";
+        [JsonPropertyName("format")]  public string Format  { get; set; } = "";
+        [JsonPropertyName("centerX")] public double CenterX { get; set; }
+        [JsonPropertyName("centerY")] public double CenterY { get; set; }
+    }
+
+    public class BarcodeResult
+    {
+        [JsonPropertyName("inspectionId")] public string                  InspectionId { get; set; } = "";
+        [JsonPropertyName("name")]         public string                  Name         { get; set; } = "";
+        [JsonPropertyName("count")]        public int                     Count        { get; set; }
+        [JsonPropertyName("found")]        public bool                    Found        { get; set; }
+        [JsonPropertyName("codes")]        public List<BarcodeCodeResult> Codes        { get; set; } = new();
+    }
+
     public class VisionProgram
     {
         [JsonPropertyName("id")]                  public string                        Id                 { get; set; } = "";
@@ -202,9 +229,10 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("inspections")]         public List<BlobInspection>          Inspections        { get; set; } = new();
         [JsonPropertyName("colorInspections")]    public List<ColorCoverageInspection> ColorInspections   { get; set; } = new();
         [JsonPropertyName("polygonInspections")]  public List<PolygonInspection>       PolygonInspections { get; set; } = new();
-        [JsonPropertyName("arucoInspections")]    public List<ArucoInspection>         ArucoInspections   { get; set; } = new();
-        [JsonPropertyName("lineInspections")]     public List<LineInspection>          LineInspections    { get; set; } = new();
-        [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs  { get; set; }
+        [JsonPropertyName("arucoInspections")]    public List<ArucoInspection>         ArucoInspections    { get; set; } = new();
+        [JsonPropertyName("lineInspections")]     public List<LineInspection>          LineInspections     { get; set; } = new();
+        [JsonPropertyName("barcodeInspections")] public List<BarcodeInspection>       BarcodeInspections  { get; set; } = new();
+        [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs   { get; set; }
     }
 
     // ── Runtime results ───────────────────────────────────────────────────────────
@@ -230,7 +258,8 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("inspections")]     public List<InspectionResult>    Inspections    { get; set; } = new();
         [JsonPropertyName("colorResults")]    public List<ColorCoverageResult> ColorResults   { get; set; } = new();
         [JsonPropertyName("polygonResults")]  public List<PolygonResult>       PolygonResults { get; set; } = new();
-        [JsonPropertyName("arucoResults")]    public List<ArucoResult>         ArucoResults   { get; set; } = new();
-        [JsonPropertyName("lineResults")]     public List<LineResult>          LineResults    { get; set; } = new();
+        [JsonPropertyName("arucoResults")]    public List<ArucoResult>    ArucoResults    { get; set; } = new();
+        [JsonPropertyName("lineResults")]     public List<LineResult>     LineResults     { get; set; } = new();
+        [JsonPropertyName("barcodeResults")] public List<BarcodeResult>  BarcodeResults  { get; set; } = new();
     }
 }

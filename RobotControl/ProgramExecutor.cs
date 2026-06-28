@@ -1249,8 +1249,41 @@ namespace Controller.RobotControl
                 return; // no fresh result yet — keep waiting
 
             // Got a fresh result — write output variables, stop processor, advance
+            // Resolve effective zone override: variable (1-based index) takes priority over fixed ID.
+            string? effectiveZoneId = step.VisionZoneId;
+            if (!string.IsNullOrEmpty(step.VisionZoneVar) &&
+                _variables.TryGetValue(step.VisionZoneVar, out var zoneIdxVal))
+            {
+                var vp2 = _controller.VisionManager.GetProgram(step.VisionProgramId!);
+                if (vp2 != null)
+                {
+                    int zoneIdx = (int)zoneIdxVal - 1; // 1-based → 0-based
+                    effectiveZoneId = (zoneIdx >= 0 && zoneIdx < vp2.Zones.Count)
+                        ? vp2.Zones[zoneIdx].Id
+                        : null;
+                }
+            }
+
+            HashSet<string>? zoneInspIds = null;
+            if (!string.IsNullOrEmpty(effectiveZoneId))
+            {
+                var vp = _controller.VisionManager.GetProgram(step.VisionProgramId!);
+                if (vp != null)
+                {
+                    zoneInspIds = new HashSet<string>(
+                        vp.Inspections           .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id)
+                        .Concat(vp.ColorInspections   .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
+                        .Concat(vp.PolygonInspections .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
+                        .Concat(vp.ArucoInspections   .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
+                        .Concat(vp.LineInspections    .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
+                        .Concat(vp.BarcodeInspections .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
+                    );
+                }
+            }
+
             foreach (var output in step.VisionOutputs ?? [])
             {
+                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var ir = result.Inspections.Find(i => i.InspectionId == output.InspectionId);
                 if (ir == null) continue;
 
@@ -1270,6 +1303,7 @@ namespace Controller.RobotControl
 
             foreach (var output in step.ColorOutputs ?? [])
             {
+                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var cr = result.ColorResults.Find(r => r.InspectionId == output.InspectionId);
                 if (cr == null) continue;
 
@@ -1282,6 +1316,7 @@ namespace Controller.RobotControl
 
             foreach (var output in step.PolygonOutputs ?? [])
             {
+                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var pr = result.PolygonResults.Find(r => r.InspectionId == output.InspectionId);
                 if (pr == null) continue;
 
@@ -1303,6 +1338,7 @@ namespace Controller.RobotControl
 
             foreach (var output in step.ArucoOutputs ?? [])
             {
+                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var ar = result.ArucoResults.Find(r => r.InspectionId == output.InspectionId);
                 if (ar == null) continue;
 
