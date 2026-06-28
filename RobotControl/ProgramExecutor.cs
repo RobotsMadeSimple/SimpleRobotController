@@ -218,7 +218,7 @@ namespace Controller.RobotControl
         {
             StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ => true,
             StepType.SetTool or StepType.SetSpeedL or StepType.SetSpeedJ => true,
-            StepType.SetLocal or StepType.ClearLocal or StepType.RunHoming => true,
+            StepType.SetLocal or StepType.ClearLocal or StepType.RunHoming or StepType.ThreadMove => true,
             _ => false,
         };
 
@@ -372,6 +372,8 @@ namespace Controller.RobotControl
             _globalStepIndex      = 0;
             _loopDepth            = 0;
             _jumpSubStep          = 0;
+            _threadSubStep        = 0;
+            _threadMoveQueue      = null;
             _waitingForBackground = null;
             _frameStack.Clear();
             _variables.Clear();
@@ -651,6 +653,10 @@ namespace Controller.RobotControl
                 case StepType.SaveImage:
                     ExecuteSaveImage(step, frame);
                     break;
+
+                case StepType.ThreadMove:
+                    ExecuteThreadMove(step, frame);
+                    break;
             }
         }
 
@@ -831,6 +837,78 @@ namespace Controller.RobotControl
             // Announce the step is in progress without counting it yet
             ReportStepStarted(step);
             frame.Index++;
+        }
+
+        private void ExecuteThreadMove(ProgramStep step, StepListFrame frame)
+        {
+            if (_awaitingMove) return;
+
+            if (_threadSubStep == 0)
+            {
+                var start    = _controller.GetCurrentPosition();
+                double dist  = EvalField(step, "threadDistance",  step.ThreadDistance  ?? 0);
+                double pitch = EvalField(step, "threadPitch",     step.ThreadPitch     ?? 1);
+                bool   peck  = step.ThreadPeck ?? false;
+                double peckD = step.ThreadPeckDepth ?? Math.Abs(dist);
+                bool   rev   = step.ThreadReverseOut ?? true;
+
+                if (Math.Abs(pitch) < 0.0001) pitch = 1.0;
+                if (peckD <= 0) peckD = Math.Abs(dist);
+
+                double? speed = step.Speed.HasValue ? EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor : null;
+                double? accel = step.Accel;
+                double? decel = step.Decel;
+                double  sign  = dist >= 0 ? 1.0 : -1.0;
+                double  absDist = Math.Abs(dist);
+
+                RobotCommand Move(double dZ, double dRZ) => new RobotCommand
+                {
+                    CommandType = "MoveL",
+                    X  = start.X, Y  = start.Y, Z  = start.Z  + dZ,
+                    RX = start.RX, RY = start.RY, RZ = start.RZ + dRZ,
+                    Speed = speed, Accel = accel, Decel = decel,
+                };
+
+                _threadMoveQueue = new Queue<RobotCommand>();
+
+                if (peck && peckD > 0)
+                {
+                    // 2x down, 1x up: advance 2*peckD each cycle, retract 1*peckD between cycles
+                    double accumulated = 0;
+                    while (accumulated < absDist - 0.0001)
+                    {
+                        double nextDepth = Math.Min(accumulated + peckD * 2, absDist);
+                        _threadMoveQueue.Enqueue(Move(sign * nextDepth, (sign * nextDepth / pitch) * 360.0));
+                        if (nextDepth >= absDist - 0.0001) break;
+                        double retractTo = Math.Max(nextDepth - peckD, 0);
+                        _threadMoveQueue.Enqueue(Move(sign * retractTo, (sign * retractTo / pitch) * 360.0));
+                        accumulated = retractTo;
+                    }
+                }
+                else
+                {
+                    _threadMoveQueue.Enqueue(Move(dist, (dist / pitch) * 360.0));
+                }
+
+                if (rev)
+                    _threadMoveQueue.Enqueue(Move(0, 0)); // reverse back to start
+
+                _threadSubStep = 1;
+                ReportStepStarted(step);
+            }
+
+            // Dispatch next queued move (or finish if queue empty)
+            if (_threadMoveQueue == null || _threadMoveQueue.Count == 0)
+            {
+                _threadSubStep   = 0;
+                _threadMoveQueue = null;
+                frame.Index++;
+                ReportStepCompleted(step);
+                return;
+            }
+
+            _controller.QueuedCommands.Add(_threadMoveQueue.Dequeue());
+            _awaitingMove = true;
         }
 
         private void ExecuteJump(ProgramStep step, StepListFrame frame)
@@ -1846,6 +1924,10 @@ namespace Controller.RobotControl
             ReportStepCompleted(step);
             frame.Index++;
         }
+
+        // ── Thread move sub-step state ────────────────────────────────────────
+        private int                  _threadSubStep   = 0;
+        private Queue<RobotCommand>? _threadMoveQueue = null;
 
         // ── Jump sub-step state ───────────────────────────────────────────────
         private int     _jumpSubStep  = 0;  // 0=idle, 1=lift dispatched, 2=transit dispatched, 3=lower dispatched

@@ -144,7 +144,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -424,6 +424,13 @@ public class ProgramStep
     [JsonPropertyName("auxAbsolute")]    public bool?   AuxAbsolute    { get; set; }
     // AuxEnable — enable or disable motor drivers
     [JsonPropertyName("auxEnable")]      public bool?   AuxEnable      { get; set; }
+
+    // ThreadMove
+    [JsonPropertyName("threadDistance")]   public double? ThreadDistance   { get; set; }
+    [JsonPropertyName("threadPitch")]      public double? ThreadPitch      { get; set; }
+    [JsonPropertyName("threadPeck")]       public bool?   ThreadPeck       { get; set; }
+    [JsonPropertyName("threadPeckDepth")]  public double? ThreadPeckDepth  { get; set; }
+    [JsonPropertyName("threadReverseOut")] public bool?   ThreadReverseOut { get; set; }
 }
 
 public class ProgramVariable
