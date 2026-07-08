@@ -221,7 +221,7 @@ namespace Controller.RobotControl.Nano
                 new()
                 {
                     Id   = "ROBOT_NANO_001",
-                    Name = "Main IO Board",
+                    Name = "Arduino Nano",
                     Pins = new List<NanoPinConfig>
                     {
                         new() { Pin = 2, Type = PinType.Input,    Name = "Input 1",      PixelCount = 1  },

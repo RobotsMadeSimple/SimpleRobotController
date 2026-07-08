@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace Controller.RobotControl.Camera
@@ -11,7 +11,8 @@ namespace Controller.RobotControl.Camera
         [JsonPropertyName("enabled")]    public bool   Enabled     { get; set; } = true;
         [JsonPropertyName("width")]      public int    Width       { get; set; } = 640;
         [JsonPropertyName("height")]     public int    Height      { get; set; } = 480;
-        [JsonPropertyName("targetFps")]  public int    TargetFps   { get; set; } = 15;
+        [JsonPropertyName("targetFps")]          public int                  TargetFps          { get; set; } = 15;
+        [JsonPropertyName("supportedResolutions")] public List<CameraResolution> SupportedResolutions { get; set; } = new();
     }
 
     public class CameraManagerConfig
@@ -29,6 +30,15 @@ namespace Controller.RobotControl.Camera
         [JsonPropertyName("width")]       public int    Width       { get; set; }
         [JsonPropertyName("height")]      public int    Height      { get; set; }
         [JsonPropertyName("targetFps")]   public int    TargetFps   { get; set; }
-        [JsonPropertyName("enabled")]     public bool   Enabled     { get; set; }
+        [JsonPropertyName("enabled")]              public bool                 Enabled              { get; set; }
+        [JsonPropertyName("supportedResolutions")] public List<CameraResolution> SupportedResolutions { get; set; } = new();
+    }
+
+    public class CameraResolution
+    {
+        [JsonPropertyName("width")]  public int Width  { get; set; }
+        [JsonPropertyName("height")] public int Height { get; set; }
     }
 }
+
+

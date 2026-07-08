@@ -2,7 +2,7 @@
   "nanos": [
     {
       "id": "ROBOT_NANO_001",
-      "name": "Main IO Board",
+      "name": "Arduino Nano",
       "pins": [
         {
           "pin": 2,

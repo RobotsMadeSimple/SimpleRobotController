@@ -1132,6 +1132,11 @@ public class SetCameraConfigParams
     [JsonPropertyName("targetFps")]   public int    TargetFps   { get; set; } = 15;
 }
 
+public class GetCameraResolutionsParams
+{
+    [JsonPropertyName("deviceIndex")] public int DeviceIndex { get; set; } = 0;
+}
+
 public class SetAuxAxisConfigParams
 {
     [JsonPropertyName("deviceId")]       public string DeviceId       { get; set; } = "AUX_STEPPER_001";

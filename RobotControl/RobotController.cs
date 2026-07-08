@@ -463,7 +463,7 @@ namespace Controller.RobotControl
             stb.Motor4.InvertDirection = _config.M4Direction == -1;
         }
 
-        public Task<object> AddCommand(CommandMessage command)
+        public async Task<object> AddCommand(CommandMessage command)
         {
             object? payload = null;
 
@@ -754,6 +754,20 @@ namespace Controller.RobotControl
                     });
                     break;
                 }
+
+                case "GetCameraResolutions":
+                {
+                    var p = JsonSerializer.Deserialize<GetCameraResolutionsParams>(
+                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var deviceIndex = p.DeviceIndex;
+                    var resolutions = await Task.Run(() => CameraManager.ProbeResolutionsForIndex(deviceIndex));
+                    var json = JsonSerializer.Serialize(resolutions, new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    });
+                    payload = new { resolutions = json };
+                }
+                break;
 
                 // ── End camera commands ────────────────────────────────────────────
 
@@ -1555,8 +1569,7 @@ namespace Controller.RobotControl
             }
             payload ??= new { };
 
-            // instance logic here
-            return Task.FromResult((object)payload);
+            return (object)payload;
         }
         public void RunCommands()
         {
