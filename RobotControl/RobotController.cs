@@ -223,8 +223,7 @@ namespace Controller.RobotControl
 
                 }
 
-                // Small spin wait to reduce CPU burn but keep timing tight
-                Thread.SpinWait(50);
+                Thread.Sleep(1);
             }
         }
 

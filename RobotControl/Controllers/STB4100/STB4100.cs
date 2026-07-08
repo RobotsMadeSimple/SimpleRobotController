@@ -185,8 +185,7 @@ public class STB4100
                 
             }
 
-            // Small spin wait to reduce CPU burn but keep timing tight
-            Thread.SpinWait(50);
+            Thread.Sleep(1);
         }
     }
 
@@ -206,7 +205,7 @@ public class STB4100
                 GetStatus();
                 _statusTimer.Restart();
             }
-            Thread.Sleep(1);
+            Thread.Sleep(15);
         }
     }
 
