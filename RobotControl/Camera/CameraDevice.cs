@@ -153,24 +153,34 @@ namespace Controller.RobotControl.Camera
             return results.OrderBy(r => r.Width).ThenBy(r => r.Height).ToList();
         }
 
-        // Suppress the finalizer instead of calling Dispose on a partially-initialized DSHOW
-        // VideoCapture — calling release() on corrupt native state terminates the process.
+        // On Windows, calling Release() on a partially-initialised DSHOW VideoCapture can
+        // terminate the process — suppress the finalizer instead and let GC clean up.
+        // On Linux, V4L2 file descriptors must be explicitly released or the device stays
+        // locked and can't be reopened.
         private static void AbandonCapture(ref VideoCapture? cap)
         {
             if (cap == null) return;
-            GC.SuppressFinalize(cap);
+            if (OperatingSystem.IsWindows())
+            {
+                GC.SuppressFinalize(cap);
+            }
+            else
+            {
+                try { cap.Release(); cap.Dispose(); } catch { }
+            }
             cap = null;
         }
-
-        private static readonly VideoCaptureAPIs _captureApi =
-            OperatingSystem.IsWindows() ? VideoCaptureAPIs.MSMF : VideoCaptureAPIs.V4L2;
 
         private static VideoCapture? OpenCapture(int index)
         {
             VideoCapture? cap = null;
             try
             {
-                cap = new VideoCapture(index, _captureApi);
+                // Open by device path on Linux — more reliable than index with V4L2 and avoids
+                // "can't open camera by index" after a reconnect.
+                cap = OperatingSystem.IsLinux()
+                    ? new VideoCapture($"/dev/video{index}", VideoCaptureAPIs.V4L2)
+                    : new VideoCapture(index, VideoCaptureAPIs.MSMF);
                 if (cap.IsOpened()) return cap;
                 GC.SuppressFinalize(cap);
                 cap = null;
