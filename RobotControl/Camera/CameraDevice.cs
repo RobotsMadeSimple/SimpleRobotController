@@ -162,12 +162,15 @@ namespace Controller.RobotControl.Camera
             cap = null;
         }
 
+        private static readonly VideoCaptureAPIs _captureApi =
+            OperatingSystem.IsWindows() ? VideoCaptureAPIs.MSMF : VideoCaptureAPIs.V4L2;
+
         private static VideoCapture? OpenCapture(int index)
         {
             VideoCapture? cap = null;
             try
             {
-                cap = new VideoCapture(index, VideoCaptureAPIs.MSMF);
+                cap = new VideoCapture(index, _captureApi);
                 if (cap.IsOpened()) return cap;
                 GC.SuppressFinalize(cap);
                 cap = null;
