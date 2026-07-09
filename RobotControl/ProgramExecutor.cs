@@ -1849,13 +1849,11 @@ namespace Controller.RobotControl
 
             if (steps == 0) { ReportStepCompleted(step); frame.Index++; return; }
 
-            bool ccw      = steps < 0;
-            long absSteps = Math.Abs(steps);
-
-            if (axisCfg?.InvertDirection == true) ccw = !ccw;
-
-            _controller.AuxAxisManager.SetDirection(deviceId, axisIndex, ccw);
-            _controller.StartAuxMove(deviceId, axisIndex, absSteps, velocity, accel, decel);
+            // StartAuxMove derives direction from the sign of steps (and applies the
+            // axis InvertDirection), then moves by the absolute amount. Pass the SIGNED
+            // value — pre-abs'ing it here made every move go the same direction
+            // regardless of a positive or negative distance.
+            _controller.StartAuxMove(deviceId, axisIndex, steps, velocity, accel, decel);
 
             bool wait = step.AuxWaitForDone ?? true;
             if (wait)
