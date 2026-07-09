@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Ports;
+using System.Linq;
 using System.Threading;
+using Controller.RobotControl.Serial;
 
 namespace Controller.RobotControl.AuxAxis
 {
@@ -34,6 +37,13 @@ namespace Controller.RobotControl.AuxAxis
         // Tracks whether motor drivers are currently enabled.
         private volatile bool _motorEnabled = true;
         public bool MotorEnabled => _motorEnabled;
+
+        // The operator's chosen enable state. Persists across reconnects so a
+        // transient reset restores their intent instead of the Arduino default.
+        private volatile bool _desiredEnabled = true;
+
+        // Port that last answered our ID probe — tried first on reconnect.
+        private string? _lastGoodPort;
 
         // Per-axis position tracking (in steps, updated when DONE is received).
         private readonly long[]       _position     = new long[4];
@@ -80,15 +90,20 @@ namespace Controller.RobotControl.AuxAxis
         {
             while (_running)
             {
+                SerialPort? port = null;
                 try
                 {
-                    string? port = ScanForDevice();
+                    port = ScanForDevice();
                     if (port == null) { Thread.Sleep(3000); continue; }
                     RunSession(port);
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[AuxAxis:{Id}] Error: {ex.Message}");
+                }
+                finally
+                {
+                    if (port != null) SerialPortRegistry.Release(port.PortName, Id);
                 }
 
                 if (Connected)
@@ -102,57 +117,102 @@ namespace Controller.RobotControl.AuxAxis
             }
         }
 
-        private string? ScanForDevice()
+        /// <summary>
+        /// Candidate ports in probe order. Skips built-in serial ports on Linux
+        /// (only USB adapters carry our devices) and tries the last known-good
+        /// port first so reconnects are near-instant.
+        /// </summary>
+        private IEnumerable<string> CandidatePorts()
         {
-            string[] ports = SerialPort.GetPortNames();
-            foreach (string portName in ports)
+            var all = SerialPort.GetPortNames();
+            IEnumerable<string> ports = all;
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var usb = all.Where(p => p.Contains("ttyUSB") || p.Contains("ttyACM")).ToArray();
+                if (usb.Length > 0) ports = usb;
+            }
+
+            if (_lastGoodPort != null)
+                ports = ports.OrderByDescending(p => p == _lastGoodPort);
+
+            return ports;
+        }
+
+        /// <summary>
+        /// Probes candidate ports for our device and returns the OPEN port on a
+        /// match (so the session doesn't have to re-open and reset the Arduino a
+        /// second time). Returns null if not found.
+        /// </summary>
+        private SerialPort? ScanForDevice()
+        {
+            foreach (string portName in CandidatePorts())
             {
                 if (!_running) return null;
+                // Don't touch a port another device already owns — opening it
+                // would DTR-reset that device's Arduino.
+                if (SerialPortRegistry.IsClaimedByOther(portName, Id)) continue;
+
+                SerialPort? probe = null;
+                bool matched = false;
                 try
                 {
-                    using var probe = new SerialPort(portName, 115200)
+                    // Serialize probes on this port so two scanners can't open it at once.
+                    lock (SerialPortRegistry.LockFor(portName))
                     {
-                        ReadTimeout  = 2500,
-                        WriteTimeout = 1000,
-                        NewLine      = "\n",
-                    };
-                    probe.Open();
-                    Thread.Sleep(2000); // wait for Arduino reset
-                    probe.DiscardInBuffer(); // flush boot "RDY" (Linux DTR reset sends it)
+                        if (SerialPortRegistry.IsClaimedByOther(portName, Id)) continue;
 
-                    probe.WriteLine("ID?");
-                    Thread.Sleep(100);
+                        probe = new SerialPort(portName, 115200)
+                        {
+                            ReadTimeout  = 2500,
+                            WriteTimeout = 1000,
+                            NewLine      = "\n",
+                            DtrEnable    = true,
+                            RtsEnable    = true,
+                        };
+                        probe.Open();
+                        Thread.Sleep(1500);       // wait for Arduino reset after open
+                        probe.DiscardInBuffer();  // flush boot "RDY" (Linux DTR reset sends it)
 
-                    string line = probe.ReadLine().Trim();
-                    if (line == $"ID:{_config.Id}")
-                        return portName;
+                        probe.WriteLine("ID?");
+                        Thread.Sleep(100);
+
+                        string line = probe.ReadLine().Trim();
+                        if (line == $"ID:{_config.Id}")
+                        {
+                            matched       = true;
+                            _lastGoodPort = portName;
+                            probe.ReadTimeout = 100; // fast servicing during the session
+                            SerialPortRegistry.Claim(portName, Id);
+                            return probe;
+                        }
+                    }
                 }
                 catch { }
+                finally
+                {
+                    if (!matched) { try { probe?.Close(); probe?.Dispose(); } catch { } }
+                }
             }
             return null;
         }
 
-        private void RunSession(string portName)
+        private void RunSession(SerialPort port)
         {
-            _port = new SerialPort(portName, 115200)
-            {
-                ReadTimeout  = 100,
-                WriteTimeout = 2000,
-                NewLine      = "\n",
-            };
-            _port.Open();
-            Thread.Sleep(2000);
+            _port = port;
+            string portName = port.PortName;
 
             PortName  = portName;
             Connected = true;
             ConnectionChanged?.Invoke(true);
             Console.WriteLine($"[AuxAxis:{Id}] Connected on {portName}");
 
-            _motorEnabled = true;
-            SafeWrite("E:1");
+            // Restore the operator's chosen enable state rather than forcing it on.
+            _motorEnabled = _desiredEnabled;
+            SafeWrite(_desiredEnabled ? "E:1" : "E:0");
 
             string readBuf = "";
-            while (_running && _port.IsOpen)
+            while (_running && port.IsOpen)
             {
                 lock (_lock)
                 {
@@ -166,7 +226,7 @@ namespace Controller.RobotControl.AuxAxis
 
                 try
                 {
-                    int b = _port.ReadByte();
+                    int b = port.ReadByte();
                     if (b == '\n')
                     {
                         ProcessLine(readBuf.Trim());
@@ -176,10 +236,11 @@ namespace Controller.RobotControl.AuxAxis
                         readBuf += (char)b;
                 }
                 catch (TimeoutException) { }
-                catch (InvalidOperationException) { break; }
+                catch (InvalidOperationException) { break; } // port closed
+                catch (IOException)             { break; }   // USB unplugged / device gone
             }
 
-            try { _port.Close(); } catch { }
+            try { port.Close(); } catch { }
             _port = null;
             Console.WriteLine($"[AuxAxis:{Id}] Disconnected");
         }
@@ -249,7 +310,8 @@ namespace Controller.RobotControl.AuxAxis
         /// <summary>Enable or disable all stepper drivers.</summary>
         public void Enable(bool enable)
         {
-            _motorEnabled = enable;
+            _desiredEnabled = enable;  // remembered across reconnects
+            _motorEnabled   = enable;
             lock (_lock) _commandQueue.Enqueue($"E:{(enable ? 1 : 0)}");
         }
 

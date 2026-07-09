@@ -1,4 +1,5 @@
 using System.IO.Ports;
+using Controller.RobotControl.Serial;
 
 namespace Controller.RobotControl.Nano
 {
@@ -15,6 +16,9 @@ namespace Controller.RobotControl.Nano
 
         private readonly object        _lock         = new();
         private readonly Queue<string> _commandQueue = new();
+
+        // Port that last answered our ID probe — tried first on reconnect.
+        private string? _lastGoodPort;
 
         /// <summary>Physical port this device is currently connected on, or null.</summary>
         public string? PortName   { get; private set; }
@@ -78,9 +82,10 @@ namespace Controller.RobotControl.Nano
         {
             while (_running)
             {
+                string? port = null;
                 try
                 {
-                    string? port = ScanForDevice();
+                    port = ScanForDevice();
                     if (port == null)
                     {
                         Thread.Sleep(3000);
@@ -92,6 +97,10 @@ namespace Controller.RobotControl.Nano
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[Nano:{_config.Id}] Unhandled error: {ex.Message}");
+                }
+                finally
+                {
+                    if (port != null) SerialPortRegistry.Release(port, _config.Id);
                 }
 
                 if (Connected)
@@ -105,41 +114,68 @@ namespace Controller.RobotControl.Nano
             }
         }
 
+        /// <summary>
+        /// Candidate ports in probe order. Skips built-in serial ports on Linux
+        /// (only USB adapters carry our devices) and tries the last known-good
+        /// port first so reconnects are near-instant.
+        /// </summary>
+        private IEnumerable<string> CandidatePorts()
+        {
+            var all = SerialPort.GetPortNames();
+            IEnumerable<string> ports = all;
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var usb = all.Where(p => p.Contains("ttyUSB") || p.Contains("ttyACM")).ToArray();
+                if (usb.Length > 0) ports = usb;
+            }
+
+            if (_lastGoodPort != null)
+                ports = ports.OrderByDescending(p => p == _lastGoodPort);
+
+            return ports;
+        }
+
         /// <summary>Iterates available COM ports looking for the device with our ID.</summary>
         private string? ScanForDevice()
         {
-            string[] ports = SerialPort.GetPortNames();
-            if (ports.Length == 0) return null;
-
-            //Console.WriteLine($"[Nano:{_config.Id}] Scanning {ports.Length} port(s): {string.Join(", ", ports)}");
-
-            foreach (string portName in ports)
+            foreach (string portName in CandidatePorts())
             {
                 if (!_running) return null;
+                // Skip ports another device already owns — opening one would
+                // DTR-reset that device's Arduino.
+                if (SerialPortRegistry.IsClaimedByOther(portName, _config.Id)) continue;
 
                 try
                 {
-                    using var probe = new SerialPort(portName, 115200)
+                    // Serialize probes on this port so two scanners can't open it at once.
+                    lock (SerialPortRegistry.LockFor(portName))
                     {
-                        ReadTimeout  = 2500,
-                        WriteTimeout = 1000,
-                        NewLine      = "\n",
-                    };
-                    probe.Open();
+                        if (SerialPortRegistry.IsClaimedByOther(portName, _config.Id)) continue;
 
-                    // Arduino resets on DTR toggle when the port opens — wait for boot
-                    Thread.Sleep(2000);
+                        using var probe = new SerialPort(portName, 115200)
+                        {
+                            ReadTimeout  = 2500,
+                            WriteTimeout = 1000,
+                            NewLine      = "\n",
+                        };
+                        probe.Open();
 
-                    probe.WriteLine("ID?");
-                    Thread.Sleep(100);
+                        // Arduino resets on DTR toggle when the port opens — wait for boot
+                        Thread.Sleep(2000);
+                        probe.DiscardInBuffer();
 
-                    string line = probe.ReadLine().Trim();
-                    //Console.WriteLine($"[Nano:{_config.Id}] {portName} → \"{line}\"");
+                        probe.WriteLine("ID?");
+                        Thread.Sleep(100);
 
-                    if (line == $"ID:{_config.Id}")
-                    {
-                        //Console.WriteLine($"[Nano:{_config.Id}] Matched on {portName}");
-                        return portName;
+                        string line = probe.ReadLine().Trim();
+
+                        if (line == $"ID:{_config.Id}")
+                        {
+                            _lastGoodPort = portName;
+                            SerialPortRegistry.Claim(portName, _config.Id);
+                            return portName;
+                        }
                     }
                 }
                 catch { }
