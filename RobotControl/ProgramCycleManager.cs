@@ -105,7 +105,10 @@ namespace Controller.RobotControl
                     {
                         program.StepLogs.Add(update.StepDescription);
                         if (program.StepLogs.Count > 5000)
+                        {
                             program.StepLogs.RemoveAt(0);
+                            program.LogBaseIndex++;   // keep absolute paging stable
+                        }
                     }
                 }
             }
@@ -253,31 +256,42 @@ namespace Controller.RobotControl
         }
 
         /// <summary>
-        /// Returns a slice of a program's log list using a half-open [start, end) range.
-        /// Omit start to read from the beginning; omit end to read to the current tail.
-        /// Designed for lazy loading — the client can track the last index it received
-        /// and pass it as the next start to pull only new entries.
+        /// Returns a slice of a program's logs using a half-open [start, end) range of
+        /// ABSOLUTE indices — indices count every entry ever produced, even ones the
+        /// ring buffer has since dropped. Omit start to read from the oldest retained
+        /// entry; omit end to read to the current tail. Designed for lazy loading:
+        /// the client passes back the returned total as the next start to pull only
+        /// new entries, and paging keeps working after the buffer wraps past its cap.
         /// </summary>
-        public List<string> GetProgramLogs(string programName, int? start, int? end)
+        /// <returns>(total, start, logs): total = absolute count ever produced,
+        /// start = absolute index of the first returned entry.</returns>
+        public (int total, int start, List<string> logs) GetProgramLogs(string programName, int? start, int? end)
         {
             lock (_lock)
             {
                 if (!_programs.TryGetValue(programName, out var program))
-                    return new List<string>();
+                    return (0, 0, new List<string>());
 
-                var logs = program.StepLogs;
-                int s = Math.Clamp(start ?? 0,          0, logs.Count);
-                int e = Math.Clamp(end   ?? logs.Count, s, logs.Count);
-                return logs.GetRange(s, e - s);
+                var logs    = program.StepLogs;
+                int baseIdx = program.LogBaseIndex;
+                int total   = baseIdx + logs.Count;
+
+                // Clamp start up to the oldest entry we still retain, so a client that
+                // fell behind the ring buffer resumes from the newest available window.
+                int s = Math.Clamp(start ?? 0,     baseIdx, total);
+                int e = Math.Clamp(end   ?? total, s,       total);
+                return (total, s, logs.GetRange(s - baseIdx, e - s));
             }
         }
 
-        /// <summary>Returns the total number of log entries for a program (useful for paging).</summary>
+        /// <summary>Total number of log entries ever produced for a program (absolute).</summary>
         public int GetLogCount(string programName)
         {
             lock (_lock)
             {
-                return _programs.TryGetValue(programName, out var p) ? p.StepLogs.Count : 0;
+                return _programs.TryGetValue(programName, out var p)
+                    ? p.LogBaseIndex + p.StepLogs.Count
+                    : 0;
             }
         }
     }

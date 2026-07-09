@@ -26,6 +26,10 @@ public class ProgramModel
     public string       Description            { get; set; } = "";
     public byte[]?      Image                  { get; set; }
     public List<string> StepLogs               { get; set; } = new();
+    // Absolute index of StepLogs[0]. Increments each time an old entry is dropped
+    // so clients can page by a stable absolute index even after the ring buffer
+    // wraps past its cap.
+    [JsonIgnore] public int LogBaseIndex        { get; set; } = 0;
     public ProgramStatus Status                { get; set; } = ProgramStatus.Ready;
     public string       CurrentStepDescription { get; set; } = "";
     public int          CurrentStepNumber      { get; set; } = 0;

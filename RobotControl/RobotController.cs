@@ -990,12 +990,12 @@ namespace Controller.RobotControl
                 case "GetProgramLogs":
                     {
                         var p = LoadParams<GetProgramLogsParams>(command);
-                        var logs = programManager.GetProgramLogs(p.ProgramName, p.Start, p.End);
+                        var (total, start, logs) = programManager.GetProgramLogs(p.ProgramName, p.Start, p.End);
                         payload = new
                         {
                             programName = p.ProgramName,
-                            totalCount  = programManager.GetLogCount(p.ProgramName),
-                            start       = p.Start ?? 0,
+                            totalCount  = total,
+                            start,
                             logs
                         };
                     }
