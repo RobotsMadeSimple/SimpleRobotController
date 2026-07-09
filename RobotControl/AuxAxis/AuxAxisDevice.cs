@@ -167,24 +167,32 @@ namespace Controller.RobotControl.AuxAxis
                             ReadTimeout  = 2500,
                             WriteTimeout = 1000,
                             NewLine      = "\n",
-                            DtrEnable    = true,
-                            RtsEnable    = true,
                         };
                         probe.Open();
-                        Thread.Sleep(1500);       // wait for Arduino reset after open
+                        // The Arduino resets when the port opens; its bootloader can
+                        // take up to ~2s before the sketch runs and can answer ID?.
+                        Thread.Sleep(2000);
                         probe.DiscardInBuffer();  // flush boot "RDY" (Linux DTR reset sends it)
 
-                        probe.WriteLine("ID?");
-                        Thread.Sleep(100);
-
-                        string line = probe.ReadLine().Trim();
-                        if (line == $"ID:{_config.Id}")
+                        // Ask a couple of times in case the first query lands just as
+                        // the sketch is starting up.
+                        for (int attempt = 0; attempt < 3 && _running; attempt++)
                         {
-                            matched       = true;
-                            _lastGoodPort = portName;
-                            probe.ReadTimeout = 100; // fast servicing during the session
-                            SerialPortRegistry.Claim(portName, Id);
-                            return probe;
+                            probe.WriteLine("ID?");
+                            Thread.Sleep(150);
+
+                            string line;
+                            try { line = probe.ReadLine().Trim(); }
+                            catch (TimeoutException) { continue; }
+
+                            if (line == $"ID:{_config.Id}")
+                            {
+                                matched       = true;
+                                _lastGoodPort = portName;
+                                probe.ReadTimeout = 100; // fast servicing during the session
+                                SerialPortRegistry.Claim(portName, Id);
+                                return probe;
+                            }
                         }
                     }
                 }
