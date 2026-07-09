@@ -118,6 +118,7 @@ namespace Controller.RobotControl.AuxAxis
                     };
                     probe.Open();
                     Thread.Sleep(2000); // wait for Arduino reset
+                    probe.DiscardInBuffer(); // flush boot "RDY" (Linux DTR reset sends it)
 
                     probe.WriteLine("ID?");
                     Thread.Sleep(100);
