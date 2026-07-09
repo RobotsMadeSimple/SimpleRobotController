@@ -1890,12 +1890,9 @@ namespace Controller.RobotControl
                 accel    = EvalField(step, "auxAccel",    step.AuxAccel    ?? 3200);
             }
 
-            bool ccw = velocity < 0;
-            velocity = Math.Abs(velocity);
-
-            if (axisCfg?.InvertDirection == true) ccw = !ccw;
-
-            _controller.AuxAxisManager.SetDirection(deviceId, axisIndex, ccw);
+            // StartAuxContinuous derives direction from the sign of velocity (and
+            // applies InvertDirection), then ramps by the absolute value. Pass the
+            // SIGNED velocity — abs'ing it here made CW and CCW go the same way.
             _controller.StartAuxContinuous(deviceId, axisIndex, velocity, accel);
 
             ReportStepCompleted(step);
