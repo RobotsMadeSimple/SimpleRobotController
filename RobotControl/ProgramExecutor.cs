@@ -829,9 +829,11 @@ namespace Controller.RobotControl
                 TRX = hasToolOffset ? EvalField(step, "toolOffsetRX", step.ToolOffsetRX ?? 0) : null,
                 TRY = hasToolOffset ? EvalField(step, "toolOffsetRY", step.ToolOffsetRY ?? 0) : null,
                 TRZ = hasToolOffset ? EvalField(step, "toolOffsetRZ", step.ToolOffsetRZ ?? 0) : null,
-                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor : (double?)null,
+                // Raw speed — the global override is applied centrally in MoveL/MoveJ.
+                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null,
                 Accel = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
                 Decel = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null,
+                ApplySpeedOverride = true,   // program move — subject to the speed override
             };
 
             _controller.QueuedCommands.Add(cmd);
@@ -859,7 +861,7 @@ namespace Controller.RobotControl
                 if (Math.Abs(pitch) < 0.0001) pitch = 1.0;
                 if (peckD <= 0) peckD = Math.Abs(dist);
 
-                double? speed = step.Speed.HasValue ? EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor : null;
+                double? speed = step.Speed.HasValue ? EvalField(step, "speed", step.Speed ?? 0) : null; // override applied in MoveL
                 double? accel = step.Accel;
                 double? decel = step.Decel;
                 double  sign  = dist >= 0 ? 1.0 : -1.0;
@@ -871,6 +873,7 @@ namespace Controller.RobotControl
                     X  = start.X, Y  = start.Y, Z  = start.Z  + dZ,
                     RX = start.RX, RY = start.RY, RZ = start.RZ + dRZ,
                     Speed = speed, Accel = accel, Decel = decel,
+                    ApplySpeedOverride = true,
                 };
 
                 _threadMoveQueue = new Queue<RobotCommand>();
@@ -1049,7 +1052,7 @@ namespace Controller.RobotControl
                 _jumpZStart   = hasJumpZStart ? EvalField(step, "jumpZStart", step.JumpZStart ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
                 _jumpZEnd     = hasJumpZEnd   ? EvalField(step, "jumpZEnd",   step.JumpZEnd   ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
                 _jumpCmdType  = step.Type == StepType.JumpJ ? "MoveJ" : "MoveL";
-                _jumpSpeed    = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor : (double?)null;
+                _jumpSpeed    = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null; // override applied in MoveL/MoveJ
                 _jumpAccel    = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null;
                 _jumpDecel    = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null;
                 _jumpSubStep  = 1;
@@ -1060,6 +1063,7 @@ namespace Controller.RobotControl
                     X = _jumpStartPos.X, Y = _jumpStartPos.Y, Z = _jumpZStart,
                     RX = _jumpStartPos.RX, RY = _jumpStartPos.RY, RZ = _jumpStartPos.RZ,
                     Speed = _jumpSpeed, Accel = _jumpAccel, Decel = _jumpDecel,
+                    ApplySpeedOverride = true,
                 });
                 _awaitingMove = true;
                 ReportStepStarted(step);
@@ -1074,6 +1078,7 @@ namespace Controller.RobotControl
                     X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpZEnd,
                     RX = _jumpTarget.RX, RY = _jumpTarget.RY, RZ = _jumpTarget.RZ,
                     Speed = _jumpSpeed, Accel = _jumpAccel, Decel = _jumpDecel,
+                    ApplySpeedOverride = true,
                 });
                 _jumpSubStep  = 2;
                 _awaitingMove = true;
@@ -1088,6 +1093,7 @@ namespace Controller.RobotControl
                     X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpTarget.Z,
                     RX = _jumpTarget.RX, RY = _jumpTarget.RY, RZ = _jumpTarget.RZ,
                     Speed = _jumpSpeed, Accel = _jumpAccel, Decel = _jumpDecel,
+                    ApplySpeedOverride = true,
                 });
                 _jumpSubStep  = 3;
                 _awaitingMove = true;
@@ -1543,7 +1549,7 @@ namespace Controller.RobotControl
             bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
             bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
             if (hasSpeed)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveL
             if (hasAccel || hasDecel)
                 _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelS",
                     Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
@@ -1558,7 +1564,7 @@ namespace Controller.RobotControl
             bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
             bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
             if (hasSpeed)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) * _controller.SpeedOverrideFactor });
+                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveJ
             if (hasAccel || hasDecel)
                 _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelJ",
                     Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
