@@ -1602,19 +1602,19 @@ namespace Controller.RobotControl
                 case "MoveL":
                     {
                         target = ResolveVector(Command);
-                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
+                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     }
                     break;
 
                 case "OffsetL":
                     Vector6 NewPosition = CurrentPosition + Command.Vector6;
-                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
+                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     break;
 
                 case "MoveJ":
                     {
                         target = ResolveVector(Command);
-                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6);
+                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     }
                     break;
 
@@ -2218,13 +2218,16 @@ namespace Controller.RobotControl
             AuxAxisManager.StopAllDevices();
         }
 
-        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)
+        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
         {
             if (IsMoving)
                 return;
 
-            // Gather the commands motion params if there specified otherwise default to the last set ones
-            double jointSpeed = Speed ??= this.SpeedJ;
+            // Gather the commands motion params if there specified otherwise default to the last set ones.
+            // The global speed override scales program moves only (applyOverride) — including
+            // program steps that don't set an explicit speed. Manual point moves and jogging
+            // run at their commanded speed.
+            double jointSpeed = (Speed ?? this.SpeedJ) * (applyOverride ? SpeedOverrideFactor : 1.0);
             double jointAccel = Accel ??= this.AccelJ;
             double jointDecel = Decel ??= this.DecelJ;
 
@@ -2247,13 +2250,14 @@ namespace Controller.RobotControl
 
         
 
-        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset)
+        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
         {
             if (IsMoving)
                 return;
 
-            // Gather the commands motion params if there specified otherwise default to the last set ones
-            double lineSpeed = Speed ??= this.SpeedS;
+            // Gather the commands motion params if there specified otherwise default to the last set ones.
+            // Override scales program moves only (see MoveJ); manual/jog moves are unaffected.
+            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor : 1.0);
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
 

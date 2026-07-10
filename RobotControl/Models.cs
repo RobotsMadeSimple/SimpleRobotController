@@ -814,6 +814,14 @@ public class RobotCommand
     public double? Time { get; set; }
 
     /// <summary>
+    /// Set by the program executor so the global speed override scales program
+    /// moves only. Manual moves (points page) and jogging leave it false and run
+    /// at their commanded speed. JsonIgnore-d so app payloads can't set it.
+    /// </summary>
+    [JsonIgnore]
+    public bool ApplySpeedOverride { get; set; } = false;
+
+    /// <summary>
     /// Optional status update attached to this command.
     /// When the command is dequeued and starts executing the update is applied
     /// to the named program so the mobile app sees live progress.
