@@ -545,9 +545,51 @@ namespace Controller.RobotControl
                     _ = Task.Run(async () =>
                     {
                         await Task.Delay(500);
-                        var exe = Environment.ProcessPath;
-                        if (exe != null)
-                            System.Diagnostics.Process.Start(exe);
+                        try
+                        {
+                            // On a dev machine the project source sits three levels above the
+                            // build output (…/RobotControl/bin/<Config>/net10.0/). When it's
+                            // present, rebuild the latest code and relaunch the fresh binary
+                            // instead of re-running the stale one. In production (published,
+                            // no .csproj) we just relaunch the current binary as before.
+                            var baseDir    = AppContext.BaseDirectory;
+                            var projectDir = Path.GetFullPath(Path.Combine(baseDir, "..", "..", ".."));
+                            var csproj     = Directory.Exists(projectDir)
+                                ? Directory.GetFiles(projectDir, "*.csproj").FirstOrDefault()
+                                : null;
+                            var exePath = Environment.ProcessPath;
+
+                            if (csproj != null && exePath != null)
+                            {
+                                var sep    = Path.DirectorySeparatorChar;
+                                var config = baseDir.Contains($"{sep}Release{sep}") ? "Release" : "Debug";
+                                var psi = new System.Diagnostics.ProcessStartInfo
+                                {
+                                    UseShellExecute  = true,
+                                    WorkingDirectory = projectDir,
+                                };
+                                if (OperatingSystem.IsWindows())
+                                {
+                                    // Wait for this process to release its own binary, rebuild, then relaunch.
+                                    psi.FileName  = "cmd.exe";
+                                    psi.Arguments = $"/c timeout /t 2 /nobreak >nul & dotnet build \"{csproj}\" -c {config} --nologo && start \"\" \"{exePath}\"";
+                                }
+                                else
+                                {
+                                    psi.FileName  = "/bin/bash";
+                                    psi.Arguments = $"-c \"sleep 2 && dotnet build '{csproj}' -c {config} --nologo && nohup '{exePath}' >/dev/null 2>&1 &\"";
+                                }
+                                System.Diagnostics.Process.Start(psi);
+                            }
+                            else if (exePath != null)
+                            {
+                                System.Diagnostics.Process.Start(exePath);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Restart] Failed: {ex.Message}");
+                        }
                         Environment.Exit(0);
                     });
                     break;
