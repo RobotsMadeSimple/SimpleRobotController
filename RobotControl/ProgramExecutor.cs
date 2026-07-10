@@ -1294,6 +1294,27 @@ namespace Controller.RobotControl
             }
         }
 
+        /// <summary>
+        /// Resolves the runtime zone override for a RunVision step: a variable (1-based
+        /// index into the program's zones) takes priority over a fixed zone id. Returns
+        /// null when no override is set (each inspection uses its own configured zone).
+        /// </summary>
+        private string? ResolveVisionZoneOverride(ProgramStep step)
+        {
+            string? zoneId = step.VisionZoneId;
+            if (!string.IsNullOrEmpty(step.VisionZoneVar) &&
+                _variables.TryGetValue(step.VisionZoneVar, out var zoneIdxVal))
+            {
+                var vp = _controller.VisionManager.GetProgram(step.VisionProgramId!);
+                if (vp != null)
+                {
+                    int zoneIdx = (int)zoneIdxVal - 1; // 1-based → 0-based
+                    zoneId = (zoneIdx >= 0 && zoneIdx < vp.Zones.Count) ? vp.Zones[zoneIdx].Id : null;
+                }
+            }
+            return zoneId;
+        }
+
         private void ExecuteRunVision(ProgramStep step, StepListFrame frame)
         {
             var programId = step.VisionProgramId;
@@ -1305,8 +1326,9 @@ namespace Controller.RobotControl
 
             if (!_awaitingVision)
             {
-                // First entry: start the processor and record the trigger timestamp
-                _controller.VisionManager.StartProgram(programId);
+                // First entry: start the processor (applying any zone override so the
+                // analysis and debug frame run in the selected zone) and record the trigger.
+                _controller.VisionManager.StartProgram(programId, ResolveVisionZoneOverride(step));
                 _visionProgramId = programId;
                 _visionStartMs   = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _awaitingVision  = true;
@@ -1336,38 +1358,10 @@ namespace Controller.RobotControl
             if (result == null || result.TimestampMs <= _visionStartMs)
                 return; // no fresh result yet — keep waiting
 
-            // Got a fresh result — write output variables, stop processor, advance
-            // Resolve effective zone override: variable (1-based index) takes priority over fixed ID.
-            string? effectiveZoneId = step.VisionZoneId;
-            if (!string.IsNullOrEmpty(step.VisionZoneVar) &&
-                _variables.TryGetValue(step.VisionZoneVar, out var zoneIdxVal))
-            {
-                var vp2 = _controller.VisionManager.GetProgram(step.VisionProgramId!);
-                if (vp2 != null)
-                {
-                    int zoneIdx = (int)zoneIdxVal - 1; // 1-based → 0-based
-                    effectiveZoneId = (zoneIdx >= 0 && zoneIdx < vp2.Zones.Count)
-                        ? vp2.Zones[zoneIdx].Id
-                        : null;
-                }
-            }
-
+            // Got a fresh result — write output variables, stop processor, advance.
+            // The zone override (if any) was applied to the processor at start, so every
+            // inspection ran in the selected zone and all of its outputs are relevant.
             HashSet<string>? zoneInspIds = null;
-            if (!string.IsNullOrEmpty(effectiveZoneId))
-            {
-                var vp = _controller.VisionManager.GetProgram(step.VisionProgramId!);
-                if (vp != null)
-                {
-                    zoneInspIds = new HashSet<string>(
-                        vp.Inspections           .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id)
-                        .Concat(vp.ColorInspections   .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
-                        .Concat(vp.PolygonInspections .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
-                        .Concat(vp.ArucoInspections   .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
-                        .Concat(vp.LineInspections    .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
-                        .Concat(vp.BarcodeInspections .Where(i => i.ZoneId == effectiveZoneId).Select(i => i.Id))
-                    );
-                }
-            }
 
             foreach (var output in step.VisionOutputs ?? [])
             {

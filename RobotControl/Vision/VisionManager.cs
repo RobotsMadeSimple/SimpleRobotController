@@ -17,7 +17,7 @@ namespace Controller.RobotControl.Vision
             _repo          = repo;
         }
 
-        public void StartProgram(string programId)
+        public void StartProgram(string programId, string? zoneOverrideId = null)
         {
             lock (_lock)
             {
@@ -29,11 +29,32 @@ namespace Controller.RobotControl.Vision
                 var camera = _cameraManager.GetCamera(prog.CameraId);
                 if (camera == null) { Console.WriteLine($"[Vision] Camera '{prog.CameraId}' not found"); return; }
 
+                // Runtime zone override: point every inspection at the chosen zone so the
+                // analysis — and the annotated debug frame — run in that zone instead of
+                // each inspection's saved default. Clone first so the repo copy is untouched.
+                if (!string.IsNullOrEmpty(zoneOverrideId))
+                    prog = WithZoneOverride(prog, zoneOverrideId);
+
                 var proc = new VisionProcessor(prog, camera);
                 _processors[programId] = proc;
                 proc.Start();
-                Console.WriteLine($"[Vision] Started processor for '{programId}'");
+                Console.WriteLine($"[Vision] Started processor for '{programId}'"
+                    + (string.IsNullOrEmpty(zoneOverrideId) ? "" : $" (zone override {zoneOverrideId})"));
             }
+        }
+
+        /// <summary>Deep-clones a program and re-points every inspection at one zone.</summary>
+        private static VisionProgram WithZoneOverride(VisionProgram prog, string zoneId)
+        {
+            var clone = System.Text.Json.JsonSerializer.Deserialize<VisionProgram>(
+                System.Text.Json.JsonSerializer.Serialize(prog))!;
+            foreach (var i in clone.Inspections)        i.ZoneId = zoneId;
+            foreach (var i in clone.ColorInspections)   i.ZoneId = zoneId;
+            foreach (var i in clone.PolygonInspections) i.ZoneId = zoneId;
+            foreach (var i in clone.ArucoInspections)   i.ZoneId = zoneId;
+            foreach (var i in clone.LineInspections)    i.ZoneId = zoneId;
+            foreach (var i in clone.BarcodeInspections) i.ZoneId = zoneId;
+            return clone;
         }
 
         public void StopProgram(string programId)
