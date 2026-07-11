@@ -168,6 +168,21 @@ namespace Controller.RobotControl
                 return _programVisionSnapshots.TryGetValue(visionProgramId, out var b) ? b : null;
         }
 
+        // Last inspection result per program — persists after the RunVision step's
+        // processor stops, so the monitor page can show values with the snapshot.
+        private readonly Dictionary<string, Vision.VisionResult> _programVisionResults = new();
+
+        public void SetProgramVisionResult(string visionProgramId, Vision.VisionResult result)
+        {
+            lock (_visionSnapshotLock) _programVisionResults[visionProgramId] = result;
+        }
+
+        public Vision.VisionResult? GetProgramVisionResult(string visionProgramId)
+        {
+            lock (_visionSnapshotLock)
+                return _programVisionResults.TryGetValue(visionProgramId, out var r) ? r : null;
+        }
+
         private string? _auxActiveDeviceId;
         private int     _auxActiveAxis;
 
@@ -1584,18 +1599,13 @@ namespace Controller.RobotControl
                 {
                     var p = LoadParams<StartStopVisionParams>(command);
                     var proc = VisionManager.GetProcessor(p.Id);
-                    if (proc != null)
-                    {
-                        var result = proc.GetLatestResult();
-                        var json   = result != null
-                            ? JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
-                            : null;
-                        payload = new { result = json };
-                    }
-                    else
-                    {
-                        payload = new { result = (string?)null };
-                    }
+                    // Live result while running, else the last one captured at the end
+                    // of the most recent RunVision step for this program.
+                    var result = proc?.GetLatestResult() ?? GetProgramVisionResult(p.Id);
+                    var json   = result != null
+                        ? JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+                        : null;
+                    payload = new { result = json };
                 }
                 break;
 

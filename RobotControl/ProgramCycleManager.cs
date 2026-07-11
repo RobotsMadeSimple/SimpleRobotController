@@ -104,10 +104,13 @@ namespace Controller.RobotControl
                     if (update.ShouldLog)
                     {
                         program.StepLogs.Add(update.StepDescription);
-                        if (program.StepLogs.Count > 5000)
+                        // Keep at most ~100k entries in memory. Trim in one batch once a
+                        // slack is exceeded — RemoveAt(0) per add would be O(n) each time.
+                        if (program.StepLogs.Count > 110_000)
                         {
-                            program.StepLogs.RemoveAt(0);
-                            program.LogBaseIndex++;   // keep absolute paging stable
+                            int remove = program.StepLogs.Count - 100_000;
+                            program.StepLogs.RemoveRange(0, remove);
+                            program.LogBaseIndex += remove;   // keep absolute paging stable
                         }
                     }
                 }
@@ -280,6 +283,13 @@ namespace Controller.RobotControl
                 // fell behind the ring buffer resumes from the newest available window.
                 int s = Math.Clamp(start ?? 0,     baseIdx, total);
                 int e = Math.Clamp(end   ?? total, s,       total);
+
+                // Bound the reply so a large retained window (up to ~100k) can't produce a
+                // multi-megabyte WebSocket message. Return the newest MaxChunk of the range;
+                // the client tails to `total`, so it keeps advancing without missing new logs.
+                const int MaxChunk = 5000;
+                if (e - s > MaxChunk) s = e - MaxChunk;
+
                 return (total, s, logs.GetRange(s - baseIdx, e - s));
             }
         }
