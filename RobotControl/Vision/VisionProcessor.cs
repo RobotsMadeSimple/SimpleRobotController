@@ -100,9 +100,22 @@ namespace Controller.RobotControl.Vision
 
                     using var annotated = src.Clone();
 
-                    // Draw all zone borders as spatial context
+                    // Draw borders only for zones actually used by an enabled inspection.
+                    // This reflects any runtime zone override (all inspections then point
+                    // at the chosen zone) and avoids outlining unused zones — so the frame
+                    // shows the zone genuinely in use rather than every defined zone.
+                    var usedZoneIds = new HashSet<string>();
+                    void MarkZone(string? id) { if (!string.IsNullOrEmpty(id)) usedZoneIds.Add(id!); }
+                    foreach (var i in prog.Inspections)        if (i.Enabled) MarkZone(i.ZoneId);
+                    foreach (var i in prog.ColorInspections)   if (i.Enabled) MarkZone(i.ZoneId);
+                    foreach (var i in prog.PolygonInspections) if (i.Enabled) MarkZone(i.ZoneId);
+                    foreach (var i in prog.ArucoInspections)   if (i.Enabled) MarkZone(i.ZoneId);
+                    foreach (var i in prog.LineInspections)    if (i.Enabled) MarkZone(i.ZoneId);
+                    foreach (var i in prog.BarcodeInspections) if (i.Enabled) MarkZone(i.ZoneId);
+
                     foreach (var zone in prog.Zones)
-                        DrawZoneBorder(annotated, zone.Geometry, src.Width, src.Height, zone.Name);
+                        if (usedZoneIds.Contains(zone.Id))
+                            DrawZoneBorder(annotated, zone.Geometry, src.Width, src.Height, zone.Name);
 
                     // Run each enabled inspection
                     foreach (var insp in prog.Inspections)
@@ -382,9 +395,9 @@ namespace Controller.RobotControl.Vision
             if (zone != null)
                 DrawColorZoneBorder(annotated, zone.Geometry, w, h, insp.Name);
 
-            // Coverage / pass label
+            // Name label only — the coverage/pass values are reported as text in the app
             var labelColor = passed ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
-            string label   = $"{insp.Name}: {coverage:F1}%  {(passed ? "PASS" : "FAIL")}";
+            string label   = insp.Name;
             Cv2.PutText(annotated, label,
                 new OpenCvSharp.Point(6, labelY),
                 HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
@@ -495,9 +508,6 @@ namespace Controller.RobotControl.Vision
                 var cpt = new OpenCvSharp.Point((int)cx, (int)cy);
                 var tip = new OpenCvSharp.Point((int)(cx + Math.Cos(rad) * len), (int)(cy + Math.Sin(rad) * len));
                 Cv2.ArrowedLine(annotated, cpt, tip, new Scalar(0, 255, 255), 2);
-                Cv2.PutText(annotated, $"{rect.Angle:F1}deg",
-                    new OpenCvSharp.Point((int)cx + 5, (int)cy - 5),
-                    HersheyFonts.HersheySimplex, 0.4, drawColor, 1);
 
                 count++;
 
@@ -512,9 +522,7 @@ namespace Controller.RobotControl.Vision
 
             // Label
             var labelColor = count > 0 ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
-            string label   = count > 0
-                ? $"{insp.Name}: {count} polygon(s) · {angle:F1}deg"
-                : $"{insp.Name}: none";
+            string label   = insp.Name;
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, labelColor, 1);
             labelY += 22;
@@ -590,16 +598,11 @@ namespace Controller.RobotControl.Vision
 
                     var pts = c.Select(p => new OpenCvSharp.Point((int)p.X, (int)p.Y)).ToArray();
                     Cv2.Polylines(annotated, new[] { pts }, isClosed: true, drawColor, 2);
-                    Cv2.PutText(annotated, $"ID:{ids[i]}",
-                        new OpenCvSharp.Point((int)cx + 4, (int)cy - 4),
-                        HersheyFonts.HersheySimplex, 0.5, drawColor, 2);
                 }
             }
 
             var labelColor = markers.Count > 0 ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
-            string label   = markers.Count > 0
-                ? $"{insp.Name}: {markers.Count} marker(s) [{string.Join(",", markers.Select(m => m.MarkerId))}]"
-                : $"{insp.Name}: none";
+            string label   = insp.Name;
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, labelColor, 1);
             labelY += 22;
@@ -720,18 +723,10 @@ namespace Controller.RobotControl.Vision
                         .ToArray();
                     Cv2.Polylines(annotated, new[] { pts }, isClosed: pts.Length > 2, drawColor, 2);
                 }
-                Cv2.PutText(annotated, $"{r.BarcodeFormat}: {r.Text}",
-                    new OpenCvSharp.Point((int)cx + 4, (int)cy - 4),
-                    HersheyFonts.HersheySimplex, 0.45, new Scalar(0, 0, 0), 3);
-                Cv2.PutText(annotated, $"{r.BarcodeFormat}: {r.Text}",
-                    new OpenCvSharp.Point((int)cx + 4, (int)cy - 4),
-                    HersheyFonts.HersheySimplex, 0.45, drawColor, 1);
             }
 
             var labelColor = codes.Count > 0 ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
-            string label = codes.Count > 0
-                ? $"{insp.Name}: {codes.Count} code(s) [{string.Join(", ", codes.Select(c => c.Format))}]"
-                : $"{insp.Name}: none";
+            string label = insp.Name;
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, labelColor, 1);
             labelY += 22;
@@ -897,9 +892,7 @@ namespace Controller.RobotControl.Vision
             }
 
             var labelColor = segments.Count > 0 ? new Scalar(0, 220, 0) : new Scalar(0, 0, 220);
-            string label   = segments.Count > 0
-                ? $"{insp.Name}: {segments.Count} line(s)"
-                : $"{insp.Name}: none";
+            string label   = insp.Name;
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, new Scalar(0, 0, 0), 3);
             Cv2.PutText(annotated, label, new OpenCvSharp.Point(6, labelY), HersheyFonts.HersheySimplex, 0.5, labelColor, 1);
             labelY += 22;
