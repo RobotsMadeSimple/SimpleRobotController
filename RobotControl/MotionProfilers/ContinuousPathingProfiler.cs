@@ -88,7 +88,12 @@ namespace Controller.RobotControl.MotionProfilers
 
                 double trim   = r * Math.Tan(half);
                 double rEff   = r;
-                double maxTrim = 0.5 * Math.Min(lin, lout);
+                // A corner may consume the whole of an endpoint leg (used only by this
+                // corner), but only half of an interior leg it shares with a neighbour —
+                // otherwise adjacent blends would overrun each other.
+                double inCap  = (i == 1)              ? lin  : 0.5 * lin;
+                double outCap = (i == pts.Count - 2)  ? lout : 0.5 * lout;
+                double maxTrim = Math.Min(inCap, outCap);
                 if (trim > maxTrim)
                 {
                     trim = maxTrim;

@@ -692,7 +692,7 @@ namespace Controller.RobotControl
 
             // Blended MoveL run: gather consecutive blendable MoveL steps into one
             // continuous path so the robot rounds the corners instead of stopping.
-            if (step.Type == StepType.MoveL && (step.Blend ?? false) && !hasToolOffset)
+            if (step.Type == StepType.MoveL && EffectivelyBlends(step) && !hasToolOffset)
             {
                 if (TryDispatchBlendedRun(step, target, frame)) return;
             }
@@ -739,6 +739,12 @@ namespace Controller.RobotControl
                 ? Math.Max(0, EvalField(step, "blendRadius", step.BlendRadius ?? 0))
                 : _defaultBlendRadius;
 
+        // A move only actually blends when blending is on AND it has a non-zero radius.
+        // Blend-on with a zero radius would round nothing yet still not stop — a jolt — so
+        // it's treated as a normal (stopping) move instead.
+        private bool EffectivelyBlends(ProgramStep step) =>
+            (step.Blend ?? false) && EffectiveBlendRadius(step) > 0;
+
         // Gather a run of consecutive blendable MoveL steps and dispatch one continuous
         // (blended) path. Returns false when there is nothing to blend, so the caller
         // falls back to a normal single move.
@@ -748,7 +754,7 @@ namespace Controller.RobotControl
             var run       = new List<ProgramStep> { first };
             var waypoints = new List<Vector6> { firstTarget };
 
-            bool prevBlend = first.Blend ?? false;
+            bool prevBlend = EffectivelyBlends(first);
             int j = frame.Index + 1;
             while (prevBlend && j < steps.Count)
             {
@@ -760,7 +766,8 @@ namespace Controller.RobotControl
                 if (!ResolveMoveTarget(nxt, out Vector6 t, waypoints[^1])) return true; // errored — program is finishing
                 run.Add(nxt);
                 waypoints.Add(t);
-                prevBlend = nxt.Blend ?? false;
+                // A blend-on move with a zero radius stops here (terminates the run).
+                prevBlend = EffectivelyBlends(nxt);
                 j++;
             }
 
@@ -1153,7 +1160,7 @@ namespace Controller.RobotControl
                 // Blended JumpL: run lift → traverse → lower as one continuous path,
                 // rounding the two apex corners instead of stopping at each leg. (JumpJ's
                 // traverse is a joint move, so it keeps the stepped behaviour for now.)
-                if (step.Type == StepType.JumpL && (step.Blend ?? false))
+                if (step.Type == StepType.JumpL && EffectivelyBlends(step))
                 {
                     double r = EffectiveBlendRadius(step);
                     var apexUp   = new Vector6(_jumpStartPos.X, _jumpStartPos.Y, _jumpZStart, _jumpStartPos.RX, _jumpStartPos.RY, _jumpStartPos.RZ);
