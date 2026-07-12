@@ -70,10 +70,13 @@ namespace Controller.RobotControl
         private double AccelS = 100; // Linear Acceleration
         private double DecelS = 100; // Linear Deceleration
 
+        // Continuous (blended) linear pathing — runs a multi-waypoint blended path.
+        private Controller.RobotControl.MotionProfilers.ContinuousPathingProfiler? continuousProfiler;
+
         // Current Status of Robot
         private Vector6 CurrentPosition = new();  // Actual position of the robot
         public Vector6 GetCurrentPosition() => new Vector6(CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z, CurrentPosition.RX, CurrentPosition.RY, CurrentPosition.RZ);
-        public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || IsJogging || IsJointJogging || IsToolJogging;
+        public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || continuousProfiler is not null || IsJogging || IsJointJogging || IsToolJogging;
         // X is away from flange, Y is towards the inside of the robot, Z is Vertical
         public Vector6 CurrentTool = new(0, 0, 0);
         // Current Pose Of the Joints
@@ -319,7 +322,20 @@ namespace Controller.RobotControl
 
         public void RunMotion()
         {
-            if (linearMotionProfiler is not null)
+            if (continuousProfiler is not null)
+            {
+                CurrentPosition = continuousProfiler.Loop();
+                if (continuousProfiler.IsFinished)
+                {
+                    CurrentPosition.Copy(TargetPosition);
+                    continuousProfiler = null;
+                }
+
+                // Per-tick IK, same as the plain linear path.
+                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                UpdateJointTargets();
+            }
+            else if (linearMotionProfiler is not null)
             {
                 CurrentPosition = linearMotionProfiler.Update();
                 if (linearMotionProfiler.IsFinished)
@@ -2261,6 +2277,7 @@ namespace Controller.RobotControl
             _hardStopRequested = false;
             linearMotionProfiler = null;
             jointMotionProfiler = null;
+            continuousProfiler = null;
             joggingMotionProfiler.ForceStop();
             jointJoggingProfiler.ForceStop();
             toolJoggingMotionProfiler.ForceStop();
@@ -2325,6 +2342,34 @@ namespace Controller.RobotControl
 
             // Generate a new linear motion profiler for this move
             linearMotionProfiler = new(CurrentPosition, this.TargetPosition, lineSpeed, lineAccel, lineDecel);
+        }
+
+        /// <summary>
+        /// Start a continuous (blended) linear path through a list of waypoints. Each
+        /// interior waypoint is rounded by its blend radius (blendRadii[i] applies at
+        /// waypoints[i]); the final waypoint is an exact stop. The path is driven by a
+        /// single trapezoidal speed profile over its total blended length.
+        /// </summary>
+        public void StartContinuousMove(List<Vector6> waypoints, List<double> blendRadii,
+            double? Speed, double? Accel, double? Decel, bool applyOverride = false)
+        {
+            if (IsMoving) return;
+            if (waypoints == null || waypoints.Count < 2) return;
+
+            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor : 1.0);
+            double lineAccel = Accel ?? this.AccelS;
+            double lineDecel = Decel ?? this.DecelS;
+
+            // Prepend the current position so the path starts from where the robot is.
+            var pts = new List<Vector6>(waypoints.Count + 1) { GetCurrentPosition() };
+            pts.AddRange(waypoints);
+
+            // Align radii to the point list: index 0 (current pos) has no corner.
+            var radii = new List<double>(pts.Count) { 0 };
+            radii.AddRange(blendRadii);
+
+            this.TargetPosition = waypoints[^1];
+            continuousProfiler = new(pts, radii, lineSpeed, lineAccel, lineDecel);
         }
 
         public void JogJ(Vector6 jogJointDirection, double? Speed, double? Accel, double? Decel)

@@ -42,6 +42,12 @@ namespace Controller.RobotControl
         // Step that was dispatched asynchronously; reported complete when the move finishes
         private ProgramStep? _pendingStep;
 
+        // Steps consumed by a single blended (continuous) move; all reported on completion.
+        private List<ProgramStep>? _pendingSteps;
+
+        // Program default blend radius (set by SetBlendRadius); per-move BlendRadius overrides it.
+        private double _defaultBlendRadius = 0;
+
         // Whether we are awaiting an aux axis indexed move with WaitForDone=true
         private bool _awaitingAuxMove;
         private ProgramStep? _pendingAuxStep;
@@ -424,6 +430,12 @@ namespace Controller.RobotControl
                         ReportStepCompleted(_pendingStep);
                         _pendingStep = null;
                     }
+                    // Report every step consumed by a blended run
+                    if (_pendingSteps is not null)
+                    {
+                        foreach (var s in _pendingSteps) ReportStepCompleted(s);
+                        _pendingSteps = null;
+                    }
                 }
                 else
                     return;
@@ -578,6 +590,12 @@ namespace Controller.RobotControl
                     ExecuteSetSpeedJ(step, frame);
                     break;
 
+                case StepType.SetBlendRadius:
+                    _defaultBlendRadius = Math.Max(0, EvalField(step, "blendRadius", step.BlendRadius ?? 0));
+                    ReportStepCompleted(step);
+                    frame.Index++;
+                    break;
+
                 case StepType.SetVariable:
                     ExecuteSetVariable(step, frame);
                     break;
@@ -668,15 +686,118 @@ namespace Controller.RobotControl
         {
             if (_awaitingMove) return;
 
+            if (!ResolveMoveTarget(step, out Vector6 target)) return;
+
+            bool hasToolOffset = HasToolOffset(step);
+
+            // Blended MoveL run: gather consecutive blendable MoveL steps into one
+            // continuous path so the robot rounds the corners instead of stopping.
+            if (step.Type == StepType.MoveL && (step.Blend ?? false) && !hasToolOffset)
+            {
+                if (TryDispatchBlendedRun(step, target, frame)) return;
+            }
+
+            var cmd = new RobotCommand
+            {
+                CommandType = step.Type == StepType.MoveL ? "MoveL" : "MoveJ",
+                X  = target.X,
+                Y  = target.Y,
+                Z  = target.Z,
+                RX = target.RX,
+                RY = target.RY,
+                RZ = target.RZ,
+                // Optional local tool offset applied on top of the active tool
+                TX  = hasToolOffset ? EvalField(step, "toolOffsetX",  step.ToolOffsetX  ?? 0) : null,
+                TY  = hasToolOffset ? EvalField(step, "toolOffsetY",  step.ToolOffsetY  ?? 0) : null,
+                TZ  = hasToolOffset ? EvalField(step, "toolOffsetZ",  step.ToolOffsetZ  ?? 0) : null,
+                TRX = hasToolOffset ? EvalField(step, "toolOffsetRX", step.ToolOffsetRX ?? 0) : null,
+                TRY = hasToolOffset ? EvalField(step, "toolOffsetRY", step.ToolOffsetRY ?? 0) : null,
+                TRZ = hasToolOffset ? EvalField(step, "toolOffsetRZ", step.ToolOffsetRZ ?? 0) : null,
+                // Raw speed — the global override is applied centrally in MoveL/MoveJ.
+                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null,
+                Accel = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
+                Decel = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null,
+                ApplySpeedOverride = true,   // program move — subject to the speed override
+            };
+
+            _controller.QueuedCommands.Add(cmd);
+            _awaitingMove = true;
+            _pendingStep  = step; // completion is reported in Update() once the move finishes
+
+            // Announce the step is in progress without counting it yet
+            ReportStepStarted(step);
+            frame.Index++;
+        }
+
+        private static bool HasToolOffset(ProgramStep step) =>
+            step.ToolOffsetX.HasValue || step.ToolOffsetY.HasValue || step.ToolOffsetZ.HasValue
+            || step.ToolOffsetRX.HasValue || step.ToolOffsetRY.HasValue || step.ToolOffsetRZ.HasValue;
+
+        // Effective blend radius for a move: its own override if set, else the program default.
+        private double EffectiveBlendRadius(ProgramStep step) =>
+            (step.BlendRadius.HasValue || step.Expressions?.ContainsKey("blendRadius") == true)
+                ? Math.Max(0, EvalField(step, "blendRadius", step.BlendRadius ?? 0))
+                : _defaultBlendRadius;
+
+        // Gather a run of consecutive blendable MoveL steps and dispatch one continuous
+        // (blended) path. Returns false when there is nothing to blend, so the caller
+        // falls back to a normal single move.
+        private bool TryDispatchBlendedRun(ProgramStep first, Vector6 firstTarget, StepListFrame frame)
+        {
+            var steps     = frame.Steps;
+            var run       = new List<ProgramStep> { first };
+            var waypoints = new List<Vector6> { firstTarget };
+
+            bool prevBlend = first.Blend ?? false;
+            int j = frame.Index + 1;
+            while (prevBlend && j < steps.Count)
+            {
+                var nxt = steps[j];
+                // Only plain MoveL steps without a per-step tool offset can join the path.
+                if (nxt.Type != StepType.MoveL || HasToolOffset(nxt)) break;
+                if (!ResolveMoveTarget(nxt, out Vector6 t)) return true; // errored — program is finishing
+                run.Add(nxt);
+                waypoints.Add(t);
+                prevBlend = nxt.Blend ?? false;
+                j++;
+            }
+
+            if (run.Count < 2) return false; // only one move — nothing to blend
+
+            // Corner radius at waypoint k comes from the move arriving there; the final
+            // waypoint is always an exact stop.
+            var radii = new List<double>(run.Count);
+            for (int k = 0; k < run.Count; k++)
+                radii.Add(k < run.Count - 1 ? EffectiveBlendRadius(run[k]) : 0);
+
+            double? speed = (first.Speed.HasValue || first.Expressions?.ContainsKey("speed") == true) ? EvalField(first, "speed", first.Speed ?? 0) : (double?)null;
+            double? accel = (first.Accel.HasValue || first.Expressions?.ContainsKey("accel") == true) ? EvalField(first, "accel", first.Accel ?? 0) : (double?)null;
+            double? decel = (first.Decel.HasValue || first.Expressions?.ContainsKey("decel") == true) ? EvalField(first, "decel", first.Decel ?? 0) : (double?)null;
+
+            _controller.StartContinuousMove(waypoints, radii, speed, accel, decel, applyOverride: true);
+            _awaitingMove = true;
+            _pendingSteps = run;
+
+            foreach (var s in run) ReportStepStarted(s);
+            frame.Index += run.Count;
+            return true;
+        }
+
+        // Resolve a move step's final Cartesian target (point/grid/stack/var + offsets +
+        // overrides + active local). Returns false after calling Finish() on any error.
+        private bool ResolveMoveTarget(ProgramStep step, out Vector6 target)
+        {
+            target = Vector6.Zero;
+
             Point point;
             if (step.GridPoint != null)
             {
                 var gp   = step.GridPoint;
                 var grid = _gridRepo.Get(gp.GridId);
-                if (grid == null) { Finish(global::ProgramStatus.Error, $"Grid not found: {gp.GridId}"); return; }
+                if (grid == null) { Finish(global::ProgramStatus.Error, $"Grid not found: {gp.GridId}"); return false; }
 
                 var basePoint = _pointRepo.Get(grid.BasePointName);
-                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Grid base point not found: {grid.BasePointName}"); return; }
+                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Grid base point not found: {grid.BasePointName}"); return false; }
 
                 int row, col;
                 if (gp.UseGridIndex)
@@ -684,7 +805,7 @@ namespace Controller.RobotControl
                     if (!grid.ColCount.HasValue || grid.ColCount.Value <= 0)
                     {
                         Finish(global::ProgramStatus.Error, $"Grid '{grid.Name}' requires colCount to use grid index");
-                        return;
+                        return false;
                     }
                     int idx = (int)Math.Round(EvalField(step, "gridGridIndex", gp.GridIndex ?? 0));
                     row = idx / grid.ColCount.Value;
@@ -718,10 +839,10 @@ namespace Controller.RobotControl
             {
                 var sp    = step.StackPoint;
                 var stack = _stackRepo.Get(sp.StackId);
-                if (stack == null) { Finish(global::ProgramStatus.Error, $"Stack not found: {sp.StackId}"); return; }
+                if (stack == null) { Finish(global::ProgramStatus.Error, $"Stack not found: {sp.StackId}"); return false; }
 
                 var basePoint = _pointRepo.Get(stack.BasePointName);
-                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Stack base point not found: {stack.BasePointName}"); return; }
+                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Stack base point not found: {stack.BasePointName}"); return false; }
 
                 int idx = (int)Math.Round(EvalField(step, "stackIndex", sp.Index ?? 0));
                 if (stack.MaxCount.HasValue && stack.MaxCount.Value > 0)
@@ -742,7 +863,7 @@ namespace Controller.RobotControl
                 if (!_pointVariables.TryGetValue(step.VarPointName, out var ptList) || ptList.Count == 0)
                 {
                     Finish(global::ProgramStatus.Error, $"Variable point '{step.VarPointName}' is empty or not set");
-                    return;
+                    return false;
                 }
                 int ptIdx = 0;
                 if (!string.IsNullOrEmpty(step.VarPointIndex))
@@ -767,14 +888,10 @@ namespace Controller.RobotControl
                 if (found is null)
                 {
                     Finish(global::ProgramStatus.Error, $"Point not found: {step.PointName}");
-                    return;
+                    return false;
                 }
                 point = found;
             }
-
-            // Determine if a local tool offset is set on this step
-            bool hasToolOffset = step.ToolOffsetX.HasValue || step.ToolOffsetY.HasValue || step.ToolOffsetZ.HasValue
-                               || step.ToolOffsetRX.HasValue || step.ToolOffsetRY.HasValue || step.ToolOffsetRZ.HasValue;
 
             // Base position + offsets
             double finalX  = point.X  + EvalField(step, "offsetX",  step.OffsetX  ?? 0);
@@ -813,36 +930,8 @@ namespace Controller.RobotControl
                 finalRZ += effectiveLocal.RZ;
             }
 
-            var cmd = new RobotCommand
-            {
-                CommandType = step.Type == StepType.MoveL ? "MoveL" : "MoveJ",
-                X  = finalX,
-                Y  = finalY,
-                Z  = finalZ,
-                RX = finalRX,
-                RY = finalRY,
-                RZ = finalRZ,
-                // Optional local tool offset applied on top of the active tool
-                TX  = hasToolOffset ? EvalField(step, "toolOffsetX",  step.ToolOffsetX  ?? 0) : null,
-                TY  = hasToolOffset ? EvalField(step, "toolOffsetY",  step.ToolOffsetY  ?? 0) : null,
-                TZ  = hasToolOffset ? EvalField(step, "toolOffsetZ",  step.ToolOffsetZ  ?? 0) : null,
-                TRX = hasToolOffset ? EvalField(step, "toolOffsetRX", step.ToolOffsetRX ?? 0) : null,
-                TRY = hasToolOffset ? EvalField(step, "toolOffsetRY", step.ToolOffsetRY ?? 0) : null,
-                TRZ = hasToolOffset ? EvalField(step, "toolOffsetRZ", step.ToolOffsetRZ ?? 0) : null,
-                // Raw speed — the global override is applied centrally in MoveL/MoveJ.
-                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null,
-                Accel = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
-                Decel = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null,
-                ApplySpeedOverride = true,   // program move — subject to the speed override
-            };
-
-            _controller.QueuedCommands.Add(cmd);
-            _awaitingMove = true;
-            _pendingStep  = step; // completion is reported in Update() once the move finishes
-
-            // Announce the step is in progress without counting it yet
-            ReportStepStarted(step);
-            frame.Index++;
+            target = new Vector6(finalX, finalY, finalZ, finalRX, finalRY, finalRZ);
+            return true;
         }
 
         private void ExecuteThreadMove(ProgramStep step, StepListFrame frame)
@@ -1055,6 +1144,27 @@ namespace Controller.RobotControl
                 _jumpSpeed    = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null; // override applied in MoveL/MoveJ
                 _jumpAccel    = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null;
                 _jumpDecel    = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null;
+
+                // Blended JumpL: run lift → traverse → lower as one continuous path,
+                // rounding the two apex corners instead of stopping at each leg. (JumpJ's
+                // traverse is a joint move, so it keeps the stepped behaviour for now.)
+                if (step.Type == StepType.JumpL && (step.Blend ?? false))
+                {
+                    double r = EffectiveBlendRadius(step);
+                    var apexUp   = new Vector6(_jumpStartPos.X, _jumpStartPos.Y, _jumpZStart, _jumpStartPos.RX, _jumpStartPos.RY, _jumpStartPos.RZ);
+                    var apexOver = new Vector6(_jumpTarget.X,   _jumpTarget.Y,   _jumpZEnd,   _jumpTarget.RX,   _jumpTarget.RY,   _jumpTarget.RZ);
+                    _controller.StartContinuousMove(
+                        new List<Vector6> { apexUp, apexOver, _jumpTarget },
+                        new List<double> { r, r, 0 },   // round both apexes; land exactly on target
+                        _jumpSpeed, _jumpAccel, _jumpDecel, applyOverride: true);
+                    _jumpSubStep  = 0;
+                    _awaitingMove = true;
+                    _pendingStep  = step;
+                    ReportStepStarted(step);
+                    frame.Index++;
+                    return;
+                }
+
                 _jumpSubStep  = 1;
 
                 _controller.QueuedCommands.Add(new RobotCommand
