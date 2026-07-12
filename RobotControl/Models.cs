@@ -148,7 +148,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -250,6 +250,13 @@ public class ProgramStep
     public double? Accel { get; set; }
     [JsonPropertyName("decel")]
     public double? Decel { get; set; }
+    // Move blending — when Blend is true the move rounds its corner into the next
+    // move instead of stopping. BlendRadius optionally overrides the program's
+    // current default blend radius (set by a SetBlendRadius step).
+    [JsonPropertyName("blend")]
+    public bool? Blend { get; set; }
+    [JsonPropertyName("blendRadius")]
+    public double? BlendRadius { get; set; }
 
     // Optional position offset added to the target point (mm / deg)
     [JsonPropertyName("offsetX")]  public double? OffsetX  { get; set; }
@@ -749,44 +756,63 @@ class LineSegment : PathSegment
     }
 }
 
+/// <summary>
+/// A circular arc in 3D between two tangent points, used to round the corner at a
+/// waypoint (move blending). Position follows the arc; orientation (RX/RY/RZ) is
+/// interpolated linearly from start to end.
+/// </summary>
 class ArcSegment : PathSegment
 {
-    private Vector6 center;
-    private Vector6 start;
-    private Vector6 normal;
-    private double radius;
-    private double angle;
+    private readonly Vector6 startV, endV;
+    private readonly double cx, cy, cz;   // arc centre (XYZ)
+    private readonly double ux, uy, uz;   // unit radial from centre → start (XYZ)
+    private readonly double nx, ny, nz;   // unit rotation axis
+    private readonly double radius;
+    private readonly double sweep;        // swept angle in radians
 
-    public ArcSegment(Vector6 center, Vector6 start, Vector6 normal, double radius, double angle)
+    public ArcSegment(Vector6 start, Vector6 end, Vector6 centre, Vector6 axis, double radius, double sweep)
     {
-        this.center = center;
-        this.start = start;
-        this.normal = normal;
+        startV = start;
+        endV   = end;
+        cx = centre.X; cy = centre.Y; cz = centre.Z;
         this.radius = radius;
-        this.angle = angle;
-        Length = Math.Abs(radius * angle);
+        this.sweep  = sweep;
+
+        double rx = start.X - centre.X, ry = start.Y - centre.Y, rz = start.Z - centre.Z;
+        double rlen = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+        if (rlen < 1e-9) rlen = 1;
+        ux = rx / rlen; uy = ry / rlen; uz = rz / rlen;
+
+        double alen = Math.Sqrt(axis.X * axis.X + axis.Y * axis.Y + axis.Z * axis.Z);
+        if (alen < 1e-9) alen = 1;
+        nx = axis.X / alen; ny = axis.Y / alen; nz = axis.Z / alen;
+
+        Length = Math.Abs(radius * sweep);
     }
 
     public override Vector6 Sample(double s)
     {
-        double t = s / Length;
-        double a = angle * t;
+        double t = Length < 1e-9 ? 0 : Math.Clamp(s / Length, 0, 1);
+        double ang = sweep * t;
+        double c = Math.Cos(ang), sn = Math.Sin(ang);
 
-        double cos = Math.Cos(a);
-        double sin = Math.Sin(a);
+        // Rodrigues rotation of the (perpendicular) radial around the axis: u·cos + (n×u)·sin
+        double cxu = ny * uz - nz * uy;
+        double cyu = nz * ux - nx * uz;
+        double czu = nx * uy - ny * ux;
 
-        Vector6 r = start - center;
+        double rxv = ux * c + cxu * sn;
+        double ryv = uy * c + cyu * sn;
+        double rzv = uz * c + czu * sn;
 
-        Vector6 p = new Vector6(
-            center.X + r.X * cos - r.Y * sin,
-            center.Y + r.X * sin + r.Y * cos,
-            center.Z,
-            start.RX + (start.RX * t),
-            start.RY + (start.RY * t),
-            start.RZ + (start.RZ * t)
+        return new Vector6(
+            cx + radius * rxv,
+            cy + radius * ryv,
+            cz + radius * rzv,
+            startV.RX + (endV.RX - startV.RX) * t,
+            startV.RY + (endV.RY - startV.RY) * t,
+            startV.RZ + (endV.RZ - startV.RZ) * t
         );
-
-        return p;
     }
 }
 
