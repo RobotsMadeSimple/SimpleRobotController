@@ -755,7 +755,9 @@ namespace Controller.RobotControl
                 var nxt = steps[j];
                 // Only plain MoveL steps without a per-step tool offset can join the path.
                 if (nxt.Type != StepType.MoveL || HasToolOffset(nxt)) break;
-                if (!ResolveMoveTarget(nxt, out Vector6 t)) return true; // errored — program is finishing
+                // Resolve relative to the previous waypoint so "current position" moves chain
+                // off where the robot actually ends up, not where the blend started.
+                if (!ResolveMoveTarget(nxt, out Vector6 t, waypoints[^1])) return true; // errored — program is finishing
                 run.Add(nxt);
                 waypoints.Add(t);
                 prevBlend = nxt.Blend ?? false;
@@ -785,7 +787,9 @@ namespace Controller.RobotControl
 
         // Resolve a move step's final Cartesian target (point/grid/stack/var + offsets +
         // overrides + active local). Returns false after calling Finish() on any error.
-        private bool ResolveMoveTarget(ProgramStep step, out Vector6 target)
+        // currentPos overrides the base used for "current position" moves — during a blended
+        // run this is the previous waypoint (where the robot ends up), not its live position.
+        private bool ResolveMoveTarget(ProgramStep step, out Vector6 target, Vector6? currentPos = null)
         {
             target = Vector6.Zero;
 
@@ -877,9 +881,10 @@ namespace Controller.RobotControl
             }
             else if (string.IsNullOrEmpty(step.PointName))
             {
-                // No point specified — use the current TCP position as the base so offsets
-                // act as relative displacements from wherever the robot is right now.
-                var pos = _controller.GetCurrentPosition();
+                // No point specified — use the base TCP position so offsets act as relative
+                // displacements. In a blended run this is the previous waypoint (where the
+                // robot will be), otherwise the robot's live current position.
+                var pos = currentPos ?? _controller.GetCurrentPosition();
                 point = new Point { X = pos.X, Y = pos.Y, Z = pos.Z, RX = pos.RX, RY = pos.RY, RZ = pos.RZ };
             }
             else

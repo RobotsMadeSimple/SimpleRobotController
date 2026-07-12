@@ -10,7 +10,6 @@ namespace Controller.RobotControl.MotionProfilers
 
         public void Setup(double distance, double v, double a, double d)
         {
-            this.v = v;
             this.a = a;
             this.d = d;
             dist = distance;
@@ -23,6 +22,8 @@ namespace Controller.RobotControl.MotionProfilers
 
             if (da + dd > dist)
             {
+                // Triangular profile — reduce the peak velocity so accel + decel exactly
+                // cover the distance (there's no room to reach the commanded speed).
                 v = Math.Sqrt(2 * dist * a * d / (a + d));
                 ta = v / a;
                 td = v / d;
@@ -33,6 +34,10 @@ namespace Controller.RobotControl.MotionProfilers
                 double tc = (dist - da - dd) / v;
                 tTotal = ta + tc + td;
             }
+
+            // Store the actual peak velocity used (may have been reduced above) so
+            // Sample()'s phase boundaries and cruise speed stay consistent.
+            this.v = v;
         }
 
         public double Sample(double t)
@@ -49,7 +54,8 @@ namespace Controller.RobotControl.MotionProfilers
             if (t < tTotal - td)
                 return 0.5 * a * ta * ta + v * (t - ta);
 
-            double dt = t - (tTotal - td);
+            // Decel phase: measured by time remaining so position eases up to `dist`.
+            double dt = tTotal - t;
             return dist - 0.5 * d * dt * dt;
         }
     }
