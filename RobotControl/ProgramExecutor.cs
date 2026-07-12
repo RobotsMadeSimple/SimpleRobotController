@@ -1457,7 +1457,9 @@ namespace Controller.RobotControl
 
         private void ExecuteCallRoutine(ProgramStep step, StepListFrame frame)
         {
-            var routine = _builtProgramRepo.Get(step.RoutineName ?? "");
+            // Resolve by id first (survives renames), falling back to name for legacy steps.
+            var routine = !string.IsNullOrEmpty(step.RoutineId) ? _builtProgramRepo.GetById(step.RoutineId!) : null;
+            routine ??= _builtProgramRepo.Get(step.RoutineName ?? "");
             if (routine is null)
             {
                 Finish(global::ProgramStatus.Error, $"Routine not found: {step.RoutineName}");
@@ -2279,7 +2281,8 @@ namespace Controller.RobotControl
                 count++;
                 if (s.Type == StepType.CallRoutine && repo != null)
                 {
-                    var routine = repo.Get(s.RoutineName ?? "");
+                    var routine = !string.IsNullOrEmpty(s.RoutineId) ? repo.GetById(s.RoutineId!) : null;
+                    routine ??= repo.Get(s.RoutineName ?? "");
                     if (routine != null) count += CountSteps(routine.Steps, repo);
                 }
                 if (s.Type == StepType.IfCondition)

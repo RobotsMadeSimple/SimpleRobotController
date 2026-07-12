@@ -333,6 +333,9 @@ public class ProgramStep
     [JsonPropertyName("routineName")]
     public string? RoutineName { get; set; }
 
+    [JsonPropertyName("routineId")]
+    public string? RoutineId { get; set; }
+
     // SetVariable
     [JsonPropertyName("variableName")]
     public string? VariableName { get; set; }
