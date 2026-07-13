@@ -264,45 +264,7 @@ namespace Controller.RobotControl
             _stopwatches.Clear();
             _waitingForBackground = null;
 
-            var savedPersistent = LoadPersistentVars();
-            var persistPrefix = string.IsNullOrEmpty(program.Id) ? "" : program.Id + ":";
-
-            foreach (var v in program.Variables ?? [])
-            {
-                bool isGlobal     = v.IsGlobal == true && _globalVars != null;
-                bool isPersistent = v.IsPersistent == true;
-                if (v.Points != null)
-                    _pointVariables[v.Name] = new List<Vector6Val>(v.Points);
-                else if (v.Values != null && v.Values.Count > 0)
-                    _listVariables[v.Name] = v.Values;
-                else if (v.IsStopwatch == true)
-                {
-                    _stopwatches[v.Name] = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
-                    _variables[v.Name] = 0; // elapsed ms, updated each tick
-                }
-                else if (v.IsString == true)
-                {
-                    _stringVariables[v.Name] = v.StringValue ?? "";
-                }
-                else
-                {
-                    // Persistent: restore saved value if available (keyed by programId:varName), else use declared default
-                    double initialValue = isPersistent && savedPersistent.TryGetValue(persistPrefix + v.Name, out var saved)
-                        ? saved
-                        : v.Value;
-
-                    if (isGlobal)
-                    {
-                        _globalVarNames.Add(v.Name);
-                        _globalVars!.InitIfAbsent(v.Name, initialValue);
-                    }
-                    else
-                        _variables[v.Name] = initialValue;
-
-                    if (isPersistent) _persistentVarNames.Add(v.Name);
-                    if (v.IsBoolean == true) _booleanVariables.Add(v.Name);
-                }
-            }
+            InitializeVariables(program);
 
             _program = program;
             _stopRequested = false;
@@ -1589,11 +1551,62 @@ namespace Controller.RobotControl
             }
             if (routine.Steps.Count == 0) { frame.Index++; ReportStepCompleted(step); return; }
 
+            // Register the routine's own variables so they can be used inside the routine.
+            // Caller variables remain available (shared _variables); a routine variable with
+            // the same name as a caller's takes the routine's declared default.
+            InitializeVariables(routine);
+
             ReportStepCompleted(step); // the call step itself counts as done; routine steps count separately
             frame.Index++;
 
             // Push the routine's steps as a plain (non-loop) frame
             _frameStack.Push(new StepListFrame(routine.Steps, 0));
+        }
+
+        // Register a program's declared variables (points, lists, stopwatches, strings and
+        // scalars, with global/persistent handling). Used for the main program on Start and
+        // for each routine when it is entered, so routine-local variables exist at runtime.
+        private void InitializeVariables(BuiltProgram program)
+        {
+            var savedPersistent = LoadPersistentVars();
+            var persistPrefix = string.IsNullOrEmpty(program.Id) ? "" : program.Id + ":";
+
+            foreach (var v in program.Variables ?? [])
+            {
+                bool isGlobal     = v.IsGlobal == true && _globalVars != null;
+                bool isPersistent = v.IsPersistent == true;
+                if (v.Points != null)
+                    _pointVariables[v.Name] = new List<Vector6Val>(v.Points);
+                else if (v.Values != null && v.Values.Count > 0)
+                    _listVariables[v.Name] = v.Values;
+                else if (v.IsStopwatch == true)
+                {
+                    _stopwatches[v.Name] = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
+                    _variables[v.Name] = 0; // elapsed ms, updated each tick
+                }
+                else if (v.IsString == true)
+                {
+                    _stringVariables[v.Name] = v.StringValue ?? "";
+                }
+                else
+                {
+                    // Persistent: restore saved value if available (keyed by programId:varName), else use declared default
+                    double initialValue = isPersistent && savedPersistent.TryGetValue(persistPrefix + v.Name, out var saved)
+                        ? saved
+                        : v.Value;
+
+                    if (isGlobal)
+                    {
+                        _globalVarNames.Add(v.Name);
+                        _globalVars!.InitIfAbsent(v.Name, initialValue);
+                    }
+                    else
+                        _variables[v.Name] = initialValue;
+
+                    if (isPersistent) _persistentVarNames.Add(v.Name);
+                    if (v.IsBoolean == true) _booleanVariables.Add(v.Name);
+                }
+            }
         }
 
         private void ExecuteCncProgram(ProgramStep step, StepListFrame frame)
