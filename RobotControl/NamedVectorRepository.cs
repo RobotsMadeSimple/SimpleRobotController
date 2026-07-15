@@ -9,6 +9,11 @@ using System.Text.Json;
 /// Generic base repository for any named Vector6-derived entity (Point, Tool, …).
 /// Handles JSON persistence, full CRUD, and a rolling 10-entry history per item.
 /// Subclasses supply the concrete history-entry factory via CreateHistoryEntry().
+///
+/// Thread-safety: all public CRUD methods and the Items property getter are
+/// protected by a single private lock.  WebSocket handler threads (Save/Edit/Delete)
+/// and the control-loop thread (Get, Items.TryGetValue via pointRepo.Points) can
+/// run concurrently without data corruption.
 /// </summary>
 public abstract class NamedVectorRepository<TItem, TEntry>
     where TItem  : Vector6, INamedVector, new()
@@ -23,13 +28,35 @@ public abstract class NamedVectorRepository<TItem, TEntry>
         PropertyNameCaseInsensitive = true,
     };
 
+    // ── Thread-safety ────────────────────────────────────────────────────────
+
+    private readonly object _lock = new();
+
+    // ── Internal state ───────────────────────────────────────────────────────
+
+    // All internal methods access _items directly; they are always called either
+    // from the constructor (single-threaded) or from a public method holding _lock.
+    private Dictionary<string, TItem> _items = new();
+    private Dictionary<string, List<TEntry>> _history = new();
+
     // ── Public state ─────────────────────────────────────────────────────────
 
-    public Dictionary<string, TItem> Items { get; private set; } = new();
+    /// <summary>
+    /// Returns a shallow snapshot copy of the items dictionary.
+    /// Callers may enumerate or TryGetValue the returned copy without holding any lock.
+    /// </summary>
+    public Dictionary<string, TItem> Items
+    {
+        get { lock (_lock) return new Dictionary<string, TItem>(_items); }
+    }
+
+    // ItemsJson is a pre-serialised string whose reference is atomically written
+    // under _lock inside SaveItems().  String references in CLR are reference-sized
+    // and always written atomically, so reading this property without the lock is
+    // memory-safe (the worst case is observing a one-tick-stale value, which is
+    // acceptable for status/display use cases).
     public string? ItemsJson { get; private set; }
     public long LastUpdatedUnixMs { get; private set; }
-
-    private Dictionary<string, List<TEntry>> _history = new();
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
@@ -52,14 +79,14 @@ public abstract class NamedVectorRepository<TItem, TEntry>
             ItemsJson = File.ReadAllText(_itemsFile);
             var list  = JsonSerializer.Deserialize<List<TItem>>(ItemsJson, _jsonOptions) ?? new();
 
-            Items = list
+            _items = list
                 .Where(i => !string.IsNullOrWhiteSpace(i.Name))
                 .ToDictionary(i => i.Name!, i => i);
         }
         catch
         {
             // File exists but is corrupt or invalid — start fresh
-            Items = new();
+            _items = new();
             SaveItems();
         }
     }
@@ -67,7 +94,7 @@ public abstract class NamedVectorRepository<TItem, TEntry>
     protected void SaveItems()
     {
         LastUpdatedUnixMs = NowUnixMs();
-        ItemsJson         = JsonSerializer.Serialize(Items.Values.ToList(), _jsonOptions);
+        ItemsJson         = JsonSerializer.Serialize(_items.Values.ToList(), _jsonOptions);
         File.WriteAllText(_itemsFile, ItemsJson);
     }
 
@@ -95,55 +122,67 @@ public abstract class NamedVectorRepository<TItem, TEntry>
 
     public TItem SaveItem(string name, Vector6 vector)
     {
-        var item = new TItem();
-        item.Copy(vector);
-        item.Name             = name;
-        item.LastUpdatedUnixMs = NowUnixMs();
+        lock (_lock)
+        {
+            var item = new TItem();
+            item.Copy(vector);
+            item.Name             = name;
+            item.LastUpdatedUnixMs = NowUnixMs();
 
-        if (string.IsNullOrWhiteSpace(item.Name))
-            throw new Exception($"{typeof(TItem).Name} must have a Name");
+            if (string.IsNullOrWhiteSpace(item.Name))
+                throw new Exception($"{typeof(TItem).Name} must have a Name");
 
-        Items[item.Name!] = item;
-        AppendHistory(item);
-        SaveItems();
-        SaveHistory();
-        return item;
+            _items[item.Name!] = item;
+            AppendHistory(item);
+            SaveItems();
+            SaveHistory();
+            return item;
+        }
     }
 
     public void EditItem(string name, Dictionary<string, object?> values)
     {
-        if (!Items.TryGetValue(name, out var item))
-            throw new Exception($"{typeof(TItem).Name} '{name}' not found");
-
-        ApplyValues(item, values);
-
-        // Rename: move to new key if Name changed
-        if (item.Name != name && !string.IsNullOrWhiteSpace(item.Name))
+        lock (_lock)
         {
-            Items.Remove(name);
-            Items[item.Name!] = item;
-        }
+            if (!_items.TryGetValue(name, out var item))
+                throw new Exception($"{typeof(TItem).Name} '{name}' not found");
 
-        item.LastUpdatedUnixMs = NowUnixMs();
-        AppendHistory(item);
-        SaveItems();
-        SaveHistory();
-    }
+            ApplyValues(item, values);
 
-    public void DeleteItem(string name)
-    {
-        if (Items.Remove(name))
-        {
-            _history.Remove(name);
+            // Rename: move to new key if Name changed
+            if (item.Name != name && !string.IsNullOrWhiteSpace(item.Name))
+            {
+                _items.Remove(name);
+                _items[item.Name!] = item;
+            }
+
+            item.LastUpdatedUnixMs = NowUnixMs();
+            AppendHistory(item);
             SaveItems();
             SaveHistory();
         }
     }
 
+    public void DeleteItem(string name)
+    {
+        lock (_lock)
+        {
+            if (_items.Remove(name))
+            {
+                _history.Remove(name);
+                SaveItems();
+                SaveHistory();
+            }
+        }
+    }
+
     public TItem? Get(string name)
     {
-        Items.TryGetValue(name, out var item);
-        return item;
+        lock (_lock)
+        {
+            _items.TryGetValue(name, out var item);
+            return item;
+        }
     }
 
     // ── History ──────────────────────────────────────────────────────────────

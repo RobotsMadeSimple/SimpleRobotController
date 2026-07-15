@@ -5,6 +5,7 @@ using Controller.RobotControl.Robots;
 using Controller.RobotControl.Robots.ASTRO;
 using Controller.RobotControl.Robots.CNC4Axis;
 using Controller.RobotControl.UsbRelay;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
@@ -134,7 +135,10 @@ namespace Controller.RobotControl
         private bool IsJointJogging => !jointJoggingProfiler.IsFinished;
         private bool IsToolJogging => !toolJoggingMotionProfiler.IsFinished;
 
-        public List<RobotCommand> QueuedCommands = new();
+        // ConcurrentQueue allows WebSocket handler threads to Enqueue safely while
+        // the control loop thread reads via TryPeek / TryDequeue. Clear() is used by
+        // ExecuteHardStop() and the drain-flag path — both run on the loop thread.
+        public ConcurrentQueue<RobotCommand> QueuedCommands = new();
 
         // Speed override: 0.05–2.0 (5%–200%), default 1.0 (100%)
         public double SpeedOverrideFactor { get; private set; } = 1.0;
@@ -236,9 +240,18 @@ namespace Controller.RobotControl
 
                 if (now >= nextTick)
                 {
-                    Loop();
+                    try
+                    {
+                        Loop();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Catch-all: log, hard-stop the robot, then keep looping.
+                        // The process must survive any tick-level exception.
+                        Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
+                        ExecuteHardStop();
+                    }
                     nextTick += periodTicks;
-
                 }
 
                 Thread.Sleep(1);
@@ -247,37 +260,34 @@ namespace Controller.RobotControl
 
         public void Loop()
         {
-            while (true)
+            // Consume hard-stop flag before anything else touches the profilers
+            if (_hardStopRequested)
+                ExecuteHardStop();
+
+            // Execute pending robot commands
+            RunCommands();
+
+            // Step through any active built program
+            programExecutor?.Update();
+
+            // Step through all background programs
+            backgroundProgramManager.Update();
+
+            // Run the robot motion control
+            RunMotion();
+
+            // Execute Homing
+            RunHoming();
+
+            // Let the stepper motor drive towards the new targets
+            stb.moving = IsMoving;
+
+            // Update the status-light neopixel strip at ~2 Hz
+            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (nowMs - _lastStatusLightMs >= 500)
             {
-                // Consume hard-stop flag before anything else touches the profilers
-                if (_hardStopRequested)
-                    ExecuteHardStop();
-
-                // Execute pending robot commands
-                RunCommands();
-
-                // Step through any active built program
-                programExecutor?.Update();
-
-                // Step through all background programs
-                backgroundProgramManager.Update();
-
-                // Run the robot motion control
-                RunMotion();
-
-                // Execute Homing
-                RunHoming();
-
-                // Let the stepper motor drive towards the new targets
-                stb.moving = IsMoving;
-
-                // Update the status-light neopixel strip at ~2 Hz
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (nowMs - _lastStatusLightMs >= 500)
-                {
-                    _lastStatusLightMs = nowMs;
-                    UpdateStatusLight();
-                }
+                _lastStatusLightMs = nowMs;
+                UpdateStatusLight();
             }
         }
 
@@ -1630,7 +1640,7 @@ namespace Controller.RobotControl
                 default:
                     RobotCommand NewCommand = LoadParams<RobotCommand>(command);
                     NewCommand.CommandType = command.Command;
-                    QueuedCommands.Add(NewCommand);
+                    QueuedCommands.Enqueue(NewCommand);
                     break;
 
             }
@@ -1647,14 +1657,12 @@ namespace Controller.RobotControl
                 return;
             }
 
-            if (QueuedCommands.Count == 0)
+            // Peek at the head without removing it — if IsMoving we return early and
+            // the command stays at the head for the next tick.
+            if (!QueuedCommands.TryPeek(out RobotCommand? Command) || Command is null)
                 return;
 
-            RobotCommand? Command = QueuedCommands[0];
             Vector6? target = null;
-
-            if (Command is null)
-                return;
 
             string CommandType = Command.CommandType ?? "";
 
@@ -1670,6 +1678,7 @@ namespace Controller.RobotControl
                 case "MoveL":
                     {
                         target = ResolveVector(Command);
+                        if (target == null) break;  // named point not found — log already emitted; drop command
                         MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     }
                     break;
@@ -1682,6 +1691,7 @@ namespace Controller.RobotControl
                 case "MoveJ":
                     {
                         target = ResolveVector(Command);
+                        if (target == null) break;  // named point not found — log already emitted; drop command
                         MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     }
                     break;
@@ -1726,8 +1736,10 @@ namespace Controller.RobotControl
                     break;
             }
 
-            // The command was successful, destroy it
-            QueuedCommands.Remove(Command);
+            // The command was processed — consume it from the head of the queue.
+            // TryDequeue is safe here: only the loop thread ever dequeues, so the
+            // item peeked above is guaranteed to still be at the head.
+            QueuedCommands.TryDequeue(out _);
         }
 
         public void SetAllHomed()
@@ -2438,12 +2450,16 @@ namespace Controller.RobotControl
             return msg.Params.Value.Deserialize<T>(_jsonOptions)!;
         }
 
-        private Vector6 ResolveVector(RobotCommand command)
+        private Vector6? ResolveVector(RobotCommand command)
         {
             if (!string.IsNullOrWhiteSpace(command.Name))
             {
+                // pointRepo.Points returns a snapshot copy (thread-safe), so TryGetValue is safe here
                 if (!pointRepo.Points.TryGetValue(command.Name, out var point))
-                    throw new InvalidOperationException($"Point '{command.Name}' not found");
+                {
+                    Console.WriteLine($"[RunCommands] Point '{command.Name}' not found — dropping command");
+                    return null;
+                }
 
                 return new Vector6(point.X, point.Y, point.Z, point.RX, point.RY, point.RZ);
             }

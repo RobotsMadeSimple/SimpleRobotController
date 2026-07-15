@@ -335,6 +335,9 @@ public class ProgramStep
     public string? StatusWarning { get; set; }
     [JsonPropertyName("statusError")]
     public string? StatusError { get; set; }
+    // "Info" | "Warning" | "Error" — severity hint set by the app
+    [JsonPropertyName("statusSeverity")]
+    public string? StatusSeverity { get; set; }
 
     // CallRoutine
     [JsonPropertyName("routineName")]

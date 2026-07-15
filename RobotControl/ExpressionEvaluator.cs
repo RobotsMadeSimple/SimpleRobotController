@@ -5,6 +5,20 @@ using System.Globalization;
 namespace Controller.RobotControl
 {
     /// <summary>
+    /// Thrown by ExpressionEvaluator when a <c>$variable</c> reference cannot be resolved
+    /// in any of the supplied variable dictionaries.
+    /// </summary>
+    public class UnknownVariableException : Exception
+    {
+        public string VariableName { get; }
+        public UnknownVariableException(string variableName)
+            : base($"Unknown variable '${variableName}'")
+        {
+            VariableName = variableName;
+        }
+    }
+
+    /// <summary>
     /// Evaluates simple math expressions that may reference program variables.
     ///
     /// Supported syntax:
@@ -96,17 +110,17 @@ namespace Controller.RobotControl
                 i++;
                 string name = tok.Value;
 
-                // .length / .count — returns the number of elements in a list or points variable
+                // .length / .count — returns the number of elements in a list or points variable.
+                // Only consumed when the name is actually a list/points var; otherwise fall
+                // through so dotted-name lookup below can try (e.g. an IO key ending ".count").
                 if (i + 1 < t.Count && t[i].Type == TokType.Dot && t[i + 1].Type == TokType.Word)
                 {
                     string prop = t[i + 1].Value;
                     if (prop.Equals("length", StringComparison.OrdinalIgnoreCase) ||
                         prop.Equals("count",  StringComparison.OrdinalIgnoreCase))
                     {
-                        i += 2;
-                        if (listVars != null && listVars.TryGetValue(name, out var countList)) return countList.Count;
-                        if (ptVars   != null && ptVars  .TryGetValue(name, out var countPts))  return countPts.Count;
-                        return 0;
+                        if (listVars != null && listVars.TryGetValue(name, out var countList)) { i += 2; return countList.Count; }
+                        if (ptVars   != null && ptVars  .TryGetValue(name, out var countPts))  { i += 2; return countPts.Count; }
                     }
                 }
 
@@ -153,7 +167,51 @@ namespace Controller.RobotControl
                     }
                 }
 
-                return vars.TryGetValue(name, out double v) ? v : 0;
+                // Dotted-name lookup — IO variables are injected with dotted keys
+                // (e.g. "stb.in1", "relay.1", "nano.Board.pin1") but the tokenizer splits
+                // on '.', so re-join the dotted chain and try the longest candidate first.
+                // Note: a purely numeric suffix like ".1" tokenizes as a single Number
+                // token with a leading dot, not Dot + Number — handle both shapes.
+                {
+                    var parts    = new List<string> { name };
+                    var consumed = new List<int> { 0 };   // tokens consumed beyond the name per part depth
+                    int look = i;
+                    while (look < t.Count)
+                    {
+                        if (look + 1 < t.Count && t[look].Type == TokType.Dot &&
+                            (t[look + 1].Type == TokType.Word || t[look + 1].Type == TokType.Number))
+                        {
+                            parts.Add(t[look + 1].Value);
+                            look += 2;
+                        }
+                        else if (t[look].Type == TokType.Number && t[look].Value.StartsWith('.'))
+                        {
+                            parts.Add(t[look].Value[1..]);
+                            look += 1;
+                        }
+                        else break;
+                        consumed.Add(look - i);
+                    }
+                    for (int n = parts.Count; n >= 1; n--)
+                    {
+                        string candidate = string.Join(".", parts.GetRange(0, n));
+                        if (vars.TryGetValue(candidate, out double val))
+                        {
+                            i += consumed[n - 1]; // consume exactly the tokens we matched
+                            return val;
+                        }
+                    }
+                }
+
+                // Known list/points variable referenced without an index — preserve the
+                // legacy 0 (it's a declared variable, just used without [i]/.length).
+                if ((listVars != null && listVars.ContainsKey(name)) ||
+                    (ptVars   != null && ptVars.ContainsKey(name)))
+                    return 0;
+
+                // Truly unknown identifier — fail loudly. Silently coercing a typo'd
+                // variable to 0 can turn a clearance offset into a collision.
+                throw new UnknownVariableException(name);
             }
 
             if (tok.Type == TokType.Number)
