@@ -22,6 +22,9 @@ namespace Controller.RobotControl.MotionProfilers
         /// <summary>True once the path has been fully traversed.</summary>
         public bool IsFinished => lastS >= totalLength - 1e-6;
 
+        // Returned by Loop() when the path has no segments (degenerate zero-length move).
+        private Vector6 endPoint = new();
+
         public ContinuousPathingProfiler(
             List<Vector6> points,
             List<double> blendRadii,   // per-waypoint corner radius; index i applies at points[i]
@@ -30,7 +33,8 @@ namespace Controller.RobotControl.MotionProfilers
             double decel
         )
         {
-            BuildPath(points, blendRadii);
+            if (points != null && points.Count > 0) endPoint = points[^1];
+            BuildPath(points!, blendRadii);
 
             scalar.Setup(totalLength, speed, accel, decel);
             sw.Restart();
@@ -78,9 +82,10 @@ namespace Controller.RobotControl.MotionProfilers
 
                 double half = alpha / 2.0;
                 double sinHalf = Math.Sin(half);
-                if (alpha < 1e-4 || sinHalf < 1e-6)
+                if (alpha < 1e-4 || sinHalf < 1e-6 || alpha > Math.PI - 1e-4)
                 {
-                    // Nearly straight — no arc needed.
+                    // Nearly straight (no arc needed) or a ~180° reversal (tan(α/2)
+                    // explodes and no tangent arc exists) — pass through the corner.
                     AddLine(prevEnd, V);
                     prevEnd = V;
                     continue;
@@ -153,6 +158,9 @@ namespace Controller.RobotControl.MotionProfilers
 
         public Vector6 Loop()
         {
+            // Degenerate path (all waypoints coincident) — nothing to traverse.
+            if (segments.Count == 0) return endPoint;
+
             double s = scalar.Sample(sw.Elapsed.TotalSeconds);
             lastS = s;
 

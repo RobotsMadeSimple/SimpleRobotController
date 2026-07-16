@@ -19,4 +19,9 @@
     <PackageReference Include="System.IO.Ports" Version="9.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Let the test project see internal classes (motion profilers, expression evaluator) -->
+    <InternalsVisibleTo Include="RobotControl.Tests" />
+  </ItemGroup>
+
 </Project>

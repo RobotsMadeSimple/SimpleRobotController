@@ -29,6 +29,11 @@ class Program
         Console.WriteLine($"[Boot] OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
         Console.WriteLine($"[Boot] Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
 
+        // Last-resort diagnostic — catches unhandled exceptions from any thread that
+        // weren't caught by the control-loop try/catch (e.g. background Task faults).
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Console.WriteLine($"[FATAL] Unhandled exception: {e.ExceptionObject}");
+
         var identity = RobotIdentityService.Load();
         var config   = RobotConfigService.Load();
 

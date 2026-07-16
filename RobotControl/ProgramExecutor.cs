@@ -195,9 +195,16 @@ namespace Controller.RobotControl
 
         private bool EvalWhileCondition(ConditionGroup condition)
         {
-            var allVars = MergedVars();
-            foreach (var kv in BuildIoVariables()) allVars[kv.Key] = kv.Value;
-            return EvaluateConditionGroup(condition, allVars);
+            try
+            {
+                return EvaluateConditionGroup(condition, EvalVars());
+            }
+            catch (UnknownVariableException ex)
+            {
+                // While-loop re-checks run outside the step dispatch, so error here directly.
+                Finish(global::ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in while-loop condition");
+                return false; // exit the loop — the program is already finishing with an error
+            }
         }
 
         private void InjectForEachVars(StepListFrame frame)
@@ -498,6 +505,20 @@ namespace Controller.RobotControl
 
         private void ExecuteStep(ProgramStep step, StepListFrame frame)
         {
+            try
+            {
+                ExecuteStepInner(step, frame);
+            }
+            catch (UnknownVariableException ex)
+            {
+                // A typo'd variable in any step field or condition stops the program with
+                // a clear error instead of silently evaluating to 0 and moving the robot.
+                Finish(global::ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in step: {StepDescription(step)}");
+            }
+        }
+
+        private void ExecuteStepInner(ProgramStep step, StepListFrame frame)
+        {
             // Background programs skip motion/tool/homing steps rather than error
             if (_isBackground && IsRestrictedInBackground(step.Type))
             {
@@ -682,7 +703,7 @@ namespace Controller.RobotControl
                 ApplySpeedOverride = true,   // program move — subject to the speed override
             };
 
-            _controller.QueuedCommands.Add(cmd);
+            _controller.QueuedCommands.Enqueue(cmd);
             _awaitingMove = true;
             _pendingStep  = step; // completion is reported in Update() once the move finishes
 
@@ -841,8 +862,9 @@ namespace Controller.RobotControl
                 int ptIdx = 0;
                 if (!string.IsNullOrEmpty(step.VarPointIndex))
                 {
-                    try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(step.VarPointIndex, MergedVars(), _listVariables, _pointVariables)); }
-                    catch { /* default 0 */ }
+                    try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(step.VarPointIndex, EvalVars(), _listVariables, _pointVariables)); }
+                    catch (UnknownVariableException) { throw; }
+                    catch { /* malformed expression — default 0 */ }
                 }
                 ptIdx = Math.Clamp(ptIdx, 0, ptList.Count - 1);
                 var vp = ptList[ptIdx];
@@ -977,7 +999,7 @@ namespace Controller.RobotControl
                 return;
             }
 
-            _controller.QueuedCommands.Add(_threadMoveQueue.Dequeue());
+            _controller.QueuedCommands.Enqueue(_threadMoveQueue.Dequeue());
             _awaitingMove = true;
         }
 
@@ -987,117 +1009,10 @@ namespace Controller.RobotControl
 
             if (_jumpSubStep == 0)
             {
-                // Resolve final target (same as ExecuteMove — supports PointName, GridPoint, StackPoint, or current pos)
-                Point point;
-                if (step.GridPoint != null)
-                {
-                    var gp   = step.GridPoint;
-                    var grid = _gridRepo.Get(gp.GridId);
-                    if (grid == null) { Finish(global::ProgramStatus.Error, $"Grid not found: {gp.GridId}"); return; }
-
-                    var basePoint = _pointRepo.Get(grid.BasePointName);
-                    if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Grid base point not found: {grid.BasePointName}"); return; }
-
-                    int row, col;
-                    if (gp.UseGridIndex)
-                    {
-                        if (!grid.ColCount.HasValue || grid.ColCount.Value <= 0)
-                        {
-                            Finish(global::ProgramStatus.Error, $"Grid '{grid.Name}' requires colCount to use grid index");
-                            return;
-                        }
-                        int idx = (int)Math.Round(EvalField(step, "gridGridIndex", gp.GridIndex ?? 0));
-                        row = idx / grid.ColCount.Value;
-                        col = idx % grid.ColCount.Value;
-                    }
-                    else
-                    {
-                        row = (int)Math.Round(EvalField(step, "gridRowIndex", gp.RowIndex ?? 0));
-                        col = (int)Math.Round(EvalField(step, "gridColIndex", gp.ColIndex ?? 0));
-                    }
-
-                    double rawX = row * grid.RowOffsetX + col * grid.ColOffsetX;
-                    double rawY = row * grid.RowOffsetY + col * grid.ColOffsetY;
-                    double rawZ = row * grid.RowOffsetZ + col * grid.ColOffsetZ;
-                    double theta = grid.Rotation * Math.PI / 180.0;
-
-                    point = new Point
-                    {
-                        X  = basePoint.X + rawX * Math.Cos(theta) - rawY * Math.Sin(theta),
-                        Y  = basePoint.Y + rawX * Math.Sin(theta) + rawY * Math.Cos(theta),
-                        Z  = basePoint.Z + rawZ,
-                        RX = basePoint.RX, RY = basePoint.RY, RZ = basePoint.RZ,
-                    };
-                }
-                else if (step.StackPoint != null)
-                {
-                    var sp    = step.StackPoint;
-                    var stack = _stackRepo.Get(sp.StackId);
-                    if (stack == null) { Finish(global::ProgramStatus.Error, $"Stack not found: {sp.StackId}"); return; }
-
-                    var basePoint = _pointRepo.Get(stack.BasePointName);
-                    if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Stack base point not found: {stack.BasePointName}"); return; }
-
-                    int idx = (int)Math.Round(EvalField(step, "stackIndex", sp.Index ?? 0));
-                    if (stack.MaxCount.HasValue && stack.MaxCount.Value > 0)
-                        idx = ((idx % stack.MaxCount.Value) + stack.MaxCount.Value) % stack.MaxCount.Value;
-
-                    point = new Point
-                    {
-                        X  = basePoint.X  + idx * stack.OffsetX,
-                        Y  = basePoint.Y  + idx * stack.OffsetY,
-                        Z  = basePoint.Z  + idx * stack.OffsetZ,
-                        RX = basePoint.RX,
-                        RY = basePoint.RY,
-                        RZ = basePoint.RZ,
-                    };
-                }
-                else if (string.IsNullOrEmpty(step.PointName))
-                {
-                    var pos = _controller.GetCurrentPosition();
-                    point = new Point { X = pos.X, Y = pos.Y, Z = pos.Z, RX = pos.RX, RY = pos.RY, RZ = pos.RZ };
-                }
-                else
-                {
-                    var found = _pointRepo.Get(step.PointName);
-                    if (found is null) { Finish(global::ProgramStatus.Error, $"Point not found: {step.PointName}"); return; }
-                    point = found;
-                }
-
-                double finalX  = point.X  + EvalField(step, "offsetX",  step.OffsetX  ?? 0);
-                double finalY  = point.Y  + EvalField(step, "offsetY",  step.OffsetY  ?? 0);
-                double finalZ  = point.Z  + EvalField(step, "offsetZ",  step.OffsetZ  ?? 0);
-                double finalRX = point.RX + EvalField(step, "offsetRX", step.OffsetRX ?? 0);
-                double finalRY = point.RY + EvalField(step, "offsetRY", step.OffsetRY ?? 0);
-                double finalRZ = point.RZ + EvalField(step, "offsetRZ", step.OffsetRZ ?? 0);
-
-                if (step.OverrideX.HasValue  || step.Expressions?.ContainsKey("overrideX")  == true) finalX  = EvalField(step, "overrideX",  step.OverrideX  ?? 0);
-                if (step.OverrideY.HasValue  || step.Expressions?.ContainsKey("overrideY")  == true) finalY  = EvalField(step, "overrideY",  step.OverrideY  ?? 0);
-                if (step.OverrideZ.HasValue  || step.Expressions?.ContainsKey("overrideZ")  == true) finalZ  = EvalField(step, "overrideZ",  step.OverrideZ  ?? 0);
-                if (step.OverrideRX.HasValue || step.Expressions?.ContainsKey("overrideRX") == true) finalRX = EvalField(step, "overrideRX", step.OverrideRX ?? 0);
-                if (step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
-                if (step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
-
-                // Apply active local offset
-                Vector6? jumpEffectiveLocal;
-                if (!string.IsNullOrEmpty(step.LocalName))
-                {
-                    var stepLocal = _localRepo.Get(step.LocalName);
-                    jumpEffectiveLocal = stepLocal != null ? new Vector6(stepLocal.X, stepLocal.Y, stepLocal.Z, stepLocal.RX, stepLocal.RY, stepLocal.RZ) : null;
-                }
-                else
-                {
-                    jumpEffectiveLocal = _activeLocal;
-                }
-                if (jumpEffectiveLocal != null)
-                {
-                    finalX  += jumpEffectiveLocal.X;
-                    finalY  += jumpEffectiveLocal.Y;
-                    finalZ  += jumpEffectiveLocal.Z;
-                    finalRX += jumpEffectiveLocal.RX;
-                    finalRY += jumpEffectiveLocal.RY;
-                    finalRZ += jumpEffectiveLocal.RZ;
-                }
+                // Resolve final target via the shared resolver — same as ExecuteMove.
+                // Supports PointName, GridPoint, StackPoint, variable points, offsets,
+                // per-axis overrides, and the active local. Finish(Error) on failure.
+                if (!ResolveMoveTarget(step, out Vector6 resolvedTarget)) return;
 
                 bool hasJumpZ      = step.JumpZ.HasValue      || step.Expressions?.ContainsKey("jumpZ")      == true;
                 bool hasJumpZStart = step.JumpZStart.HasValue || step.Expressions?.ContainsKey("jumpZStart") == true;
@@ -1111,7 +1026,7 @@ namespace Controller.RobotControl
 
                 var cur = _controller.GetCurrentPosition();
                 _jumpStartPos = cur;
-                _jumpTarget   = new Vector6(finalX, finalY, finalZ, finalRX, finalRY, finalRZ);
+                _jumpTarget   = resolvedTarget;
                 _jumpZStart   = hasJumpZStart ? EvalField(step, "jumpZStart", step.JumpZStart ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
                 _jumpZEnd     = hasJumpZEnd   ? EvalField(step, "jumpZEnd",   step.JumpZEnd   ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
                 _jumpCmdType  = step.Type == StepType.JumpJ ? "MoveJ" : "MoveL";
@@ -1141,7 +1056,7 @@ namespace Controller.RobotControl
 
                 _jumpSubStep  = 1;
 
-                _controller.QueuedCommands.Add(new RobotCommand
+                _controller.QueuedCommands.Enqueue(new RobotCommand
                 {
                     CommandType = "MoveL",
                     X = _jumpStartPos.X, Y = _jumpStartPos.Y, Z = _jumpZStart,
@@ -1156,7 +1071,7 @@ namespace Controller.RobotControl
 
             if (_jumpSubStep == 1)
             {
-                _controller.QueuedCommands.Add(new RobotCommand
+                _controller.QueuedCommands.Enqueue(new RobotCommand
                 {
                     CommandType = _jumpCmdType,
                     X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpZEnd,
@@ -1171,7 +1086,7 @@ namespace Controller.RobotControl
 
             if (_jumpSubStep == 2)
             {
-                _controller.QueuedCommands.Add(new RobotCommand
+                _controller.QueuedCommands.Enqueue(new RobotCommand
                 {
                     CommandType = "MoveL",
                     X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpTarget.Z,
@@ -1681,9 +1596,9 @@ namespace Controller.RobotControl
             bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
             bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
             if (hasSpeed)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveL
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveL
             if (hasAccel || hasDecel)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelS",
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "AccelS",
                     Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
                     Decel = hasDecel ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null });
             ReportStepCompleted(step);
@@ -1696,9 +1611,9 @@ namespace Controller.RobotControl
             bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
             bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
             if (hasSpeed)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveJ
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveJ
             if (hasAccel || hasDecel)
-                _controller.QueuedCommands.Add(new RobotCommand { CommandType = "AccelJ",
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "AccelJ",
                     Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
                     Decel = hasDecel ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null });
             ReportStepCompleted(step);
@@ -1832,9 +1747,15 @@ namespace Controller.RobotControl
                 };
             }
 
+            // Unknown variables propagate (and error the program) — a typo'd condition
+            // silently comparing 0 could take the wrong branch on a machine that moves.
             double left, right;
-            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables, _pointVariables); } catch { left  = 0; }
-            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables, _pointVariables); } catch { right = 0; }
+            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables, _pointVariables); }
+            catch (UnknownVariableException) { throw; }
+            catch { left  = 0; }
+            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables, _pointVariables); }
+            catch (UnknownVariableException) { throw; }
+            catch { right = 0; }
             const double eps = 1e-9;
             return item.Operator switch
             {
@@ -2099,15 +2020,19 @@ namespace Controller.RobotControl
                 {
                     try
                     {
-                        double value = ExpressionEvaluator.Evaluate(step.VariableExpr, MergedVars(), _listVariables, _pointVariables);
+                        double value = ExpressionEvaluator.Evaluate(step.VariableExpr, EvalVars(), _listVariables, _pointVariables);
                         if (_globalVars != null && _globalVarNames.Contains(step.VariableName))
                             _globalVars.Set(step.VariableName, value);
                         else
                             _variables[step.VariableName] = value;
                     }
+                    catch (UnknownVariableException)
+                    {
+                        throw; // errors the program via the dispatch-level handler
+                    }
                     catch
                     {
-                        // If expression fails, leave variable unchanged
+                        // Malformed expression — leave variable unchanged
                     }
                 }
             }
@@ -2240,17 +2165,29 @@ namespace Controller.RobotControl
 
         // ── Helpers ──────────────────────────────────────────────────────────
 
+        /// <summary>Merged program/global variables plus live IO values — the full
+        /// dictionary for expression evaluation (matches what conditions see).</summary>
+        private Dictionary<string, double> EvalVars()
+        {
+            var vars = MergedVars();
+            foreach (var kv in BuildIoVariables()) vars[kv.Key] = kv.Value;
+            return vars;
+        }
+
         /// <summary>
         /// Returns the evaluated value for a numeric field.
         /// If the step has an expression keyed by <paramref name="fieldName"/>, that expression is
         /// evaluated against the current variable dictionary; otherwise <paramref name="fallback"/> is returned.
+        /// An unknown variable in the expression propagates (and errors the program) rather than
+        /// silently falling back — a typo'd offset must never move the robot to the wrong place.
         /// </summary>
         private double EvalField(ProgramStep step, string fieldName, double fallback)
         {
             if (step.Expressions != null && step.Expressions.TryGetValue(fieldName, out var expr))
             {
-                try { return ExpressionEvaluator.Evaluate(expr, MergedVars(), _listVariables, _pointVariables); }
-                catch { /* fall through */ }
+                try { return ExpressionEvaluator.Evaluate(expr, EvalVars(), _listVariables, _pointVariables); }
+                catch (UnknownVariableException) { throw; }
+                catch { /* malformed expression — fall through to the literal */ }
             }
             return fallback;
         }
