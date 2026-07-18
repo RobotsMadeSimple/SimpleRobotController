@@ -103,6 +103,14 @@ namespace Controller.RobotControl
                 if (local != null) { activeLocal = name; CurrentLocal = new Vector6(local.X, local.Y, local.Z, local.RX, local.RY, local.RZ); }
             }
         }
+
+        /// <summary>
+        /// The active local's offset, or null when none is set. This is the frame
+        /// shift applied to ABSOLUTE targets: saved points resolved by direct
+        /// MoveL/MoveJ commands, and program moves (the executor seeds its local
+        /// from this at program start; SetLocal steps override it).
+        /// </summary>
+        public Vector6? ActiveLocalOffset => string.IsNullOrEmpty(activeLocal) ? null : CurrentLocal;
         public void ApplyTool(string? name)
         {
             if (string.IsNullOrEmpty(name) || name == "none")
@@ -139,6 +147,16 @@ namespace Controller.RobotControl
         // the control loop thread reads via TryPeek / TryDequeue. Clear() is used by
         // ExecuteHardStop() and the drain-flag path — both run on the loop thread.
         public ConcurrentQueue<RobotCommand> QueuedCommands = new();
+
+        /// <summary>
+        /// Resolved XY toolpath of the CNC block currently executing (anchor and
+        /// runtime variables applied). Set by the program executor when a CNC
+        /// block starts, cleared when it finishes. Read by GetCncToolpath so the
+        /// monitor can preview the path being made. Volatile reference swap —
+        /// written on the control loop thread, read from WebSocket threads.
+        /// </summary>
+        public sealed record CncToolpathInfo(string ProgramName, List<List<double>> Paths, List<CncHole> Holes);
+        public volatile CncToolpathInfo? ActiveCncToolpath;
 
         // Speed override: 0.05–2.0 (5%–200%), default 1.0 (100%)
         public double SpeedOverrideFactor { get; private set; } = 1.0;
@@ -923,7 +941,15 @@ namespace Controller.RobotControl
                 case "TeachPoint":
                     {
                         var tp = LoadParams<TeachPointParams>(command);
-                        pointRepo.SavePoint(tp.Name, CurrentPosition);
+                        // Points are stored base-frame: teaching under an active
+                        // local inverts the frame (rotation + translation), so
+                        // "move to point" returns exactly here while that local
+                        // stays active — and re-targets correctly when a
+                        // different local is applied later.
+                        var pos = CurrentPosition;
+                        var loc = ActiveLocalOffset;
+                        var basePos = loc == null ? pos : LocalFrame.Inverse(loc, pos);
+                        pointRepo.SavePoint(tp.Name, basePos);
                     }
                     break;
 
@@ -1618,6 +1644,23 @@ namespace Controller.RobotControl
                 {
                     var p = LoadParams<StartStopVisionParams>(command);
                     VisionManager.StopProgram(p.Id);
+                }
+                break;
+
+                case "GetCncToolpath":
+                {
+                    // Resolved toolpath of the CNC block currently executing —
+                    // anchor and variables applied. Null when no block is active.
+                    var tp = ActiveCncToolpath;
+                    payload = new
+                    {
+                        toolpath = tp == null ? null : new
+                        {
+                            programName = tp.ProgramName,
+                            paths       = tp.Paths,
+                            holes       = tp.Holes.Select(h => new { x = h.X, y = h.Y }).ToList(),
+                        },
+                    };
                 }
                 break;
 
@@ -2461,7 +2504,13 @@ namespace Controller.RobotControl
                     return null;
                 }
 
-                return new Vector6(point.X, point.Y, point.Z, point.RX, point.RY, point.RZ);
+                // Saved points are base-frame — the active local frame transforms
+                // them (rotation + translation), the same way program moves do.
+                // Raw-vector commands are already fully resolved by their sender
+                // and pass through untouched.
+                var p   = new Vector6(point.X, point.Y, point.Z, point.RX, point.RY, point.RZ);
+                var loc = ActiveLocalOffset;
+                return loc == null ? p : LocalFrame.Apply(loc, p);
             }
 
             return command.Vector6;

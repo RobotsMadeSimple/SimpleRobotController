@@ -45,6 +45,28 @@ namespace Controller.RobotControl
         // Steps consumed by a single blended (continuous) move; all reported on completion.
         private List<ProgramStep>? _pendingSteps;
 
+        // ── Pause/resume snapshot ──────────────────────────────────────────────
+        // The last dispatched motion, remembered so a user Stop can pause the
+        // program and Continue can re-dispatch the interrupted move. The saved
+        // command/waypoints hold fully-resolved ABSOLUTE targets, so moves that
+        // were resolved relative to "current position" resume toward their
+        // original target instead of re-resolving from wherever the robot
+        // stopped.
+        private RobotCommand?  _lastMotionCommand;   // single queued MoveL/MoveJ (incl. jump legs, thread strokes)
+        private List<Vector6>? _lastRunWaypoints;    // continuous (blended) path
+        private List<double>?  _lastRunRadii;
+        private Vector6?       _lastRunStart;        // robot position when the run was dispatched
+        private double? _lastRunSpeed, _lastRunAccel, _lastRunDecel;
+        // Captured at Stop() for Resume() to re-dispatch:
+        private RobotCommand?  _resumeCommand;
+        private List<Vector6>? _resumeRunWaypoints;
+        private List<double>?  _resumeRunRadii;
+        private ProgramStep?       _resumePendingStep;
+        private List<ProgramStep>? _resumePendingSteps;
+        // Set by Resume() (WebSocket thread); consumed by Update() (control loop
+        // thread) so the actual motion dispatch happens on the loop.
+        private volatile bool _resumeDispatchPending;
+
         // Program default blend radius (set by SetBlendRadius); per-move BlendRadius overrides it.
         private double _defaultBlendRadius = 0;
 
@@ -281,7 +303,20 @@ namespace Controller.RobotControl
             _pendingAuxStep  = null;
             _awaitingVision  = false;
             _visionProgramId = null;
-            _activeLocal     = null;
+            // Programs start in the robot's active local (set from the jog page);
+            // SetLocal / ClearLocal steps override it during the run.
+            _activeLocal     = _controller.ActiveLocalOffset;
+            _lastMotionCommand  = null;
+            _lastRunWaypoints   = null;
+            _lastRunRadii       = null;
+            _lastRunStart       = null;
+            _resumeCommand      = null;
+            _resumeRunWaypoints = null;
+            _resumeRunRadii     = null;
+            _resumePendingStep  = null;
+            _resumePendingSteps = null;
+            _resumeDispatchPending = false;
+            _controller.ActiveCncToolpath = null;
             _running         = true;
         }
 
@@ -290,7 +325,16 @@ namespace Controller.RobotControl
             if (!_isPaused) return;
             _isPaused      = false;
             _stopRequested = false;
+            // Any interrupted motion is re-dispatched by Update() on the control
+            // loop thread — Resume() runs on the WebSocket thread, where calling
+            // StartContinuousMove would race the loop. The flag is set before
+            // _running so the first tick sees it ahead of any step execution.
+            _resumeDispatchPending = _resumeRunWaypoints != null || _resumeCommand != null;
             _running       = true;
+
+            // The status guard blocks Running over a terminal Stopped, so the
+            // resume transition goes through its dedicated path.
+            _programManager.ResumeToRunning(_program!.Name);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = _program!.Name,
@@ -304,28 +348,74 @@ namespace Controller.RobotControl
         {
             if (!_running) return;
 
-            if (!_isBackground)
+            // Background executors stop dead — a paused background program would
+            // never signal OnExecutorFinished and WaitForBackground would hang.
+            if (_isBackground)
             {
-                // Request a queue drain on the control loop thread — calling Clear() directly
-                // here would race with RunCommands() which reads QueuedCommands on the loop thread.
-                _controller.RequestQueueDrain();
-                // Hard-stop any active motion profiler so IsMoving clears immediately.
-                _controller.HardStop();
+                _awaitingMove    = false;
+                _pendingStep     = null;
+                _pendingSteps    = null;
+                _awaitingAuxMove = false;
+                _pendingAuxStep  = null;
+                _awaitingVision  = false;
+                _visionProgramId = null;
+                _waitingForBackground = null;
+                Finish(global::ProgramStatus.Stopped, "Stopped by user");
+                return;
             }
 
-            if (_awaitingVision && _visionProgramId != null)
-                _controller.VisionManager.StopProgram(_visionProgramId);
+            // Main program: halt motion but PAUSE — the frame stack (including a
+            // CNC block's generated steps and its captured origin anchor) stays
+            // intact so Continue resumes from exactly where the program stopped.
 
-            _awaitingMove    = false;
-            _pendingStep     = null;
-            _awaitingAuxMove = false;
-            _pendingAuxStep  = null;
-            _awaitingVision  = false;
-            _visionProgramId = null;
-            _waitingForBackground = null;
+            // Request a queue drain on the control loop thread — calling Clear() directly
+            // here would race with RunCommands() which reads QueuedCommands on the loop thread.
+            _controller.RequestQueueDrain();
+            // Hard-stop any active motion profiler so IsMoving clears immediately.
+            _controller.HardStop();
 
-            // Emit Stopped status immediately rather than waiting for the next Update() tick.
-            Finish(global::ProgramStatus.Stopped, "Stopped by user");
+            // Snapshot the interrupted motion for Resume().
+            _resumeCommand      = null;
+            _resumeRunWaypoints = null;
+            _resumeRunRadii     = null;
+            _resumePendingStep  = null;
+            _resumePendingSteps = null;
+            if (_awaitingMove)
+            {
+                if (_lastRunWaypoints is { Count: > 0 })
+                {
+                    // Continuous (blended) path: find the segment the robot
+                    // stopped on and resume from that segment's END — always
+                    // straight ahead, never backtracking to a passed waypoint.
+                    var pos  = _controller.GetCurrentPosition();
+                    int best = FindResumeIndex(pos, _lastRunStart ?? _lastRunWaypoints[0], _lastRunWaypoints);
+                    _resumeRunWaypoints = _lastRunWaypoints.GetRange(best, _lastRunWaypoints.Count - best);
+                    _resumeRunRadii     = _lastRunRadii!.GetRange(best, _lastRunRadii.Count - best);
+                }
+                else if (_lastMotionCommand != null)
+                {
+                    _resumeCommand = _lastMotionCommand;
+                }
+                _resumePendingStep  = _pendingStep;
+                _resumePendingSteps = _pendingSteps;
+            }
+
+            // Clear only the main-motion wait. Aux, vision, and background waits
+            // stay armed so the program picks them up again after Resume().
+            _awaitingMove = false;
+            _pendingStep  = null;
+            _pendingSteps = null;
+
+            SavePersistentVars();
+            _running  = false;
+            _isPaused = true;
+            _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+            {
+                ProgramName       = _program!.Name,
+                ProgramStatus     = global::ProgramStatus.Stopped,
+                CurrentStepNumber = _globalStepIndex,
+                StepDescription   = "Stopped — Continue resumes from the current step",
+            });
         }
 
         /// <summary>
@@ -350,6 +440,17 @@ namespace Controller.RobotControl
             _threadSubStep        = 0;
             _threadMoveQueue      = null;
             _waitingForBackground = null;
+            _lastMotionCommand    = null;
+            _lastRunWaypoints     = null;
+            _lastRunRadii         = null;
+            _lastRunStart         = null;
+            _resumeCommand        = null;
+            _resumeRunWaypoints   = null;
+            _resumeRunRadii       = null;
+            _resumePendingStep    = null;
+            _resumePendingSteps   = null;
+            _resumeDispatchPending = false;
+            _controller.ActiveCncToolpath = null;
             _frameStack.Clear();
             _variables.Clear();
             _listVariables.Clear();
@@ -366,6 +467,33 @@ namespace Controller.RobotControl
         public void Update()
         {
             if (!_running || _program is null) return;
+
+            // Re-dispatch motion interrupted by a pause — done here so it runs on
+            // the control loop thread, before any step execution can advance.
+            if (_resumeDispatchPending)
+            {
+                _resumeDispatchPending = false;
+                if (_resumeRunWaypoints is { Count: > 0 })
+                {
+                    StartTrackedContinuousMove(_resumeRunWaypoints, _resumeRunRadii!,
+                        _lastRunSpeed, _lastRunAccel, _lastRunDecel);
+                    _pendingStep  = _resumePendingStep;
+                    _pendingSteps = _resumePendingSteps;
+                    _awaitingMove = true;
+                }
+                else if (_resumeCommand != null)
+                {
+                    EnqueueMotion(_resumeCommand);
+                    _pendingStep  = _resumePendingStep;
+                    _pendingSteps = _resumePendingSteps;
+                    _awaitingMove = true;
+                }
+                _resumeCommand      = null;
+                _resumeRunWaypoints = null;
+                _resumeRunRadii     = null;
+                _resumePendingStep  = null;
+                _resumePendingSteps = null;
+            }
 
             // Blocking on a background program finishing
             if (_waitingForBackground != null)
@@ -439,6 +567,9 @@ namespace Controller.RobotControl
             if (frame.Index >= frame.Steps.Count)
             {
                 _frameStack.Pop();
+
+                // CNC block finished — its toolpath preview is no longer active
+                if (frame.IsCnc) _controller.ActiveCncToolpath = null;
 
                 // If this was a loop frame, decrement and possibly re-push
                 if (frame.IsLoop)
@@ -703,13 +834,73 @@ namespace Controller.RobotControl
                 ApplySpeedOverride = true,   // program move — subject to the speed override
             };
 
-            _controller.QueuedCommands.Enqueue(cmd);
+            EnqueueMotion(cmd);
             _awaitingMove = true;
             _pendingStep  = step; // completion is reported in Update() once the move finishes
 
             // Announce the step is in progress without counting it yet
             ReportStepStarted(step);
             frame.Index++;
+        }
+
+        /// <summary>
+        /// Index of the waypoint a paused continuous run should resume from: the
+        /// stop position is projected onto every path segment (including the
+        /// original start → first-waypoint leg) and the end of the nearest
+        /// segment wins, so the resumed motion continues forward along the path.
+        /// </summary>
+        internal static int FindResumeIndex(Vector6 pos, Vector6 start, List<Vector6> waypoints)
+        {
+            int best = 0;
+            double bestD = double.MaxValue;
+            var prev = start;
+            for (int i = 0; i < waypoints.Count; i++)
+            {
+                var wp = waypoints[i];
+                double d = DistToSegmentSq(pos, prev, wp);
+                if (d < bestD) { bestD = d; best = i; }
+                prev = wp;
+            }
+            return best;
+        }
+
+        private static double DistToSegmentSq(Vector6 p, Vector6 a, Vector6 b)
+        {
+            double abx = b.X - a.X, aby = b.Y - a.Y, abz = b.Z - a.Z;
+            double lenSq = abx * abx + aby * aby + abz * abz;
+            double t = lenSq < 1e-12
+                ? 0
+                : Math.Clamp(((p.X - a.X) * abx + (p.Y - a.Y) * aby + (p.Z - a.Z) * abz) / lenSq, 0, 1);
+            double dx = p.X - (a.X + t * abx);
+            double dy = p.Y - (a.Y + t * aby);
+            double dz = p.Z - (a.Z + t * abz);
+            return dx * dx + dy * dy + dz * dz;
+        }
+
+        // Enqueue a robot motion command, remembering it (with its fully-resolved
+        // absolute target) so a user Stop can be resumed mid-move.
+        private void EnqueueMotion(RobotCommand cmd)
+        {
+            _lastMotionCommand = cmd;
+            _lastRunWaypoints  = null;
+            _lastRunRadii      = null;
+            _lastRunStart      = null;
+            _controller.QueuedCommands.Enqueue(cmd);
+        }
+
+        // Dispatch a continuous (blended) path, remembering its waypoints so a
+        // user Stop can resume the remainder of the path.
+        private void StartTrackedContinuousMove(List<Vector6> waypoints, List<double> radii,
+            double? speed, double? accel, double? decel)
+        {
+            _lastRunWaypoints  = waypoints;
+            _lastRunRadii      = radii;
+            _lastRunStart      = _controller.GetCurrentPosition();
+            _lastRunSpeed      = speed;
+            _lastRunAccel      = accel;
+            _lastRunDecel      = decel;
+            _lastMotionCommand = null;
+            _controller.StartContinuousMove(waypoints, radii, speed, accel, decel, applyOverride: true);
         }
 
         private static bool HasToolOffset(ProgramStep step) =>
@@ -766,7 +957,7 @@ namespace Controller.RobotControl
             double? accel = (first.Accel.HasValue || first.Expressions?.ContainsKey("accel") == true) ? EvalField(first, "accel", first.Accel ?? 0) : (double?)null;
             double? decel = (first.Decel.HasValue || first.Expressions?.ContainsKey("decel") == true) ? EvalField(first, "decel", first.Decel ?? 0) : (double?)null;
 
-            _controller.StartContinuousMove(waypoints, radii, speed, accel, decel, applyOverride: true);
+            StartTrackedContinuousMove(waypoints, radii, speed, accel, decel);
             _awaitingMove = true;
             _pendingSteps = run;
 
@@ -782,6 +973,10 @@ namespace Controller.RobotControl
         private bool ResolveMoveTarget(ProgramStep step, out Vector6 target, Vector6? currentPos = null)
         {
             target = Vector6.Zero;
+
+            // True when the base pose comes from the live current position — those
+            // axes are already world-frame, so the local shift must skip them.
+            bool baseIsCurrent = false;
 
             Point point;
             if (step.GridPoint != null)
@@ -875,6 +1070,7 @@ namespace Controller.RobotControl
                 // No point specified — use the base TCP position so offsets act as relative
                 // displacements. In a blended run this is the previous waypoint (where the
                 // robot will be), otherwise the robot's live current position.
+                baseIsCurrent = true;
                 var pos = currentPos ?? _controller.GetCurrentPosition();
                 point = new Point { X = pos.X, Y = pos.Y, Z = pos.Z, RX = pos.RX, RY = pos.RY, RZ = pos.RZ };
             }
@@ -898,12 +1094,18 @@ namespace Controller.RobotControl
             double finalRZ = point.RZ + EvalField(step, "offsetRZ", step.OffsetRZ ?? 0);
 
             // Per-axis absolute overrides — replace calculated value when set
-            if (step.OverrideX.HasValue  || step.Expressions?.ContainsKey("overrideX")  == true) finalX  = EvalField(step, "overrideX",  step.OverrideX  ?? 0);
-            if (step.OverrideY.HasValue  || step.Expressions?.ContainsKey("overrideY")  == true) finalY  = EvalField(step, "overrideY",  step.OverrideY  ?? 0);
-            if (step.OverrideZ.HasValue  || step.Expressions?.ContainsKey("overrideZ")  == true) finalZ  = EvalField(step, "overrideZ",  step.OverrideZ  ?? 0);
-            if (step.OverrideRX.HasValue || step.Expressions?.ContainsKey("overrideRX") == true) finalRX = EvalField(step, "overrideRX", step.OverrideRX ?? 0);
-            if (step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
-            if (step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
+            bool ovX  = step.OverrideX.HasValue  || step.Expressions?.ContainsKey("overrideX")  == true;
+            bool ovY  = step.OverrideY.HasValue  || step.Expressions?.ContainsKey("overrideY")  == true;
+            bool ovZ  = step.OverrideZ.HasValue  || step.Expressions?.ContainsKey("overrideZ")  == true;
+            bool ovRX = step.OverrideRX.HasValue || step.Expressions?.ContainsKey("overrideRX") == true;
+            bool ovRY = step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true;
+            bool ovRZ = step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true;
+            if (ovX)  finalX  = EvalField(step, "overrideX",  step.OverrideX  ?? 0);
+            if (ovY)  finalY  = EvalField(step, "overrideY",  step.OverrideY  ?? 0);
+            if (ovZ)  finalZ  = EvalField(step, "overrideZ",  step.OverrideZ  ?? 0);
+            if (ovRX) finalRX = EvalField(step, "overrideRX", step.OverrideRX ?? 0);
+            if (ovRY) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
+            if (ovRZ) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
 
             // Apply active local offset — per-step localName overrides the program-level active local
             Vector6? effectiveLocal;
@@ -918,12 +1120,38 @@ namespace Controller.RobotControl
             }
             if (effectiveLocal != null)
             {
-                finalX  += effectiveLocal.X;
-                finalY  += effectiveLocal.Y;
-                finalZ  += effectiveLocal.Z;
-                finalRX += effectiveLocal.RX;
-                finalRY += effectiveLocal.RY;
-                finalRZ += effectiveLocal.RZ;
+                // The local transforms ABSOLUTE coordinates: named/grid/stack/var
+                // points and overridden axes. Axes riding on the live current
+                // position are already world-frame — transforming them again would
+                // double-apply the local on every relative move.
+                //
+                // When both X and Y are absolute the full rigid frame applies —
+                // rotation (including RX/RY tilt, which maps XY motion onto the
+                // frame's Z slope) around the local origin plus translation. With
+                // mixed/relative XY a rotation is ill-defined, so those fall back
+                // to per-axis translation (tilt unsupported there).
+                if (!baseIsCurrent || (ovX && ovY))
+                {
+                    // When Z rides the live position, hold the local-frame height
+                    // of the current base so the target still follows a tilted
+                    // frame's slope as XY moves.
+                    double lz = (!baseIsCurrent || ovZ)
+                        ? finalZ
+                        : LocalFrame.Inverse(effectiveLocal, new Vector6(point.X, point.Y, point.Z)).Z
+                          + (finalZ - point.Z);
+                    var w = LocalFrame.Apply(effectiveLocal,
+                        new Vector6(finalX, finalY, lz, finalRX, finalRY, finalRZ));
+                    finalX = w.X; finalY = w.Y; finalZ = w.Z;
+                    // RX/RY pass through (tool can't tilt); yaw only when absolute
+                    if (!baseIsCurrent || ovRZ) finalRZ = w.RZ;
+                }
+                else
+                {
+                    if (ovX)  finalX  += effectiveLocal.X;
+                    if (ovY)  finalY  += effectiveLocal.Y;
+                    if (ovZ)  finalZ  += effectiveLocal.Z;
+                    if (ovRZ) finalRZ += effectiveLocal.RZ;
+                }
             }
 
             target = new Vector6(finalX, finalY, finalZ, finalRX, finalRY, finalRZ);
@@ -940,7 +1168,9 @@ namespace Controller.RobotControl
                 double dist  = EvalField(step, "threadDistance",  step.ThreadDistance  ?? 0);
                 double pitch = EvalField(step, "threadPitch",     step.ThreadPitch     ?? 1);
                 bool   peck  = step.ThreadPeck ?? false;
-                double peckD = step.ThreadPeckDepth ?? Math.Abs(dist);
+                double peckD = (step.ThreadPeckDepth.HasValue || step.Expressions?.ContainsKey("threadPeckDepth") == true)
+                    ? EvalField(step, "threadPeckDepth", step.ThreadPeckDepth ?? 0)
+                    : Math.Abs(dist);
                 bool   rev   = step.ThreadReverseOut ?? true;
 
                 if (Math.Abs(pitch) < 0.0001) pitch = 1.0;
@@ -999,7 +1229,7 @@ namespace Controller.RobotControl
                 return;
             }
 
-            _controller.QueuedCommands.Enqueue(_threadMoveQueue.Dequeue());
+            EnqueueMotion(_threadMoveQueue.Dequeue());
             _awaitingMove = true;
         }
 
@@ -1042,10 +1272,10 @@ namespace Controller.RobotControl
                     double r = EffectiveBlendRadius(step);
                     var apexUp   = new Vector6(_jumpStartPos.X, _jumpStartPos.Y, _jumpZStart, _jumpStartPos.RX, _jumpStartPos.RY, _jumpStartPos.RZ);
                     var apexOver = new Vector6(_jumpTarget.X,   _jumpTarget.Y,   _jumpZEnd,   _jumpTarget.RX,   _jumpTarget.RY,   _jumpTarget.RZ);
-                    _controller.StartContinuousMove(
+                    StartTrackedContinuousMove(
                         new List<Vector6> { apexUp, apexOver, _jumpTarget },
                         new List<double> { r, r, 0 },   // round both apexes; land exactly on target
-                        _jumpSpeed, _jumpAccel, _jumpDecel, applyOverride: true);
+                        _jumpSpeed, _jumpAccel, _jumpDecel);
                     _jumpSubStep  = 0;
                     _awaitingMove = true;
                     _pendingStep  = step;
@@ -1056,7 +1286,7 @@ namespace Controller.RobotControl
 
                 _jumpSubStep  = 1;
 
-                _controller.QueuedCommands.Enqueue(new RobotCommand
+                EnqueueMotion(new RobotCommand
                 {
                     CommandType = "MoveL",
                     X = _jumpStartPos.X, Y = _jumpStartPos.Y, Z = _jumpZStart,
@@ -1071,7 +1301,7 @@ namespace Controller.RobotControl
 
             if (_jumpSubStep == 1)
             {
-                _controller.QueuedCommands.Enqueue(new RobotCommand
+                EnqueueMotion(new RobotCommand
                 {
                     CommandType = _jumpCmdType,
                     X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpZEnd,
@@ -1086,7 +1316,7 @@ namespace Controller.RobotControl
 
             if (_jumpSubStep == 2)
             {
-                _controller.QueuedCommands.Enqueue(new RobotCommand
+                EnqueueMotion(new RobotCommand
                 {
                     CommandType = "MoveL",
                     X = _jumpTarget.X, Y = _jumpTarget.Y, Z = _jumpTarget.Z,
@@ -1526,13 +1756,249 @@ namespace Controller.RobotControl
 
         private void ExecuteCncProgram(ProgramStep step, StepListFrame frame)
         {
-            var innerSteps = step.CncProgramSteps ?? new();
+            // "current" origin mode: the robot's position right now becomes the
+            // toolpath origin. Override targets get the active local frame applied
+            // after resolution, so the anchor is expressed in the LOCAL frame —
+            // the re-applied frame then cancels out and moves land relative to the
+            // physical position, rotated with whatever local frame is active.
+            Vector6? anchor = null;
+            if (step.CncSpec?.OriginMode == "current")
+            {
+                var pos = _controller.GetCurrentPosition();
+                var loc = _activeLocal;
+                anchor = loc == null ? pos : LocalFrame.Inverse(loc, pos);
+            }
+
+            // Structural spec expressions (drill depth / peck) evaluate against
+            // the program's CURRENT variables — the state when the block starts.
+            double ResolveSpecExpr(string key, double fallback)
+            {
+                var e = step.CncSpec?.Expressions;
+                if (e == null || !e.TryGetValue(key, out var expr) || string.IsNullOrWhiteSpace(expr))
+                    return fallback;
+                try { return ExpressionEvaluator.Evaluate(expr, EvalVars(), _listVariables, _pointVariables); }
+                catch (UnknownVariableException) { throw; }
+                catch { return fallback; }
+            }
+
+            // Prefer runtime generation from the spec; fall back to baked steps
+            // from older app versions.
+            var innerSteps = step.CncSpec != null
+                ? GenerateCncSteps(step.CncSpec, anchor, ResolveSpecExpr)
+                : step.CncProgramSteps ?? new();
             if (innerSteps.Count == 0) { frame.Index++; ReportStepCompleted(step); return; }
+
+            // Publish the resolved XY toolpath — anchor AND active local frame
+            // applied, so the monitor preview shows exactly where the robot will
+            // move in world coordinates. Cleared when the block's frame pops.
+            if (step.CncSpec is { } spec2)
+            {
+                double ax = anchor?.X ?? 0, ay = anchor?.Y ?? 0;
+                var loc = _activeLocal;
+                // Transform at the tool-down plane: with a tilted frame the world
+                // XY of a path point depends on its local Z.
+                double planeZ = ResolveSpecExpr("activeZ", spec2.ActiveZ ?? 0) + (anchor?.Z ?? 0);
+                (double wx, double wy) ToWorld(double x, double y)
+                {
+                    double px = x + ax, py = y + ay;
+                    if (loc == null) return (px, py);
+                    var w = LocalFrame.Apply(loc, new Vector6(px, py, planeZ, 0, 0, 0));
+                    return (w.X, w.Y);
+                }
+
+                var paths = new List<List<double>>();
+                foreach (var flat in spec2.Paths ?? [])
+                {
+                    if (flat is not { Count: >= 4 }) continue;
+                    var world = new List<double>(flat.Count);
+                    for (int i = 0; i + 1 < flat.Count; i += 2)
+                    {
+                        var (wx, wy) = ToWorld(flat[i], flat[i + 1]);
+                        world.Add(wx);
+                        world.Add(wy);
+                    }
+                    paths.Add(world);
+                }
+                var holes = (spec2.Holes ?? []).Select(h =>
+                {
+                    var (wx, wy) = ToWorld(h.X, h.Y);
+                    return new CncHole { X = wx, Y = wy };
+                }).ToList();
+                _controller.ActiveCncToolpath = new RobotController.CncToolpathInfo(_program!.Name, paths, holes);
+            }
 
             ReportStepCompleted(step);
             frame.Index++;
 
-            _frameStack.Push(new StepListFrame(innerSteps, 0));
+            _frameStack.Push(new StepListFrame(innerSteps, 0, isCnc: true));
+        }
+
+        /// <summary>
+        /// Expand a CNC toolpath spec into executable steps: drill or thread each
+        /// hole (per HoleOp), then follow each contour as travel → plunge →
+        /// blended MoveL chain → retract. The retract is unblended so the
+        /// continuous active run stops exactly on the contour's last point before
+        /// the tool lifts. When <paramref name="anchor"/> is set (origin mode
+        /// "current"), every X/Y/Z is shifted so the anchor position acts as the
+        /// origin. <paramref name="resolve"/> evaluates $variable expressions for
+        /// STRUCTURAL values (drill depth / peck depth decide how many steps are
+        /// generated) against the program's variables at block start; when null,
+        /// the numeric spec values are used.
+        /// </summary>
+        internal static List<ProgramStep> GenerateCncSteps(CncSpec spec, Vector6? anchor = null,
+            Func<string, double, double>? resolve = null)
+        {
+            var steps = new List<ProgramStep>();
+            string NewId() => Guid.NewGuid().ToString("N");
+
+            double ax = anchor?.X ?? 0, ay = anchor?.Y ?? 0, az = anchor?.Z ?? 0;
+            double Resolve(string key, double fallback) => resolve?.Invoke(key, fallback) ?? fallback;
+
+            // Spec-level $variable expressions map onto per-step expression keys,
+            // so the existing EvalField machinery resolves them at run time. The
+            // dictionaries are shared across generated steps (read-only there).
+            // With an anchor, Z expressions are wrapped as "(expr) + anchorZ" so
+            // they stay relative to the position the block started from.
+            var ex = spec.Expressions ?? new Dictionary<string, string>();
+            Dictionary<string, string>? MapExprs(params (string from, string to)[] pairs)
+            {
+                Dictionary<string, string>? d = null;
+                foreach (var (from, to) in pairs)
+                    if (ex.TryGetValue(from, out var e) && !string.IsNullOrWhiteSpace(e))
+                    {
+                        if (to == "overrideZ" && anchor != null)
+                            e = $"({e}) + {az.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                        (d ??= new())[to] = e;
+                    }
+                return d;
+            }
+
+            var travelExprs = MapExprs(("safeZ", "overrideZ"),
+                ("travelSpeed", "speed"), ("travelAccel", "accel"), ("travelDecel", "decel"));
+            var activeExprs = MapExprs(("activeZ", "overrideZ"),
+                ("activeSpeed", "speed"), ("activeAccel", "accel"), ("activeDecel", "decel"));
+            var activeBlendExprs = MapExprs(("activeZ", "overrideZ"),
+                ("activeSpeed", "speed"), ("activeAccel", "accel"), ("activeDecel", "decel"),
+                ("blendRadius", "blendRadius"));
+            // Dynamics only — drill plunges set their own numeric Z targets
+            var activeDynExprs = MapExprs(
+                ("activeSpeed", "speed"), ("activeAccel", "accel"), ("activeDecel", "decel"));
+            var threadExprs = MapExprs(("holeDepth", "threadDistance"), ("threadPitch", "threadPitch"),
+                ("holePeckDepth", "threadPeckDepth"));
+
+            bool drill = spec.HoleOp == "drill";
+            foreach (var h in spec.Holes ?? [])
+            {
+                steps.Add(new ProgramStep
+                {
+                    Id = NewId(),
+                    Type = StepType.MoveL,
+                    Name = $"Approach ({h.X:0.0}, {h.Y:0.0})",
+                    OverrideX = h.X + ax, OverrideY = h.Y + ay, OverrideZ = spec.SafeZ + az,
+                    Speed = spec.TravelSpeed, Accel = spec.TravelAccel, Decel = spec.TravelDecel,
+                    Expressions = travelExprs,
+                });
+
+                if (drill)
+                {
+                    // Straight plunge(s) to depth. Depth/peck are structural (they
+                    // decide the pass layout), so expressions resolve at block start.
+                    double depth = Resolve("holeDepth", spec.HoleDepth ?? 0);
+                    double peckD = spec.HolePeck == true
+                        ? Math.Abs(Resolve("holePeckDepth", spec.HolePeckDepth ?? 0))
+                        : 0;
+                    double sign  = depth >= 0 ? 1 : -1;
+                    double total = Math.Abs(depth);
+
+                    var passDepths = new List<double>();
+                    if (peckD > 0.0001 && total > peckD)
+                        for (double d = peckD; d < total; d += peckD) passDepths.Add(d);
+                    passDepths.Add(total);
+
+                    foreach (var d in passDepths)
+                    {
+                        steps.Add(new ProgramStep
+                        {
+                            Id = NewId(), Type = StepType.MoveL,
+                            OverrideX = h.X + ax, OverrideY = h.Y + ay,
+                            OverrideZ = spec.SafeZ + az + sign * d,
+                            Speed = spec.ActiveSpeed, Accel = spec.ActiveAccel, Decel = spec.ActiveDecel,
+                            Expressions = activeDynExprs,
+                        });
+                        steps.Add(new ProgramStep
+                        {
+                            Id = NewId(), Type = StepType.MoveL,
+                            OverrideX = h.X + ax, OverrideY = h.Y + ay, OverrideZ = spec.SafeZ + az,
+                            Speed = spec.TravelSpeed, Accel = spec.TravelAccel, Decel = spec.TravelDecel,
+                            Expressions = travelExprs,
+                        });
+                    }
+                }
+                else
+                {
+                    steps.Add(new ProgramStep
+                    {
+                        Id = NewId(),
+                        Type = StepType.ThreadMove,
+                        ThreadDistance   = spec.HoleDepth,
+                        ThreadPitch      = spec.ThreadPitch,
+                        ThreadPeck       = spec.HolePeck,
+                        ThreadPeckDepth  = spec.HolePeck == true ? spec.HolePeckDepth : null,
+                        ThreadReverseOut = spec.ThreadReverseOut,
+                        Expressions      = threadExprs,
+                    });
+                }
+            }
+
+            double activeZ  = (spec.ActiveZ ?? 0) + az;
+            double safeZ  = spec.SafeZ + az;
+            double blendR = spec.BlendRadius ?? 0;
+            bool   blend  = blendR > 0 || ex.ContainsKey("blendRadius");
+            int    cIdx   = 0;
+            foreach (var flat in spec.Paths ?? [])
+            {
+                cIdx++;
+                if (flat == null || flat.Count < 4) continue;
+                int nPts = flat.Count / 2;
+                double sx = flat[0] + ax, sy = flat[1] + ay;
+
+                steps.Add(new ProgramStep
+                {
+                    Id = NewId(), Type = StepType.MoveL,
+                    Name = $"Contour {cIdx} ({nPts} pts)",
+                    OverrideX = sx, OverrideY = sy, OverrideZ = safeZ,
+                    Speed = spec.TravelSpeed, Accel = spec.TravelAccel, Decel = spec.TravelDecel,
+                    Expressions = travelExprs,
+                });
+                steps.Add(new ProgramStep
+                {
+                    Id = NewId(), Type = StepType.MoveL,
+                    OverrideX = sx, OverrideY = sy, OverrideZ = activeZ,
+                    Speed = spec.ActiveSpeed, Accel = spec.ActiveAccel, Decel = spec.ActiveDecel,
+                    Expressions = activeExprs,
+                });
+                for (int i = 1; i < nPts; i++)
+                {
+                    steps.Add(new ProgramStep
+                    {
+                        Id = NewId(), Type = StepType.MoveL,
+                        OverrideX = flat[2 * i] + ax, OverrideY = flat[2 * i + 1] + ay, OverrideZ = activeZ,
+                        Speed = spec.ActiveSpeed, Accel = spec.ActiveAccel, Decel = spec.ActiveDecel,
+                        Blend = blend ? true : null,
+                        BlendRadius = blend ? blendR : null,
+                        Expressions = blend ? activeBlendExprs : activeExprs,
+                    });
+                }
+                steps.Add(new ProgramStep
+                {
+                    Id = NewId(), Type = StepType.MoveL,
+                    OverrideX = flat[2 * (nPts - 1)] + ax, OverrideY = flat[2 * (nPts - 1) + 1] + ay, OverrideZ = safeZ,
+                    Speed = spec.TravelSpeed, Accel = spec.TravelAccel, Decel = spec.TravelDecel,
+                    Expressions = travelExprs,
+                });
+            }
+
+            return steps;
         }
 
         private void ExecuteLoop(ProgramStep step, StepListFrame frame)
@@ -2252,6 +2718,7 @@ namespace Controller.RobotControl
         private void Finish(global::ProgramStatus status, string description)
         {
             SavePersistentVars();
+            _controller.ActiveCncToolpath = null;
             _running              = false;
             _stopRequested        = false;
             _awaitingMove         = false;
@@ -2363,6 +2830,27 @@ namespace Controller.RobotControl
                     foreach (var elif in s.ElseIfBranches ?? []) count += CountSteps(elif.Steps, repo);
                     if (s.ElseSteps != null) count += CountSteps(s.ElseSteps, repo);
                 }
+                if (s.Type == StepType.CncProgram)
+                {
+                    if (s.CncSpec != null)
+                    {
+                        // Same arithmetic as GenerateCncSteps (numeric estimate —
+                        // structural expressions may shift drill pass counts)
+                        int perHole = 2;
+                        if (s.CncSpec.HoleOp == "drill")
+                        {
+                            double depth = Math.Abs(s.CncSpec.HoleDepth ?? 0);
+                            double peck  = s.CncSpec.HolePeck == true ? Math.Abs(s.CncSpec.HolePeckDepth ?? 0) : 0;
+                            int passes = (peck > 0.0001 && depth > peck) ? (int)Math.Ceiling(depth / peck) : 1;
+                            perHole = 1 + passes * 2;
+                        }
+                        count += perHole * (s.CncSpec.Holes?.Count ?? 0);
+                        foreach (var flat in s.CncSpec.Paths ?? [])
+                            if (flat is { Count: >= 4 }) count += flat.Count / 2 + 2;
+                    }
+                    else if (s.CncProgramSteps != null)
+                        count += CountSteps(s.CncProgramSteps, repo);
+                }
             }
             return count;
         }
@@ -2387,12 +2875,16 @@ namespace Controller.RobotControl
             // While loop support
             public ConditionGroup? WhileCondition { get; }
 
+            // CNC block frame — clears the active toolpath preview when popped
+            public bool IsCnc { get; }
+
             public StepListFrame(
                 List<ProgramStep> steps, int index,
                 bool isLoop = false, int loopRemaining = 0,
                 bool isForEach = false, int forEachCount = 0, int forEachCurrentIndex = 0,
                 string forEachSourceVar = "", string forEachValueVar = "", string forEachIndexVar = "",
-                ConditionGroup? whileCondition = null)
+                ConditionGroup? whileCondition = null,
+                bool isCnc = false)
             {
                 Steps               = steps;
                 Index               = index;
@@ -2405,6 +2897,7 @@ namespace Controller.RobotControl
                 ForEachValueVar     = forEachValueVar;
                 ForEachIndexVar     = forEachIndexVar;
                 WhileCondition      = whileCondition;
+                IsCnc               = isCnc;
             }
         }
     }
