@@ -281,19 +281,21 @@ class Program
             await context.Response.Body.WriteAsync(jpeg);
         });
 
-        // ── DXF file endpoints ─────────────────────────────────────────────────
+        // ── Vector file endpoints (DXF + SVG) ──────────────────────────────────
         // Relative to dataDir (already the CWD), so each robot instance has its own dxf/ folder.
         const string DxfDir = "dxf";
         Directory.CreateDirectory(DxfDir);
 
-        // Upload a DXF file — body is raw text (DXF), query param ?name=filename.dxf
+        // Upload a vector file — body is raw text, query param ?name=filename.dxf|.svg
         app.MapPost("/dxf", async (HttpContext context) =>
         {
             var name = context.Request.Query["name"].ToString();
-            if (string.IsNullOrWhiteSpace(name) || !name.EndsWith(".dxf", StringComparison.OrdinalIgnoreCase))
+            bool validExt = name.EndsWith(".dxf", StringComparison.OrdinalIgnoreCase)
+                         || name.EndsWith(".svg", StringComparison.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(name) || !validExt)
             {
                 context.Response.StatusCode = 400;
-                await context.Response.WriteAsync("Missing or invalid ?name= query parameter.");
+                await context.Response.WriteAsync("Missing or invalid ?name= query parameter (.dxf or .svg).");
                 return;
             }
             // Sanitize: strip path separators
@@ -305,10 +307,11 @@ class Program
             await context.Response.WriteAsync(name);
         });
 
-        // List available DXF files
+        // List available vector files
         app.MapGet("/dxf", (HttpContext context) =>
         {
             var files = Directory.GetFiles(DxfDir, "*.dxf")
+                                 .Concat(Directory.GetFiles(DxfDir, "*.svg"))
                                  .Select(f => Path.GetFileName(f))
                                  .OrderBy(f => f)
                                  .ToArray();

@@ -161,6 +161,21 @@ namespace Controller.RobotControl
         }
 
         /// <summary>
+        /// Transition a Stopped (paused) program back to Running. ApplyStatusUpdate
+        /// deliberately blocks Running writes over terminal states so stale progress
+        /// updates can't resurrect a finished program — resuming must go through here.
+        /// </summary>
+        public void ResumeToRunning(string programName)
+        {
+            lock (_lock)
+            {
+                if (!_programs.TryGetValue(programName, out var p)) return;
+                if (p.Status == ProgramStatus.Stopped)
+                    p.Status = ProgramStatus.Running;
+            }
+        }
+
+        /// <summary>
         /// Resets any programs in the supplied list that are Stopped or Complete back to Ready.
         /// Programs that are actively Running/Starting are left untouched.
         /// Called when a new built program starts so stale terminal states are cleared.
