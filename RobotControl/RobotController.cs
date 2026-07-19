@@ -57,6 +57,20 @@ namespace Controller.RobotControl
         // Drain-queue flag — set from any thread, consumed exclusively on the control loop thread in RunCommands()
         private volatile bool _drainQueueRequested;
 
+        // ── Joint soft-limit fault ────────────────────────────────────────────
+        // A commanded move that crosses a joint limit latches _faulted: all motion
+        // halts and stays halted until the operator engages _limitBypass (recovery
+        // jogging, corrective direction only) and/or clears the fault. Read on the
+        // WS threads for status, mutated only on the control-loop thread.
+        private volatile bool _faulted;
+        private volatile bool _limitBypass;
+        private int    _faultJoint = -1;     // 0..3 joint index, -1 = none
+        private int    _faultDirection;      // +1 past max, -1 past min (the unsafe direction)
+        private string _faultMessage = "";
+        // Joint targets as they stood at the start of this control tick — the clamp
+        // reference for "don't move a joint further out of range than it already is".
+        private Vector6 _jointsBeforeTick = new();
+
         // Joint motion profiler
         private Vector6MotionProfiler? jointMotionProfiler;
         private Vector6 TargetJoints = new();
@@ -350,6 +364,10 @@ namespace Controller.RobotControl
 
         public void RunMotion()
         {
+            // Snapshot the committed joint targets before any profiler advances them —
+            // the soft-limit clamp uses this as the "where we already are" reference.
+            _jointsBeforeTick.Copy(CurrentJointTargets);
+
             if (continuousProfiler is not null)
             {
                 CurrentPosition = continuousProfiler.Loop();
@@ -362,6 +380,7 @@ namespace Controller.RobotControl
                 // Per-tick IK, same as the plain linear path.
                 CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
+                if (_lastClampViolated) CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
             }
             else if (linearMotionProfiler is not null)
             {
@@ -377,6 +396,7 @@ namespace Controller.RobotControl
                 // Calculate IK to get the joint targets for the next interpolated linear movement
                 CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
+                if (_lastClampViolated) CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
             }
             else if (jointMotionProfiler is not null)
             {
@@ -406,6 +426,7 @@ namespace Controller.RobotControl
                 // Calculate IK to get the joint targets for the next Jog movement
                 CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
+                if (_lastClampViolated) CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
             }
             else if (IsJointJogging)
             {
@@ -424,13 +445,133 @@ namespace Controller.RobotControl
                 // Calculate IK to get the joint targets for the next Jog movement
                 CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
+                if (_lastClampViolated) CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
             }
         }
         public void UpdateJointTargets()
         {
+            ApplyJointLimits();
             _kinematics.UpdateMotorTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
             stb.SetMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
         }
+
+        // Joint-space windows for joints 0..3 (X / radial / vertical / RZ). An unset
+        // bound becomes ±infinity so it never clamps — only the bounds the operator
+        // actually set are enforced.
+        private (double lo, double hi)[] JointLimitWindows() => new[]
+        {
+            (_config.Joint1Min ?? double.NegativeInfinity, _config.Joint1Max ?? double.PositiveInfinity),
+            (_config.Joint2Min ?? double.NegativeInfinity, _config.Joint2Max ?? double.PositiveInfinity),
+            (_config.Joint3Min ?? double.NegativeInfinity, _config.Joint3Max ?? double.PositiveInfinity),
+            (_config.Joint4Min ?? double.NegativeInfinity, _config.Joint4Max ?? double.PositiveInfinity),
+        };
+
+        /// <summary>
+        /// Enforces joint soft limits on <see cref="CurrentJointTargets"/> in place.
+        /// Must run on the control-loop thread (called from UpdateJointTargets).
+        ///  • Disabled → no-op (and clears any latched fault).
+        ///  • Homing → skipped entirely; homing deliberately drives to the limit
+        ///    switches, which may sit outside the soft window.
+        ///  • Bypass → skipped entirely; the operator has taken responsibility, so a
+        ///    joint may be driven past its window in either direction. The fault
+        ///    stays latched until cleared.
+        ///  • Otherwise → clamp so no joint moves further outside its window. The
+        ///    corrective direction never violates, so jogging back into range always
+        ///    flows through; only the first crossing latches a fault (and stops the
+        ///    motion that caused it), and further pushes into the limit are silently
+        ///    clamped without re-latching.
+        /// </summary>
+        private void ApplyJointLimits()
+        {
+            _lastClampViolated = false;
+
+            if (!_config.JointLimitsEnabled)
+            {
+                if (_faulted) ClearFaultInternal();
+                return;
+            }
+
+            // Homing deliberately drives toward the mechanical limit switches, which
+            // may sit outside the soft window — never fault or clamp while homing.
+            if (homingState != "WaitingForStart")
+                return;
+
+            // Bypass overrides the limits entirely: the operator has taken
+            // responsibility, so allow driving a joint past its window in either
+            // direction. The fault stays latched (the banner remains) until cleared.
+            if (_limitBypass)
+                return;
+
+            var before = _jointsBeforeTick;
+            var result = JointLimiter.Clamp(CurrentJointTargets, before, JointLimitWindows());
+            if (result.Violated)
+            {
+                // Hold the joint at its boundary. Jogging the corrective direction
+                // does not violate, so it always flows through — the operator can
+                // recover without engaging bypass. Only the first crossing latches
+                // (and stops the motion that caused it); further pushes into the
+                // limit are silently clamped.
+                CurrentJointTargets.Copy(result.Clamped);
+                _lastClampViolated = true;
+                if (!_faulted)
+                    LatchFault(result.Joint, result.Direction);
+            }
+        }
+
+        // Set by ApplyJointLimits when it clamped/froze this tick — cartesian jog
+        // branches re-derive CurrentPosition from the clamped joints so the tool
+        // frame can't drift past a blocked joint.
+        private bool _lastClampViolated;
+
+        private static readonly string[] AstroJointNames = { "J1", "J2", "J3", "J4" };
+        private static readonly string[] CncJointNames   = { "X", "Y", "Z", "RZ" };
+
+        private void LatchFault(int joint, int direction)
+        {
+            bool wasFaulted = _faulted;
+            _faulted = true;
+            if (!wasFaulted)
+            {
+                _faultJoint = joint;
+                _faultDirection = direction;
+                var names = _config.RobotType == "CNC4Axis" ? CncJointNames : AstroJointNames;
+                string name = joint >= 0 && joint < names.Length ? names[joint] : $"joint {joint}";
+                string edge = direction > 0 ? "upper" : "lower";
+                _faultMessage = $"{name} reached its {edge} limit. Bypass and jog it back into range to recover.";
+                Console.WriteLine($"[JointLimit] FAULT — {_faultMessage}");
+            }
+
+            // Stop everything: clear profilers, force-stop jogs, halt any program so
+            // it cannot keep re-issuing the offending move.
+            linearMotionProfiler = null;
+            jointMotionProfiler  = null;
+            continuousProfiler   = null;
+            joggingMotionProfiler.ForceStop();
+            jointJoggingProfiler.ForceStop();
+            toolJoggingMotionProfiler.ForceStop();
+            programExecutor?.Stop();
+        }
+
+        // Clears fault state without touching motion — used when limits get disabled
+        // or the operator acknowledges the fault.
+        private void ClearFaultInternal()
+        {
+            _faulted = false;
+            _limitBypass = false;
+            _faultJoint = -1;
+            _faultDirection = 0;
+            _faultMessage = "";
+        }
+
+        /// <summary>Operator acknowledgement: clears the fault and exits bypass. If a
+        /// joint is still out of range the next commanded move simply re-faults.</summary>
+        public void ClearFault() => ClearFaultInternal();
+
+        /// <summary>Enter/exit limit bypass. While enabled the soft limits are
+        /// ignored entirely, so a joint can be jogged past its window in either
+        /// direction. Jogging itself is always available during a fault; bypass only
+        /// unlocks the worsening direction.</summary>
+        public void SetLimitBypass(bool enable) => _limitBypass = enable;
 
         // ── Aux axis motion ───────────────────────────────────────────────────
 
@@ -704,6 +845,15 @@ namespace Controller.RobotControl
                         cncXHomingDirection       = _config.CncXHomingDirection,
                         cncYHomingDirection       = _config.CncYHomingDirection,
                         cncZHomingDirection       = _config.CncZHomingDirection,
+                        jointLimitsEnabled        = _config.JointLimitsEnabled,
+                        joint1Min                 = _config.Joint1Min,
+                        joint1Max                 = _config.Joint1Max,
+                        joint2Min                 = _config.Joint2Min,
+                        joint2Max                 = _config.Joint2Max,
+                        joint3Min                 = _config.Joint3Min,
+                        joint3Max                 = _config.Joint3Max,
+                        joint4Min                 = _config.Joint4Min,
+                        joint4Max                 = _config.Joint4Max,
                     };
                     break;
 
@@ -750,6 +900,28 @@ namespace Controller.RobotControl
                     if (p.CncXHomingDirection.HasValue)       _config.CncXHomingDirection       = p.CncXHomingDirection.Value;
                     if (p.CncYHomingDirection.HasValue)       _config.CncYHomingDirection       = p.CncYHomingDirection.Value;
                     if (p.CncZHomingDirection.HasValue)       _config.CncZHomingDirection       = p.CncZHomingDirection.Value;
+                    if (p.JointLimitsEnabled.HasValue)        _config.JointLimitsEnabled        = p.JointLimitsEnabled.Value;
+                    // Joint-limit bounds: a property present in the patch is
+                    // authoritative, INCLUDING an explicit null which clears the
+                    // bound (so it is no longer enforced). Absent means unchanged —
+                    // so we read the raw params rather than the HasValue pattern,
+                    // which cannot tell "sent null" from "not sent".
+                    if (command.Params is { } rawCfg)
+                    {
+                        void ApplyLimit(string name, Action<double?> set)
+                        {
+                            if (rawCfg.TryGetProperty(name, out var el))
+                                set(el.ValueKind == JsonValueKind.Null ? (double?)null : el.GetDouble());
+                        }
+                        ApplyLimit("joint1Min", v => _config.Joint1Min = v);
+                        ApplyLimit("joint1Max", v => _config.Joint1Max = v);
+                        ApplyLimit("joint2Min", v => _config.Joint2Min = v);
+                        ApplyLimit("joint2Max", v => _config.Joint2Max = v);
+                        ApplyLimit("joint3Min", v => _config.Joint3Min = v);
+                        ApplyLimit("joint3Max", v => _config.Joint3Max = v);
+                        ApplyLimit("joint4Min", v => _config.Joint4Min = v);
+                        ApplyLimit("joint4Max", v => _config.Joint4Max = v);
+                    }
                     RobotConfigService.Save(_config);
                     break;
                 }
@@ -762,6 +934,7 @@ namespace Controller.RobotControl
                 }
 
                 case "Home":
+                    ClearFaultInternal();  // re-homing re-establishes position; drop any latched fault
                     startHoming = true;
                     break;
 
@@ -775,6 +948,18 @@ namespace Controller.RobotControl
 
                 case "HardStop":
                     HardStop();
+                    break;
+
+                // ── Joint-limit fault recovery ─────────────────────────────────────
+                case "ClearFault":
+                    ClearFaultInternal();
+                    break;
+
+                case "SetLimitBypass":
+                    {
+                        var p = LoadParams<SetLimitBypassParams>(command);
+                        SetLimitBypass(p.Enable);
+                    }
                     break;
 
                 // ── Aux axis commands ──────────────────────────────────────────────
@@ -1062,6 +1247,15 @@ namespace Controller.RobotControl
                             lastStackUpdate = stackRepo.LastUpdatedUnixMs,
 
                             speedOverridePercent = SpeedOverrideFactor * 100.0,
+
+                            // Joint soft-limit fault state
+                            faulted            = _faulted,
+                            faultJoint         = _faultJoint,
+                            faultDirection     = _faultDirection,
+                            faultMessage       = _faultMessage,
+                            limitBypass        = _limitBypass,
+                            jointLimitsEnabled = _config.JointLimitsEnabled,
+                            robotType          = _config.RobotType,
 
                             version = _version,
                             isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
@@ -2346,6 +2540,8 @@ namespace Controller.RobotControl
         {
             if (IsMoving)
                 return;
+            if (_faulted)  // no automatic/point moves while a joint-limit fault is latched
+                return;
 
             // Gather the commands motion params if there specified otherwise default to the last set ones.
             // The global speed override scales program moves only (applyOverride) — including
@@ -2378,6 +2574,8 @@ namespace Controller.RobotControl
         {
             if (IsMoving)
                 return;
+            if (_faulted)  // no automatic/point moves while a joint-limit fault is latched
+                return;
 
             // Gather the commands motion params if there specified otherwise default to the last set ones.
             // Override scales program moves only (see MoveJ); manual/jog moves are unaffected.
@@ -2409,6 +2607,7 @@ namespace Controller.RobotControl
             double? Speed, double? Accel, double? Decel, bool applyOverride = false)
         {
             if (IsMoving) return;
+            if (_faulted) return;  // no automatic moves while a joint-limit fault is latched
             if (waypoints == null || waypoints.Count < 2) return;
 
             double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor : 1.0);
