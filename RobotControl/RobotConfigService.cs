@@ -166,6 +166,29 @@ namespace Controller.RobotControl
         /// <summary>Direction to jog during Z homing (1 = positive, -1 = negative).</summary>
         [JsonPropertyName("cncZHomingDirection")]
         public int CncZHomingDirection { get; set; } = 1;
+
+        // ── Joint soft limits ───────────────────────────────────────────────────
+        // Applied to the joint-space target vector: joint1 = X component
+        // (ASTRO J1 base rotation °, CNC X mm), joint2 = Y (ASTRO radial reach mm,
+        // CNC Y mm), joint3 = Z (ASTRO vertical mm, CNC Z mm), joint4 = RZ
+        // (ASTRO J4 EOAT °, CNC RZ °). When enabled, a commanded move that would
+        // cross a set limit faults the robot; recovery requires operator bypass.
+        //
+        // Each bound is nullable and defaults to unset (null) — an unset bound is
+        // simply not enforced, so nothing is limited until the operator dials one in.
+
+        /// <summary>Master switch for joint soft limits. Off by default.</summary>
+        [JsonPropertyName("jointLimitsEnabled")]
+        public bool JointLimitsEnabled { get; set; } = false;
+
+        [JsonPropertyName("joint1Min")] public double? Joint1Min { get; set; }
+        [JsonPropertyName("joint1Max")] public double? Joint1Max { get; set; }
+        [JsonPropertyName("joint2Min")] public double? Joint2Min { get; set; }
+        [JsonPropertyName("joint2Max")] public double? Joint2Max { get; set; }
+        [JsonPropertyName("joint3Min")] public double? Joint3Min { get; set; }
+        [JsonPropertyName("joint3Max")] public double? Joint3Max { get; set; }
+        [JsonPropertyName("joint4Min")] public double? Joint4Min { get; set; }
+        [JsonPropertyName("joint4Max")] public double? Joint4Max { get; set; }
     }
 
     public static class RobotConfigService
