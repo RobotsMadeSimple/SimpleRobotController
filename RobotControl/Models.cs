@@ -775,6 +775,24 @@ public static class LocalFrame
             world.RY,
             world.RZ - local.RZ);
     }
+
+    /// <summary>
+    /// Rotate a direction vector (X/Y/Z) from the local frame into world space,
+    /// with no translation. Orientation components (RX/RY/RZ) pass through
+    /// unchanged. Used to jog along the local frame's axes: a "+X" jog moves the
+    /// tool along the local X direction in world space.
+    /// </summary>
+    public static Vector6 Rotate(Vector6 local, Vector6 dir)
+    {
+        var r = Rotation(local);
+        return new Vector6(
+            r[0, 0] * dir.X + r[0, 1] * dir.Y + r[0, 2] * dir.Z,
+            r[1, 0] * dir.X + r[1, 1] * dir.Y + r[1, 2] * dir.Z,
+            r[2, 0] * dir.X + r[2, 1] * dir.Y + r[2, 2] * dir.Z,
+            dir.RX,
+            dir.RY,
+            dir.RZ);
+    }
 }
 
 public class Vector6

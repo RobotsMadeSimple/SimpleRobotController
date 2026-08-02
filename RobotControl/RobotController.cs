@@ -1165,6 +1165,13 @@ namespace Controller.RobotControl
                         Vector6? pose = _kinematics.GetVisualRobotPose(CurrentPosition, CurrentTool);
                         var (j1, j2x, j2z, j4) = _kinematics.GetJointAngles();
 
+                        // Position expressed in the active local's frame — the jog page
+                        // shows this so the readout tracks the selected local. Equals
+                        // the world position when no local is active.
+                        var localPos = ActiveLocalOffset is { } locStat
+                            ? LocalFrame.Inverse(locStat, CurrentPosition)
+                            : CurrentPosition;
+
                         payload = new
                         {
                             moving = IsMoving,
@@ -1181,6 +1188,11 @@ namespace Controller.RobotControl
                             rx = CurrentPosition.RX,
                             ry = CurrentPosition.RY,
                             rz = CurrentPosition.RZ,
+
+                            localX = localPos.X,
+                            localY = localPos.Y,
+                            localZ = localPos.Z,
+                            localRZ = localPos.RZ,
 
                             targetX = this.TargetPosition.X,
                             targetY = this.TargetPosition.Y,
@@ -2032,7 +2044,14 @@ namespace Controller.RobotControl
                         homingState = "BackOffVertical";
                         break;
                     }
-                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    // The last Jog() arg is the profiler's watchdog reset time. RunHoming re-issues
+                    // this jog every tick, but RunMotion (which advances the profiler) runs a full
+                    // ~4ms tick BEFORE the next RunHoming, so the watchdog MUST exceed one tick or it
+                    // expires between the Jog and the next Update and the axis never moves (flicker,
+                    // no motion). It used to be 0.001s, which only worked when Loop() was a tight
+                    // busy-spin; the 4ms gated tick requires a larger value. ExecuteHardStop handles
+                    // the precise stop at the switch, so this is only a safety net.
+                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
                     if (stb.Input2)
                     {
                         ExecuteHardStop();
@@ -2067,7 +2086,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeVerticalSlow":
-                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
                     if (stb.Input2)
                     {
                         ExecuteHardStop();
@@ -2101,7 +2120,7 @@ namespace Controller.RobotControl
                         homingState = "BackOffHorizontal";
                         break;
                     }
-                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
                     if (stb.Input3)
                     {
                         ExecuteHardStop();
@@ -2136,7 +2155,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeHorizontalSlow":
-                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
                     if (stb.Input3)
                     {
                         ExecuteHardStop();
@@ -2170,7 +2189,7 @@ namespace Controller.RobotControl
                         homingState = "BackOffJ1";
                         break;
                     }
-                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
                     if (stb.Input1)
                     {
                         ExecuteHardStop();
@@ -2205,7 +2224,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "HomeJ1Slow":
-                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
                     if (stb.Input1)
                     {
                         ExecuteHardStop();
@@ -2290,7 +2309,7 @@ namespace Controller.RobotControl
                         homingState = "CNC_BackOffZ";
                         break;
                     }
-                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
                     if (stb.Input3)
                     {
                         ExecuteHardStop();
@@ -2323,7 +2342,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "CNC_HomeZSlow":
-                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
                     if (stb.Input3)
                     {
                         ExecuteHardStop();
@@ -2349,7 +2368,7 @@ namespace Controller.RobotControl
                         homingState = "CNC_BackOffX";
                         break;
                     }
-                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
                     if (stb.Input1)
                     {
                         ExecuteHardStop();
@@ -2382,7 +2401,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "CNC_HomeXSlow":
-                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
                     if (stb.Input1)
                     {
                         ExecuteHardStop();
@@ -2408,7 +2427,7 @@ namespace Controller.RobotControl
                         homingState = "CNC_BackOffY";
                         break;
                     }
-                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSpeed, 100, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
                     if (stb.Input2)
                     {
                         ExecuteHardStop();
@@ -2441,7 +2460,7 @@ namespace Controller.RobotControl
                     break;
 
                 case "CNC_HomeYSlow":
-                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.001);
+                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
                     if (stb.Input2)
                     {
                         ExecuteHardStop();
@@ -2641,6 +2660,10 @@ namespace Controller.RobotControl
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
             if (_config.RobotType == "CNC4Axis") lineSpeed /= 3.0;
+            // Jog along the active local's axes: rotate the linear direction into
+            // world space so "+X" tracks the local frame, not the world frame.
+            if (ActiveLocalOffset is { } loc)
+                jogDirection = LocalFrame.Rotate(loc, jogDirection);
             joggingMotionProfiler.Jog(jogDirection, lineSpeed, lineAccel, lineDecel);
         }
 
