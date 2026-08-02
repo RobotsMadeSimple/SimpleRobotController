@@ -22,7 +22,7 @@ namespace Controller.RobotControl.MotionProfilers
         private double speed;
         private double accel;
         private double decel;
-        private bool _stopRequested = false;
+        private volatile bool _stopRequested = false;
 
         public Vector6 Update(Vector6 currentPosition)
         {

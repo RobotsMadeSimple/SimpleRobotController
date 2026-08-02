@@ -25,7 +25,7 @@ namespace Controller.RobotControl.MotionProfilers
         private Vector6 _capturedDir = Vector6.Zero;
         private bool _hasCapturedDir = false;
         private Vector6 _lockedJogAxis = Vector6.Zero;
-        private bool _stopRequested = false;
+        private volatile bool _stopRequested = false;
 
         public Vector6 Update(Vector6 currentPosition)
         {
