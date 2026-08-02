@@ -1047,6 +1047,16 @@ public class RobotCommand
 {
     public string? CommandType { get; set; }
 
+    /// <summary>
+    /// Server-set jog epoch, stamped when the command is enqueued. A StopJog bumps
+    /// the controller's jog generation; a queued jog whose stamp is stale (a stop
+    /// arrived after it was enqueued) is dropped instead of re-starting the jog —
+    /// this prevents a trailing jog command from re-enabling motion right after a
+    /// release. JsonIgnore so app payloads can't spoof it.
+    /// </summary>
+    [JsonIgnore]
+    public int JogGeneration { get; set; }
+
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 

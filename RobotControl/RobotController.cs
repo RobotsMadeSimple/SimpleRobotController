@@ -57,6 +57,12 @@ namespace Controller.RobotControl
         // Drain-queue flag — set from any thread, consumed exclusively on the control loop thread in RunCommands()
         private volatile bool _drainQueueRequested;
 
+        // Jog epoch. Bumped by StopJog (any thread); each jog command is stamped with
+        // the current value when enqueued. A queued jog whose stamp is behind the
+        // current generation was superseded by a stop and is dropped rather than
+        // re-enabling motion after the operator released.
+        private volatile int _jogGeneration;
+
         // ── Joint soft-limit fault ────────────────────────────────────────────
         // A commanded move that crosses a joint limit latches _faulted: all motion
         // halts and stays halted until the operator engages _limitBypass (recovery
@@ -1111,6 +1117,10 @@ namespace Controller.RobotControl
                 // ── End aux axis commands ──────────────────────────────────────────
 
                 case "StopJog":
+                    // Bump the epoch first so any jog already queued (but not yet
+                    // processed on the loop thread) is invalidated and cannot
+                    // re-enable motion after this stop.
+                    System.Threading.Interlocked.Increment(ref _jogGeneration);
                     joggingMotionProfiler.StopJog();
                     jointJoggingProfiler.StopJog();
                     toolJoggingMotionProfiler.StopJog();
@@ -1889,6 +1899,9 @@ namespace Controller.RobotControl
                 default:
                     RobotCommand NewCommand = LoadParams<RobotCommand>(command);
                     NewCommand.CommandType = command.Command;
+                    // Stamp with the current jog epoch so a stop arriving after this
+                    // enqueue can invalidate a trailing jog (see _jogGeneration).
+                    NewCommand.JogGeneration = _jogGeneration;
                     QueuedCommands.Enqueue(NewCommand);
                     break;
 
@@ -1970,15 +1983,19 @@ namespace Controller.RobotControl
                     break;
 
                 case "JogL":
-                    JogL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    // Drop a jog superseded by a later StopJog — see _jogGeneration.
+                    if (Command.JogGeneration == _jogGeneration)
+                        JogL(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 case "JogJ":
-                    JogJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    if (Command.JogGeneration == _jogGeneration)
+                        JogJ(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 case "JogTool":
-                    JogTool(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
+                    if (Command.JogGeneration == _jogGeneration)
+                        JogTool(Command.Vector6, Command.Speed, Command.Accel, Command.Decel);
                     break;
 
                 default:
