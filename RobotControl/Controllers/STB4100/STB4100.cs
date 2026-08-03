@@ -71,6 +71,7 @@ public class STB4100
         Output4 = (_outputsByte & 8) != 0;
     }
 
+    private readonly Stopwatch _statusTimer    = Stopwatch.StartNew();
     private readonly Stopwatch _autoResetTimer = new();
 
     public StepperMotor Motor1 { get; }
@@ -109,9 +110,11 @@ public class STB4100
         {
             Console.WriteLine("STB4100 found! Opening Connection");
             _stream = _device.Open();
-            // Bound the blocking read so a silent board parks StatusLoop for at
-            // most this long instead of forever (the HidSharp default).
-            _stream.ReadTimeout = 200;
+            // Short read timeout so GetStatus's drain loop turns "queue empty" into
+            // a fast TimeoutException instead of blocking (the HidSharp default is
+            // to block forever). A HID report is delivered atomically, so 2ms is
+            // ample to pick up any report that is actually queued.
+            _stream.ReadTimeout = 2;
             connected = true;
             return _stream != null && _stream.CanRead && _stream.CanWrite;
         }
@@ -158,38 +161,16 @@ public class STB4100
 
     private void ControlLoop()
     {
-        var sw = Stopwatch.StartNew();
-        long nextTick = 0;
-
-        double periodSec = 0.004; // 4ms
-        long periodTicks = (long)(periodSec * Stopwatch.Frequency);
-
         while (true)
         {
-            long now = sw.ElapsedTicks;
+            if (connected) Loop();
 
-            // Full-throttle while moving: stream a command every iteration (the USB
-            // HID write self-paces this to ~1kHz) so the driver's step queue stays
-            // ~1ms shallow. The gated 4ms tick let ~4ms of steps queue on the board;
-            // a homing hard-stop at the sensor then overshot by that queued distance.
-            // Idle → gate to 20ms so we don't hammer USB while parked.
-            if (moving || now >= nextTick)
-            {
-                if (connected) Loop();
-
-                periodSec = moving ? 0.004 : 0.02;
-                periodTicks = (long)(periodSec * Stopwatch.Frequency);
-                // Resync from now so coming out of idle doesn't burst a backlog.
-                nextTick = now + periodTicks;
-            }
-
-            // While moving, busy-wait for tight command pacing to the driver —
-            // Thread.Sleep(1) can drift up to ~15ms on Windows, jittering the step
-            // stream. Idle → sleep to release the core.
-            if (moving)
-                Thread.SpinWait(64);
-            else
-                Thread.Sleep(1);
+            // No idle throttle: stream every iteration (the USB HID write self-paces
+            // this to ~1kHz) so the driver's step queue stays ~1ms shallow and the
+            // command/status stream never pauses between motion states. SpinWait
+            // keeps pacing tight without the ~15ms Windows sleep jitter. Burns a core
+            // while parked — accepted on the mini-PC target.
+            Thread.SpinWait(64);
         }
     }
 
@@ -205,19 +186,21 @@ public class STB4100
                 continue;
             }
 
-            // Read continuously instead of on a timer. The board emits an input
-            // report for every command ControlLoop writes (250/s while moving,
-            // 50/s idle) and HidSharp queues them, so sampling slower than they
-            // arrive backs that queue up — and each queued report is added
-            // staleness on Input1-4. Homing stops the axis on the tick it sees a
-            // sensor input, so stale inputs are overshoot distance: the old
-            // 20ms-gate-plus-Sleep(15) sampled about every 30ms, worth ~0.6mm at
-            // the 20mm/s homing speed before any queue backlog on top of it.
-            // Read() blocks until the next report, so this self-paces to the
-            // board's report rate rather than busy-spinning, and any backlog
-            // drains at full speed because queued reads return immediately.
-            if (!GetStatus())
-                Thread.Sleep(1); // no full report — don't spin on a quiet device
+            // Sample on the ~20ms timer (previous read-loop behaviour), but each
+            // sample drains the HID input queue to the freshest report rather than
+            // reading one stale report off the front. The board answers every
+            // command with a report (~1kHz while moving) and the OS queues them
+            // oldest-first, so a single read per sample would chase an ever-growing
+            // backlog — and a full kernel ring can evict a homing sensor's trigger
+            // report before an oldest-first reader ever reaches it, which reads as
+            // the sensor being ignored entirely. Draining to newest keeps Input1-4
+            // current no matter how fast the command stream is.
+            if (_statusTimer.ElapsedMilliseconds >= 20)
+            {
+                GetStatus();
+                _statusTimer.Restart();
+            }
+            Thread.Sleep(1);
         }
     }
 
@@ -307,31 +290,46 @@ public class STB4100
     }
 
     /// <summary>
-    /// Reads one input report and applies it to status, step counts and inputs.
-    /// Returns false if no complete report was available, so the caller can back
-    /// off instead of spinning.
+    /// Drains the HID input queue to the newest complete report and applies it to
+    /// status, step counts and inputs. Returns false if no complete report was
+    /// available, so the caller can back off instead of spinning.
     /// </summary>
     private bool GetStatus()
     {
-        var buffer = new byte[49];
         if (_stream is null)
             return false;
 
-        int bytesRead;
-        try { bytesRead = _stream.Read(buffer); }
-        catch (TimeoutException)
+        // Drain to the freshest report. The board answers every command with a
+        // report (~1kHz while moving) and the OS queues them oldest-first, so
+        // reading a single report per sample would hand back stale inputs and let
+        // the queue grow without bound. Read until it empties — the short
+        // ReadTimeout turns "queue empty" into a quick TimeoutException — and keep
+        // only the last full buffer.
+        var buffer = new byte[49];
+        byte[]? latest = null;
+        while (true)
         {
-            // Board sent nothing within ReadTimeout. Not an error — the device is
-            // still open, it just has no news, so don't tear the connection down.
-            return false;
+            int bytesRead;
+            try { bytesRead = _stream.Read(buffer); }
+            catch (TimeoutException)
+            {
+                // Queue drained (or board silent). Not an error — the device is
+                // still open, it just has no more news right now.
+                break;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[STB4100] Read error: {ex.Message} — disconnected");
+                _stream = null; _device = null; connected = false;
+                return false;
+            }
+            if (bytesRead != buffer.Length) break;
+            latest ??= new byte[49];
+            Array.Copy(buffer, latest, buffer.Length);
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[STB4100] Read error: {ex.Message} — disconnected");
-            _stream = null; _device = null; connected = false;
-            return false;
-        }
-        if (bytesRead != buffer.Length) return false;
+
+        if (latest is null) return false;
+        buffer = latest;
 
         status = buffer[1];
 
