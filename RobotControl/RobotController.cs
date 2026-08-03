@@ -266,27 +266,45 @@ namespace Controller.RobotControl
 
         private void ControlLoop()
         {
+            var sw = Stopwatch.StartNew();
+            long nextTick = 0;
+
+            double periodSec = 0.004; // 4ms
+            long periodTicks = (long)(periodSec * Stopwatch.Frequency);
+
             while (true)
             {
-                try
+                long now = sw.ElapsedTicks;
+
+                if (now >= nextTick)
                 {
-                    Loop();
-                }
-                catch (Exception ex)
-                {
-                    // Catch-all: log, hard-stop the robot, then keep looping.
-                    // The process must survive any tick-level exception.
-                    Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
-                    ExecuteHardStop();
+                    try
+                    {
+                        Loop();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Catch-all: log, hard-stop the robot, then keep looping.
+                        // The process must survive any tick-level exception.
+                        Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
+                        ExecuteHardStop();
+                    }
+                    nextTick += periodTicks;
+                    // Resync after a stall (e.g. coming out of an idle sleep) so we
+                    // don't burst-run a backlog of ticks to catch up.
+                    if (nextTick < now) nextTick = now + periodTicks;
                 }
 
-                // No idle throttle: spin continuously so setpoints and the homing
-                // state machine never pause. A gated/slept idle tick between motion
-                // states left a gap where the axis kept coasting but the loop wasn't
-                // re-evaluating sensors, so homing could run straight past a switch.
-                // Keeping the loop flat-out closes that gap. Burns a core while
-                // parked — accepted on the mini-PC target.
-                Thread.SpinWait(SpinIterations);
+                // While moving, busy-wait for precise 4ms pacing — Thread.Sleep(1) is
+                // subject to the ~15ms Windows timer granularity, which adds jitter to
+                // the motion setpoints. Idle → sleep to release the core.
+                // The 4ms tick costs at most 4ms of sensor-reaction latency during
+                // homing (~0.02mm at the 5mm/s slow pass) — the overshoot never came
+                // from this cadence, it came from stale STB input reads.
+                if (IsMoving)
+                    Thread.SpinWait(SpinIterations);
+                else
+                    Thread.Sleep(1);
             }
         }
 
