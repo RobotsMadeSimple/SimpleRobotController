@@ -266,47 +266,27 @@ namespace Controller.RobotControl
 
         private void ControlLoop()
         {
-            var sw = Stopwatch.StartNew();
-            long nextTick = 0;
-
-            double periodSec = 0.004; // 4ms
-            long periodTicks = (long)(periodSec * Stopwatch.Frequency);
-
             while (true)
             {
-                long now = sw.ElapsedTicks;
-
-                // Full-throttle while moving: run every iteration (no 4ms gate) so
-                // setpoints advance continuously and the STB streams a fresh, small
-                // delta each pass. The gated 4ms tick let up to ~4ms of steps queue
-                // on the driver; a homing hard-stop at the sensor then overshot by
-                // whatever the board still had queued. Idle → gate to the 4ms period
-                // and sleep to release the core.
-                if (IsMoving || now >= nextTick)
+                try
                 {
-                    try
-                    {
-                        Loop();
-                    }
-                    catch (Exception ex)
-                    {
-                        // Catch-all: log, hard-stop the robot, then keep looping.
-                        // The process must survive any tick-level exception.
-                        Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
-                        ExecuteHardStop();
-                    }
-                    // Resync from now so coming out of an idle sleep doesn't burst-run
-                    // a backlog of ticks to catch up.
-                    nextTick = now + periodTicks;
+                    Loop();
+                }
+                catch (Exception ex)
+                {
+                    // Catch-all: log, hard-stop the robot, then keep looping.
+                    // The process must survive any tick-level exception.
+                    Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
+                    ExecuteHardStop();
                 }
 
-                // While moving, busy-wait for tight pacing — Thread.Sleep(1) is
-                // subject to the ~15ms Windows timer granularity, which adds jitter to
-                // the motion setpoints. Idle → sleep to release the core.
-                if (IsMoving)
-                    Thread.SpinWait(SpinIterations);
-                else
-                    Thread.Sleep(1);
+                // No idle throttle: spin continuously so setpoints and the homing
+                // state machine never pause. A gated/slept idle tick between motion
+                // states left a gap where the axis kept coasting but the loop wasn't
+                // re-evaluating sensors, so homing could run straight past a switch.
+                // Keeping the loop flat-out closes that gap. Burns a core while
+                // parked — accepted on the mini-PC target.
+                Thread.SpinWait(SpinIterations);
             }
         }
 
