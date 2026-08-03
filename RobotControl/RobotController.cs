@@ -266,52 +266,27 @@ namespace Controller.RobotControl
 
         private void ControlLoop()
         {
-            var sw = Stopwatch.StartNew();
-            long nextTick = 0;
-
-            double periodSec = 0.004; // 4ms
-            long periodTicks = (long)(periodSec * Stopwatch.Frequency);
-
+            // Unthrottled, exactly like the PR #100 era. Back then Loop() contained
+            // its own while(true) and never returned, so the 4ms gate that sat here
+            // was dead code and the motion loop — including RunHoming's sensor
+            // checks — ran flat out. That is the configuration that homed reliably
+            // on hardware, so reproduce it faithfully: no gate, no sleep, no spin.
+            // Burns a core continuously.
             while (true)
             {
-                long now = sw.ElapsedTicks;
-
-                if (now >= nextTick)
+                try
                 {
-                    try
-                    {
-                        Loop();
-                    }
-                    catch (Exception ex)
-                    {
-                        // Catch-all: log, hard-stop the robot, then keep looping.
-                        // The process must survive any tick-level exception.
-                        Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
-                        ExecuteHardStop();
-                    }
-                    nextTick += periodTicks;
-                    // Resync after a stall (e.g. coming out of an idle sleep) so we
-                    // don't burst-run a backlog of ticks to catch up.
-                    if (nextTick < now) nextTick = now + periodTicks;
+                    Loop();
                 }
-
-                // While moving, busy-wait for precise 4ms pacing — Thread.Sleep(1) is
-                // subject to the ~15ms Windows timer granularity, which adds jitter to
-                // the motion setpoints. Idle → sleep to release the core.
-                // The 4ms tick costs at most 4ms of sensor-reaction latency during
-                // homing (~0.02mm at the 5mm/s slow pass) — the overshoot never came
-                // from this cadence, it came from stale STB input reads.
-                if (IsMoving)
-                    Thread.SpinWait(SpinIterations);
-                else
-                    Thread.Sleep(1);
+                catch (Exception ex)
+                {
+                    // Catch-all: log, hard-stop the robot, then keep looping.
+                    // The process must survive any tick-level exception.
+                    Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
+                    ExecuteHardStop();
+                }
             }
         }
-
-        // Spin count between clock checks while busy-waiting during motion. Small
-        // enough that we re-read the timer well under a microsecond apart (precise
-        // pacing) without a bare, maximally-hot loop.
-        private const int SpinIterations = 64;
 
         public void Loop()
         {
