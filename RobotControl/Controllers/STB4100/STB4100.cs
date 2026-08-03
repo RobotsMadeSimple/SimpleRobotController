@@ -71,7 +71,6 @@ public class STB4100
         Output4 = (_outputsByte & 8) != 0;
     }
 
-    private readonly Stopwatch _statusTimer    = Stopwatch.StartNew();
     private readonly Stopwatch _autoResetTimer = new();
 
     public StepperMotor Motor1 { get; }
@@ -110,6 +109,9 @@ public class STB4100
         {
             Console.WriteLine("STB4100 found! Opening Connection");
             _stream = _device.Open();
+            // Bound the blocking read so a silent board parks StatusLoop for at
+            // most this long instead of forever (the HidSharp default).
+            _stream.ReadTimeout = 200;
             connected = true;
             return _stream != null && _stream.CanRead && _stream.CanWrite;
         }
@@ -211,12 +213,20 @@ public class STB4100
                 Connect();
                 continue;
             }
-            if (_statusTimer.ElapsedMilliseconds >= 20)
-            {
-                GetStatus();
-                _statusTimer.Restart();
-            }
-            Thread.Sleep(15);
+
+            // Read continuously instead of on a timer. The board emits an input
+            // report for every command ControlLoop writes (250/s while moving,
+            // 50/s idle) and HidSharp queues them, so sampling slower than they
+            // arrive backs that queue up — and each queued report is added
+            // staleness on Input1-4. Homing stops the axis on the tick it sees a
+            // sensor input, so stale inputs are overshoot distance: the old
+            // 20ms-gate-plus-Sleep(15) sampled about every 30ms, worth ~0.6mm at
+            // the 20mm/s homing speed before any queue backlog on top of it.
+            // Read() blocks until the next report, so this self-paces to the
+            // board's report rate rather than busy-spinning, and any backlog
+            // drains at full speed because queued reads return immediately.
+            if (!GetStatus())
+                Thread.Sleep(1); // no full report — don't spin on a quiet device
         }
     }
 
@@ -286,21 +296,32 @@ public class STB4100
         SendCommand("Reset");
     }
 
-    private void GetStatus()
+    /// <summary>
+    /// Reads one input report and applies it to status, step counts and inputs.
+    /// Returns false if no complete report was available, so the caller can back
+    /// off instead of spinning.
+    /// </summary>
+    private bool GetStatus()
     {
         var buffer = new byte[49];
         if (_stream is null)
-            return;
+            return false;
 
         int bytesRead;
         try { bytesRead = _stream.Read(buffer); }
+        catch (TimeoutException)
+        {
+            // Board sent nothing within ReadTimeout. Not an error — the device is
+            // still open, it just has no news, so don't tear the connection down.
+            return false;
+        }
         catch (Exception ex)
         {
             Console.WriteLine($"[STB4100] Read error: {ex.Message} — disconnected");
             _stream = null; _device = null; connected = false;
-            return;
+            return false;
         }
-        if (bytesRead != buffer.Length) return;
+        if (bytesRead != buffer.Length) return false;
 
         status = buffer[1];
 
@@ -331,6 +352,7 @@ public class STB4100
         Input2 = bits[1];
         Input3 = bits[2];
         Input4 = bits[3];
+        return true;
     }
 
     private void SendCommand(string command)
