@@ -290,11 +290,25 @@ namespace Controller.RobotControl
                         ExecuteHardStop();
                     }
                     nextTick += periodTicks;
+                    // Resync after a stall (e.g. coming out of an idle sleep) so we
+                    // don't burst-run a backlog of ticks to catch up.
+                    if (nextTick < now) nextTick = now + periodTicks;
                 }
 
-                Thread.Sleep(1);
+                // While moving, busy-wait for precise 4ms pacing — Thread.Sleep(1) is
+                // subject to the ~15ms Windows timer granularity, which adds jitter to
+                // the motion setpoints. Idle → sleep to release the core.
+                if (IsMoving)
+                    Thread.SpinWait(SpinIterations);
+                else
+                    Thread.Sleep(1);
             }
         }
+
+        // Spin count between clock checks while busy-waiting during motion. Small
+        // enough that we re-read the timer well under a microsecond apart (precise
+        // pacing) without a bare, maximally-hot loop.
+        private const int SpinIterations = 64;
 
         public void Loop()
         {
