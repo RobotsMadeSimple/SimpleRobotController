@@ -182,10 +182,17 @@ public class STB4100
                 }
 
                 nextTick += periodTicks;
-                
+                // Resync after a stall so we don't burst-run a backlog to catch up.
+                if (nextTick < now) nextTick = now + periodTicks;
             }
 
-            Thread.Sleep(1);
+            // While moving, busy-wait for precise command pacing to the driver —
+            // Thread.Sleep(1) can drift up to ~15ms on Windows, jittering the step
+            // stream. Idle → sleep to release the core.
+            if (moving)
+                Thread.SpinWait(64);
+            else
+                Thread.Sleep(1);
         }
     }
 
