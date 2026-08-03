@@ -237,6 +237,15 @@ public class STB4100
         if (move && !_jogging) _jog = true;
         if (!move && _jogging) _stopJog = true;
 
+        // Motion resumed before the stop handshake finished — cancel the stop.
+        // Without this the state machine rides out the whole stop (case 2 sends
+        // no step commands, and it can't re-arm because _jogging is still true),
+        // while the motion loop keeps advancing TargetAngle on wall-clock. The
+        // banked StepError then lands in one Jog command as a single violent
+        // burst. Homing hits this on every direction change: the back-off move
+        // starts while the previous approach is still stopping.
+        if (move && _stopJog) _stopJog = false;
+
         if (_jog)
         {
             switch (_jogState)
@@ -253,6 +262,16 @@ public class STB4100
                     break;
 
                 case 2:
+                    // Stop was cancelled above. Go back through case 0 so the board
+                    // gets its jog-mode status byte again before we stream steps,
+                    // bounding the no-send gap to a couple of ticks instead of an
+                    // unbounded wait on the board reporting idle.
+                    if (!_stopJog)
+                    {
+                        _jogState = 0;
+                        break;
+                    }
+
                     SendStatus(6);
                     if (status == 1)
                     {
