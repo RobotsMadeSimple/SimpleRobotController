@@ -172,7 +172,11 @@ public class STB4100
 
                 if (moving)
                 {
-                    periodSec = 0.005; // 5ms
+                    // Match the motion control loop's 4ms period. Running this at a
+                    // different rate (was 5ms) made the two precise loops beat at
+                    // |250-200| = 50Hz, delivering an uneven 1,2,1,2… steps-per-tick
+                    // stream — an audible hum, worst on the coupled CoreXY motors.
+                    periodSec = 0.004; // 4ms — aligned with ControlLoop
                     periodTicks = (long)(periodSec * Stopwatch.Frequency);
                 }
                 else
