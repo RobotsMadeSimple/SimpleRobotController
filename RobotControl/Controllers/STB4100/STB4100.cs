@@ -168,31 +168,22 @@ public class STB4100
         {
             long now = sw.ElapsedTicks;
 
-            if (now >= nextTick)
+            // Full-throttle while moving: stream a command every iteration (the USB
+            // HID write self-paces this to ~1kHz) so the driver's step queue stays
+            // ~1ms shallow. The gated 4ms tick let ~4ms of steps queue on the board;
+            // a homing hard-stop at the sensor then overshot by that queued distance.
+            // Idle → gate to 20ms so we don't hammer USB while parked.
+            if (moving || now >= nextTick)
             {
                 if (connected) Loop();
 
-                if (moving)
-                {
-                    // Match the motion control loop's 4ms period. Running this at a
-                    // different rate (was 5ms) made the two precise loops beat at
-                    // |250-200| = 50Hz, delivering an uneven 1,2,1,2… steps-per-tick
-                    // stream — an audible hum, worst on the coupled CoreXY motors.
-                    periodSec = 0.004; // 4ms — aligned with ControlLoop
-                    periodTicks = (long)(periodSec * Stopwatch.Frequency);
-                }
-                else
-                {
-                    periodSec = 0.02; // 20ms
-                    periodTicks = (long)(periodSec * Stopwatch.Frequency);
-                }
-
-                nextTick += periodTicks;
-                // Resync after a stall so we don't burst-run a backlog to catch up.
-                if (nextTick < now) nextTick = now + periodTicks;
+                periodSec = moving ? 0.004 : 0.02;
+                periodTicks = (long)(periodSec * Stopwatch.Frequency);
+                // Resync from now so coming out of idle doesn't burst a backlog.
+                nextTick = now + periodTicks;
             }
 
-            // While moving, busy-wait for precise command pacing to the driver —
+            // While moving, busy-wait for tight command pacing to the driver —
             // Thread.Sleep(1) can drift up to ~15ms on Windows, jittering the step
             // stream. Idle → sleep to release the core.
             if (moving)
