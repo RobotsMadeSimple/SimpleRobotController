@@ -154,6 +154,11 @@ public class STB4100
         new Thread(ControlLoop) { IsBackground = true }.Start();
     }
 
+    // LOAD-BEARING TIMING — see docs/stb-loop-timing.md before changing.
+    // The 5ms-moving / 20ms-idle gate keeps the command (and therefore report)
+    // rate bounded to what StatusLoop provably keeps up with. Full-throttling
+    // this loop floods the reader and starves the homing sensor inputs. Broke
+    // homing in #112/#113; restored to this shape in #115.
     private void ControlLoop()
     {
         var sw = Stopwatch.StartNew();
@@ -190,6 +195,10 @@ public class STB4100
     }
 
 
+    // LOAD-BEARING TIMING — see docs/stb-loop-timing.md before changing.
+    // Gated ~20ms sampling with a plain blocking single read per call. Reading
+    // continuously or draining-to-newest here livelocks/starves the sensor
+    // inputs (#113). Do not add a ReadTimeout or a drain loop to GetStatus.
     private void StatusLoop()
     {
         while (true)

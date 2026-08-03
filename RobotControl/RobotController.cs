@@ -264,6 +264,7 @@ namespace Controller.RobotControl
             new Thread(ControlLoop) { IsBackground = true }.Start();
         }
 
+        // LOAD-BEARING TIMING — see docs/stb-loop-timing.md before changing.
         private void ControlLoop()
         {
             // Unthrottled, exactly like the PR #100 era. Back then Loop() contained
@@ -271,7 +272,8 @@ namespace Controller.RobotControl
             // was dead code and the motion loop — including RunHoming's sensor
             // checks — ran flat out. That is the configuration that homed reliably
             // on hardware, so reproduce it faithfully: no gate, no sleep, no spin.
-            // Burns a core continuously.
+            // Adding any gate/Sleep/SpinWait here delays sensor reaction and
+            // reintroduces homing overshoot (#112). Burns a core continuously.
             while (true)
             {
                 try
