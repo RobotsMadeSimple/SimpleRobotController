@@ -276,7 +276,13 @@ namespace Controller.RobotControl
             {
                 long now = sw.ElapsedTicks;
 
-                if (now >= nextTick)
+                // Full-throttle while moving: run every iteration (no 4ms gate) so
+                // setpoints advance continuously and the STB streams a fresh, small
+                // delta each pass. The gated 4ms tick let up to ~4ms of steps queue
+                // on the driver; a homing hard-stop at the sensor then overshot by
+                // whatever the board still had queued. Idle → gate to the 4ms period
+                // and sleep to release the core.
+                if (IsMoving || now >= nextTick)
                 {
                     try
                     {
@@ -289,13 +295,12 @@ namespace Controller.RobotControl
                         Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
                         ExecuteHardStop();
                     }
-                    nextTick += periodTicks;
-                    // Resync after a stall (e.g. coming out of an idle sleep) so we
-                    // don't burst-run a backlog of ticks to catch up.
-                    if (nextTick < now) nextTick = now + periodTicks;
+                    // Resync from now so coming out of an idle sleep doesn't burst-run
+                    // a backlog of ticks to catch up.
+                    nextTick = now + periodTicks;
                 }
 
-                // While moving, busy-wait for precise 4ms pacing — Thread.Sleep(1) is
+                // While moving, busy-wait for tight pacing — Thread.Sleep(1) is
                 // subject to the ~15ms Windows timer granularity, which adds jitter to
                 // the motion setpoints. Idle → sleep to release the core.
                 if (IsMoving)
