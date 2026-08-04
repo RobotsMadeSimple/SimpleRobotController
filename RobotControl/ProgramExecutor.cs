@@ -462,6 +462,20 @@ namespace Controller.RobotControl
             _persistentVarNames.Clear();
         }
 
+        // [diag] Program-thread heartbeat — prints the executor's live state so a
+        // hang shows exactly what it is waiting on (or, if absent, that the thread
+        // is blocked/dead).
+        private long _dbgHbTs;
+        public void DiagHeartbeat()
+        {
+            if (_dbgHbTs != 0 && Diag.MsBetween(_dbgHbTs) < 2000) return;
+            _dbgHbTs = Diag.Now();
+            int idx = _frameStack.Count > 0 ? _frameStack.Peek().Index : -1;
+            Diag.Log($"[prog-hb] running={_running} awaiting={_awaitingMove} auxWait={_awaitingAuxMove} " +
+                     $"bgWait={_waitingForBackground is not null} frames={_frameStack.Count} idx={idx} " +
+                     $"qEmpty={_controller.QueuedCommands.IsEmpty} busy={_controller.MotionBusy}");
+        }
+
         // ── Main update — called every control loop tick ──────────────────────
 
         public void Update()

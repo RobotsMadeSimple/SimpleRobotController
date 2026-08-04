@@ -350,6 +350,7 @@ namespace Controller.RobotControl
                 {
                     long ts = Diag.Now();
                     programExecutor?.Update();
+                    programExecutor?.DiagHeartbeat();
                     backgroundProgramManager.Update();
                     double progMs = Diag.MsBetween(ts);
                     if (progMs > Diag.SlowStepMs)
