@@ -31,8 +31,15 @@ namespace Controller.RobotControl.AuxAxis
         public string? PortName  { get; private set; }
         public bool    Connected { get; private set; }
 
-        // Counts M commands sent but not yet DONE — drives IsMoving.
-        private volatile int _inflightCount = 0;
+        // Counts M moves commanded but not yet DONE — drives IsMoving. Incremented
+        // at enqueue time (StartMove), NOT when the command reaches the serial port
+        // on the device thread, so IsMoving is true the instant a move is commanded.
+        // Otherwise a caller that polls "is it moving?" right after StartMove (the
+        // program executor's aux-wait) sees false and treats the not-yet-sent move
+        // as already finished, skipping ahead before the motor even gets its command.
+        // Written from the caller thread and the device thread, so guard every access
+        // with Interlocked writes and Volatile reads.
+        private int _inflightCount = 0;
 
         // Tracks whether motor drivers are currently enabled.
         private volatile bool _motorEnabled = true;
@@ -53,7 +60,7 @@ namespace Controller.RobotControl.AuxAxis
         };
 
         /// <summary>True while an indexed M move is executing on the Arduino.</summary>
-        public bool IsMoving => _inflightCount > 0;
+        public bool IsMoving => Volatile.Read(ref _inflightCount) > 0;
 
         /// <summary>Fired on the device thread when connection state changes.</summary>
         public event Action<bool>? ConnectionChanged;
@@ -228,7 +235,7 @@ namespace Controller.RobotControl.AuxAxis
                     {
                         var cmd = _commandQueue.Dequeue();
                         SafeWrite(cmd);
-                        if (cmd[0] == 'M') _inflightCount++;
+                        // NOTE: _inflightCount is bumped at enqueue (StartMove), not here.
                     }
                 }
 
@@ -250,6 +257,11 @@ namespace Controller.RobotControl.AuxAxis
 
             try { port.Close(); } catch { }
             _port = null;
+            // Drop any queued/in-flight moves — a mid-move disconnect means they can
+            // never report DONE, so clear them rather than leave IsMoving stuck true
+            // and hang a program that is waiting on this aux axis.
+            lock (_lock) _commandQueue.Clear();
+            Interlocked.Exchange(ref _inflightCount, 0);
             Console.WriteLine($"[AuxAxis:{Id}] Disconnected");
         }
 
@@ -264,7 +276,9 @@ namespace Controller.RobotControl.AuxAxis
             if (string.IsNullOrEmpty(line)) return;
             if (line.StartsWith("DONE:") && int.TryParse(line.Substring(5), out int axis))
             {
-                if (_inflightCount > 0) _inflightCount--;
+                // Floor at zero in case of a spurious or duplicate DONE.
+                if (Interlocked.Decrement(ref _inflightCount) < 0)
+                    Interlocked.Increment(ref _inflightCount);
                 if ((uint)axis < 4)
                 {
                     lock (_lock)
@@ -291,6 +305,11 @@ namespace Controller.RobotControl.AuxAxis
             {
                 if ((uint)axis < 4) _pendingMoves[axis].Enqueue(signedSteps);
                 _commandQueue.Enqueue($"M:{axis},{steps},{Math.Max(1, velocityHz)},{Math.Max(1, accelHz)},{Math.Max(1, decelHz)}");
+                // Count the move in-flight now, at enqueue — not when it reaches the
+                // serial port on the device thread — so IsMoving is true the moment
+                // this returns and a caller polling completion cannot mistake the
+                // not-yet-sent move for a finished one.
+                Interlocked.Increment(ref _inflightCount);
             }
         }
 
@@ -329,7 +348,7 @@ namespace Controller.RobotControl.AuxAxis
             lock (_lock)
             {
                 _commandQueue.Clear();
-                _inflightCount = 0;
+                Interlocked.Exchange(ref _inflightCount, 0);
                 _commandQueue.Enqueue("X");
                 foreach (var q in _pendingMoves) q.Clear();
             }
