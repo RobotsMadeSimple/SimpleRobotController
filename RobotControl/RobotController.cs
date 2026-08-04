@@ -294,6 +294,8 @@ namespace Controller.RobotControl
         {
             // [diag] phase timing — logs only when a tick stalls (see Diag.SlowTickMs).
             Diag.LoopSw.Restart();
+            int _gc0 = GC.CollectionCount(0);
+            int _gc2 = GC.CollectionCount(2);
 
             // Consume hard-stop flag before anything else touches the profilers
             if (_hardStopRequested)
@@ -321,7 +323,8 @@ namespace Controller.RobotControl
 
             if (tHoming > Diag.SlowTickMs)
                 Diag.Log($"cycle {tHoming:F1}ms | cmds={tCmds:F1} prog={tProg - tCmds:F1} " +
-                         $"bg={tBg - tProg:F1} motion={tMotion - tBg:F1} homing={tHoming - tMotion:F1}");
+                         $"bg={tBg - tProg:F1} motion={tMotion - tBg:F1} homing={tHoming - tMotion:F1} " +
+                         $"| gc0={GC.CollectionCount(0) - _gc0} gc2={GC.CollectionCount(2) - _gc2}");
 
             // Let the stepper motor drive towards the new targets
             stb.moving = IsMoving;
