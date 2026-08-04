@@ -544,6 +544,7 @@ namespace Controller.RobotControl
                 if (!_controller.IsAuxMoving)
                 {
                     _awaitingAuxMove = false;
+                    Diag.AuxWaitDone();
                     if (_pendingAuxStep is not null)
                     {
                         ReportStepCompleted(_pendingAuxStep);
@@ -629,6 +630,7 @@ namespace Controller.RobotControl
             }
 
             var step = frame.Steps[frame.Index];
+            Diag.StepStart(frame.Index, step.Type);
             ExecuteStep(step, frame);
         }
 
@@ -2387,6 +2389,7 @@ namespace Controller.RobotControl
                 frame.Index++;
                 _awaitingAuxMove = true;
                 _pendingAuxStep  = step;
+                Diag.AuxDispatch(_controller.IsAuxMoving);
             }
             else
             {
@@ -2702,6 +2705,7 @@ namespace Controller.RobotControl
         /// <summary>Increments the completed step count and emits the updated progress.</summary>
         private void ReportStepCompleted(ProgramStep step)
         {
+            Diag.StepDone(step.Type);
             if (_loopDepth == 0) _globalStepIndex++;
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {

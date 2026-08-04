@@ -292,24 +292,36 @@ namespace Controller.RobotControl
 
         public void Loop()
         {
+            // [diag] phase timing — logs only when a tick stalls (see Diag.SlowTickMs).
+            Diag.LoopSw.Restart();
+
             // Consume hard-stop flag before anything else touches the profilers
             if (_hardStopRequested)
                 ExecuteHardStop();
 
             // Execute pending robot commands
             RunCommands();
+            double tCmds = Diag.LoopSw.Elapsed.TotalMilliseconds;
 
             // Step through any active built program
             programExecutor?.Update();
+            double tProg = Diag.LoopSw.Elapsed.TotalMilliseconds;
 
             // Step through all background programs
             backgroundProgramManager.Update();
+            double tBg = Diag.LoopSw.Elapsed.TotalMilliseconds;
 
             // Run the robot motion control
             RunMotion();
+            double tMotion = Diag.LoopSw.Elapsed.TotalMilliseconds;
 
             // Execute Homing
             RunHoming();
+            double tHoming = Diag.LoopSw.Elapsed.TotalMilliseconds;
+
+            if (tHoming > Diag.SlowTickMs)
+                Diag.Log($"cycle {tHoming:F1}ms | cmds={tCmds:F1} prog={tProg - tCmds:F1} " +
+                         $"bg={tBg - tProg:F1} motion={tMotion - tBg:F1} homing={tHoming - tMotion:F1}");
 
             // Let the stepper motor drive towards the new targets
             stb.moving = IsMoving;
