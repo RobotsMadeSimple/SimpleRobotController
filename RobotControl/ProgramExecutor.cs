@@ -808,7 +808,11 @@ namespace Controller.RobotControl
             Diag.ExecMove(frame.Index, step.Type.ToString(), _awaitingMove);
             if (_awaitingMove) return;
 
-            if (!ResolveMoveTarget(step, out Vector6 target)) return;
+            if (!ResolveMoveTarget(step, out Vector6 target))
+            {
+                Diag.Log($"[exec] ResolveMoveTarget FAILED idx={frame.Index} {step.Type}");
+                return;
+            }
 
             bool hasToolOffset = HasToolOffset(step);
 
@@ -2739,6 +2743,7 @@ namespace Controller.RobotControl
 
         private void Finish(global::ProgramStatus status, string description)
         {
+            Diag.Log($"[exec] FINISH {status}: {description}");
             SavePersistentVars();
             _controller.ActiveCncToolpath = null;
             _running              = false;
