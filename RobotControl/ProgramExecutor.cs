@@ -522,6 +522,7 @@ namespace Controller.RobotControl
                 // fields; MotionBusy is the published, race-free completion signal.
                 if (_controller.QueuedCommands.IsEmpty && !_controller.MotionBusy)
                 {
+                    Diag.Log($"[exec] move complete — clearing awaitingMove (pendingStep={_pendingStep is not null} pendingSteps={_pendingSteps is not null})");
                     _awaitingMove = false;
                     // Report the step as completed now that the move has finished
                     if (_pendingStep is not null)
@@ -804,6 +805,7 @@ namespace Controller.RobotControl
 
         private void ExecuteMove(ProgramStep step, StepListFrame frame)
         {
+            Diag.ExecMove(frame.Index, step.Type.ToString(), _awaitingMove);
             if (_awaitingMove) return;
 
             if (!ResolveMoveTarget(step, out Vector6 target)) return;

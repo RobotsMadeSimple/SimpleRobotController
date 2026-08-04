@@ -89,6 +89,15 @@ namespace Controller.RobotControl
                 Console.WriteLine($"[diag] SLOW step exec {stepType} idx={index} {ms:F1}ms — blocked the control loop (motion frozen this long)");
         }
 
+        // ── Executor dispatch trace (rate-limited to avoid flooding) ──────────
+        private static long _execTs;
+        public static void ExecMove(int idx, string type, bool awaiting)
+        {
+            if (_execTs != 0 && MsBetween(_execTs) < 400) return;
+            _execTs = Stopwatch.GetTimestamp();
+            Console.WriteLine($"[diag] exec ExecuteMove idx={idx} {type} awaitingMove={awaiting}");
+        }
+
         // ── Aux move dispatch → wait-complete ─────────────────────────────────
         public static void AuxDispatch(bool isAuxMovingNow)
         {
