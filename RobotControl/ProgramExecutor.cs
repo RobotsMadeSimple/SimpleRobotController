@@ -346,6 +346,7 @@ namespace Controller.RobotControl
 
         public void Stop()
         {
+            Diag.Log($"[exec] Stop() called running={_running} bg={_isBackground}\n{new System.Diagnostics.StackTrace(true)}");
             if (!_running) return;
 
             // Background executors stop dead — a paused background program would
