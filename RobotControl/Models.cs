@@ -1095,6 +1095,14 @@ public class RobotCommand
     [JsonPropertyName("statusUpdate")]
     public ProgramCycleUpdate? StatusUpdate { get; set; }
 
+    /// <summary>
+    /// Waypoints for a "StartContinuous" (blended) path. Carried on the command so
+    /// the blended move is started on the motion thread inside RunCommands, rather
+    /// than the program-executor thread mutating motion state directly.
+    /// </summary>
+    [JsonIgnore] public List<Vector6>? Waypoints  { get; set; }
+    [JsonIgnore] public List<double>?  BlendRadii { get; set; }
+
     public Vector6 Vector6 => new(X ?? 0, Y ?? 0, Z ?? 0, RX ?? 0, RY ?? 0, RZ ?? 0);
     public Vector6 ToolOffsetVector6 => new(TX ?? 0, TY ?? 0, TZ ?? 0, TRX ?? 0, TRY ?? 0, TRZ ?? 0);
 }

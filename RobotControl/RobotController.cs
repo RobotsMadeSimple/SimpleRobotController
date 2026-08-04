@@ -98,6 +98,17 @@ namespace Controller.RobotControl
         private Vector6 CurrentPosition = new();  // Actual position of the robot
         public Vector6 GetCurrentPosition() => new Vector6(CurrentPosition.X, CurrentPosition.Y, CurrentPosition.Z, CurrentPosition.RX, CurrentPosition.RY, CurrentPosition.RZ);
         public bool IsMoving => linearMotionProfiler is not null || jointMotionProfiler is not null || continuousProfiler is not null || IsJogging || IsJointJogging || IsToolJogging;
+
+        // Cross-thread motion-busy signal. The motion thread owns all motion state;
+        // the program-execution thread must NOT read the profiler fields directly
+        // (torn/stale reads across the thread boundary). It reads MotionBusy instead.
+        // The motion thread sets this true in RunCommands the instant it begins a
+        // motion command — BEFORE dequeuing it — and republishes it as IsMoving at
+        // the end of every motion tick. Setting it before the dequeue closes the
+        // completion race: the executor can never observe an empty queue together
+        // with a stale "not moving" for a move that has just been picked up.
+        private volatile bool _motionActive;
+        public bool MotionBusy => _motionActive;
         // X is away from flange, Y is towards the inside of the robot, Z is Vertical
         public Vector6 CurrentTool = new(0, 0, 0);
         // Current Pose Of the Joints
@@ -261,82 +272,100 @@ namespace Controller.RobotControl
                 this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo,
                 isBackground: false, globalVars: backgroundProgramManager.GlobalVars, backgroundManager: backgroundProgramManager);
 
-            new Thread(ControlLoop) { IsBackground = true }.Start();
+            // Motion and program execution run on SEPARATE threads. The motion
+            // thread owns all motion state and runs unthrottled; the program thread
+            // drives the built/background programs and sleeps between ticks. A stall
+            // in program execution (GC, preemption, a slow step) can no longer freeze
+            // the arm — the motion thread keeps running. They communicate only
+            // through QueuedCommands, the volatile request flags, and MotionBusy.
+            new Thread(MotionLoop)  { IsBackground = true, Name = "MotionLoop"  }.Start();
+            new Thread(ProgramLoop) { IsBackground = true, Name = "ProgramLoop" }.Start();
         }
 
         // LOAD-BEARING TIMING — see docs/stb-loop-timing.md before changing.
-        private void ControlLoop()
+        // Motion thread. Unthrottled, exactly like the PR #100 era: no gate, no
+        // sleep, no spin. Owns every motion-state field (profilers, positions,
+        // targets, homing state) — nothing else may mutate them. Adding any
+        // gate/Sleep/SpinWait here delays sensor reaction and reintroduces homing
+        // overshoot (#112). Burns a core continuously.
+        private void MotionLoop()
         {
-            // Unthrottled, exactly like the PR #100 era. Back then Loop() contained
-            // its own while(true) and never returned, so the 4ms gate that sat here
-            // was dead code and the motion loop — including RunHoming's sensor
-            // checks — ran flat out. That is the configuration that homed reliably
-            // on hardware, so reproduce it faithfully: no gate, no sleep, no spin.
-            // Adding any gate/Sleep/SpinWait here delays sensor reaction and
-            // reintroduces homing overshoot (#112). Burns a core continuously.
             while (true)
             {
                 try
                 {
-                    Loop();
+                    // [diag] phase timing — logs only when a motion tick stalls.
+                    Diag.LoopSw.Restart();
+                    int gc0 = GC.CollectionCount(0);
+                    int gc2 = GC.CollectionCount(2);
+
+                    // Consume hard-stop flag before anything else touches the profilers
+                    if (_hardStopRequested)
+                        ExecuteHardStop();
+
+                    // Execute pending robot commands (creates/updates profilers)
+                    RunCommands();
+                    double tCmds = Diag.LoopSw.Elapsed.TotalMilliseconds;
+
+                    // Advance the active motion profile toward the target
+                    RunMotion();
+                    double tMotion = Diag.LoopSw.Elapsed.TotalMilliseconds;
+
+                    // Execute Homing
+                    RunHoming();
+                    double tHoming = Diag.LoopSw.Elapsed.TotalMilliseconds;
+
+                    // Let the stepper motor drive toward the new targets, and publish
+                    // the motion-busy signal the program thread polls for completion.
+                    stb.moving   = IsMoving;
+                    _motionActive = IsMoving;
+
+                    if (tHoming > Diag.SlowTickMs)
+                        Diag.Log($"motion-cycle {tHoming:F1}ms | cmds={tCmds:F1} " +
+                                 $"motion={tMotion - tCmds:F1} homing={tHoming - tMotion:F1} " +
+                                 $"| gc0={GC.CollectionCount(0) - gc0} gc2={GC.CollectionCount(2) - gc2}");
+                    Diag.Tick(tHoming);
                 }
                 catch (Exception ex)
                 {
                     // Catch-all: log, hard-stop the robot, then keep looping.
                     // The process must survive any tick-level exception.
-                    Console.WriteLine($"[ControlLoop] Unhandled exception on tick: {ex}");
+                    Console.WriteLine($"[MotionLoop] Unhandled exception on tick: {ex}");
                     ExecuteHardStop();
                 }
             }
         }
 
-        public void Loop()
+        // Program-execution thread. Drives the built program and background programs
+        // and updates the status light, then sleeps. Never touches motion state
+        // directly — it enqueues motion via QueuedCommands and reads completion via
+        // MotionBusy — so a stall here cannot delay the motion thread.
+        private void ProgramLoop()
         {
-            // [diag] phase timing — logs only when a tick stalls (see Diag.SlowTickMs).
-            Diag.LoopSw.Restart();
-            int _gc0 = GC.CollectionCount(0);
-            int _gc2 = GC.CollectionCount(2);
-
-            // Consume hard-stop flag before anything else touches the profilers
-            if (_hardStopRequested)
-                ExecuteHardStop();
-
-            // Execute pending robot commands
-            RunCommands();
-            double tCmds = Diag.LoopSw.Elapsed.TotalMilliseconds;
-
-            // Step through any active built program
-            programExecutor?.Update();
-            double tProg = Diag.LoopSw.Elapsed.TotalMilliseconds;
-
-            // Step through all background programs
-            backgroundProgramManager.Update();
-            double tBg = Diag.LoopSw.Elapsed.TotalMilliseconds;
-
-            // Run the robot motion control
-            RunMotion();
-            double tMotion = Diag.LoopSw.Elapsed.TotalMilliseconds;
-
-            // Execute Homing
-            RunHoming();
-            double tHoming = Diag.LoopSw.Elapsed.TotalMilliseconds;
-
-            if (tHoming > Diag.SlowTickMs)
-                Diag.Log($"cycle {tHoming:F1}ms | cmds={tCmds:F1} prog={tProg - tCmds:F1} " +
-                         $"bg={tBg - tProg:F1} motion={tMotion - tBg:F1} homing={tHoming - tMotion:F1} " +
-                         $"| gc0={GC.CollectionCount(0) - _gc0} gc2={GC.CollectionCount(2) - _gc2}");
-
-            Diag.Tick(tHoming);
-
-            // Let the stepper motor drive towards the new targets
-            stb.moving = IsMoving;
-
-            // Update the status-light neopixel strip at ~2 Hz
-            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (nowMs - _lastStatusLightMs >= 500)
+            while (true)
             {
-                _lastStatusLightMs = nowMs;
-                UpdateStatusLight();
+                try
+                {
+                    long ts = Diag.Now();
+                    programExecutor?.Update();
+                    backgroundProgramManager.Update();
+                    double progMs = Diag.MsBetween(ts);
+                    if (progMs > Diag.SlowStepMs)
+                        Diag.Log($"prog-cycle {progMs:F1}ms (executor thread — motion NOT affected)");
+
+                    long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    if (nowMs - _lastStatusLightMs >= 500)
+                    {
+                        _lastStatusLightMs = nowMs;
+                        UpdateStatusLight();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ProgramLoop] Unhandled exception on tick: {ex}");
+                }
+
+                Thread.Sleep(1);
             }
         }
 
@@ -1946,6 +1975,13 @@ namespace Controller.RobotControl
             if (Command.StatusUpdate != null)
                 programManager.ApplyStatusUpdate(Command.StatusUpdate);
 
+            // Mark motion busy the instant we pick up a move — BEFORE it is dequeued
+            // below — so the program thread never observes an empty queue together
+            // with a stale "not moving" for a move we've just started (completion
+            // race across the thread boundary). Reconciled to IsMoving each motion tick.
+            if (CommandType is "MoveL" or "OffsetL" or "MoveJ" or "StartContinuous")
+                _motionActive = true;
+
             switch (CommandType)
             {
                 case "MoveL":
@@ -1967,6 +2003,14 @@ namespace Controller.RobotControl
                         if (target == null) break;  // named point not found — log already emitted; drop command
                         MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     }
+                    break;
+
+                case "StartContinuous":
+                    // Blended path — started here on the motion thread rather than the
+                    // program thread mutating continuousProfiler directly.
+                    if (Command.Waypoints is { Count: >= 2 })
+                        StartContinuousMove(Command.Waypoints, Command.BlendRadii ?? new List<double>(),
+                            Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride);
                     break;
 
                 case "SetTool":

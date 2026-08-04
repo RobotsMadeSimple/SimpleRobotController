@@ -518,7 +518,9 @@ namespace Controller.RobotControl
             // If we dispatched a robot move, wait until the queue is clear and the robot is idle
             if (_awaitingMove)
             {
-                if (_controller.QueuedCommands.Count == 0 && !_controller.IsMoving)
+                // MotionBusy (not IsMoving) — the motion thread owns the profiler
+                // fields; MotionBusy is the published, race-free completion signal.
+                if (_controller.QueuedCommands.IsEmpty && !_controller.MotionBusy)
                 {
                     _awaitingMove = false;
                     // Report the step as completed now that the move has finished
@@ -904,7 +906,19 @@ namespace Controller.RobotControl
             _lastRunAccel      = accel;
             _lastRunDecel      = decel;
             _lastMotionCommand = null;
-            _controller.StartContinuousMove(waypoints, radii, speed, accel, decel, applyOverride: true);
+            // Enqueue rather than calling StartContinuousMove directly: the blended
+            // path must be started on the motion thread (which owns continuousProfiler),
+            // not here on the program-execution thread.
+            _controller.QueuedCommands.Enqueue(new RobotCommand
+            {
+                CommandType        = "StartContinuous",
+                Waypoints          = waypoints,
+                BlendRadii         = radii,
+                Speed              = speed,
+                Accel              = accel,
+                Decel              = decel,
+                ApplySpeedOverride = true,
+            });
         }
 
         private static bool HasToolOffset(ProgramStep step) =>
