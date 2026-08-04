@@ -46,15 +46,19 @@ namespace Controller.RobotControl
         private static double _hbMaxTickMs;
         private static long   _hbTs;
         private static int    _hbGc0, _hbGc2;
+        private static string _hbMotion = "";
 
-        public static void Tick(double tickMs)
+        public static void Tick(double tickMs) => Tick(tickMs, "");
+
+        public static void Tick(double tickMs, string motionState)
         {
             if (tickMs > _hbMaxTickMs) _hbMaxTickMs = tickMs;
+            _hbMotion = motionState;
             if (_hbTs == 0) { _hbTs = Stopwatch.GetTimestamp(); _hbGc0 = GC.CollectionCount(0); _hbGc2 = GC.CollectionCount(2); return; }
-            if (MsBetween(_hbTs) < 30000) return;
+            if (MsBetween(_hbTs) < 5000) return;
 
             int g0 = GC.CollectionCount(0), g2 = GC.CollectionCount(2);
-            Console.WriteLine($"[diag] hb maxTick={_hbMaxTickMs:F1}ms/30s | gen0GCs={g0 - _hbGc0} gen2GCs={g2 - _hbGc2}");
+            Console.WriteLine($"[diag] hb maxTick={_hbMaxTickMs:F1}ms/5s | gen0GCs={g0 - _hbGc0} gen2GCs={g2 - _hbGc2} | {_hbMotion}");
             _hbMaxTickMs = 0; _hbTs = Stopwatch.GetTimestamp(); _hbGc0 = g0; _hbGc2 = g2;
         }
 

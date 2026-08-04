@@ -324,7 +324,9 @@ namespace Controller.RobotControl
                         Diag.Log($"motion-cycle {tHoming:F1}ms | cmds={tCmds:F1} " +
                                  $"motion={tMotion - tCmds:F1} homing={tHoming - tMotion:F1} " +
                                  $"| gc0={GC.CollectionCount(0) - gc0} gc2={GC.CollectionCount(2) - gc2}");
-                    Diag.Tick(tHoming);
+                    Diag.Tick(tHoming, $"q={QueuedCommands.Count} mv={IsMoving} busy={_motionActive} " +
+                              $"lin={linearMotionProfiler is not null} cont={continuousProfiler is not null} " +
+                              $"jnt={jointMotionProfiler is not null} jog={IsJogging}/{IsJointJogging}/{IsToolJogging} home={homingState}");
                 }
                 catch (Exception ex)
                 {
