@@ -346,7 +346,6 @@ namespace Controller.RobotControl
 
         public void Stop()
         {
-            Diag.Log($"[exec] Stop() called running={_running} bg={_isBackground}\n{new System.Diagnostics.StackTrace(true)}");
             if (!_running) return;
 
             // Background executors stop dead — a paused background program would
@@ -463,20 +462,6 @@ namespace Controller.RobotControl
             _persistentVarNames.Clear();
         }
 
-        // [diag] Program-thread heartbeat — prints the executor's live state so a
-        // hang shows exactly what it is waiting on (or, if absent, that the thread
-        // is blocked/dead).
-        private long _dbgHbTs;
-        public void DiagHeartbeat()
-        {
-            if (_dbgHbTs != 0 && Diag.MsBetween(_dbgHbTs) < 2000) return;
-            _dbgHbTs = Diag.Now();
-            int idx = _frameStack.Count > 0 ? _frameStack.Peek().Index : -1;
-            Diag.Log($"[prog-hb] running={_running} awaiting={_awaitingMove} auxWait={_awaitingAuxMove} " +
-                     $"bgWait={_waitingForBackground is not null} frames={_frameStack.Count} idx={idx} " +
-                     $"qEmpty={_controller.QueuedCommands.IsEmpty} busy={_controller.MotionBusy}");
-        }
-
         // ── Main update — called every control loop tick ──────────────────────
 
         public void Update()
@@ -537,7 +522,6 @@ namespace Controller.RobotControl
                 // fields; MotionBusy is the published, race-free completion signal.
                 if (_controller.QueuedCommands.IsEmpty && !_controller.MotionBusy)
                 {
-                    Diag.Log($"[exec] move complete — clearing awaitingMove (pendingStep={_pendingStep is not null} pendingSteps={_pendingSteps is not null})");
                     _awaitingMove = false;
                     // Report the step as completed now that the move has finished
                     if (_pendingStep is not null)
@@ -648,10 +632,10 @@ namespace Controller.RobotControl
             }
 
             var step = frame.Steps[frame.Index];
-            Diag.StepStart(frame.Index, step.Type);
-            long execTs = Diag.Now();
+            if (Diag.Enabled) Diag.StepStart(frame.Index, step.Type);
+            long execTs = Diag.Enabled ? Diag.Now() : 0;
             ExecuteStep(step, frame);
-            Diag.StepExec(step.Type, frame.Index, execTs);
+            if (Diag.Enabled) Diag.StepExec(step.Type, frame.Index, execTs);
         }
 
         // ── Step execution ────────────────────────────────────────────────────
@@ -820,14 +804,9 @@ namespace Controller.RobotControl
 
         private void ExecuteMove(ProgramStep step, StepListFrame frame)
         {
-            Diag.ExecMove(frame.Index, step.Type.ToString(), _awaitingMove);
             if (_awaitingMove) return;
 
-            if (!ResolveMoveTarget(step, out Vector6 target))
-            {
-                Diag.Log($"[exec] ResolveMoveTarget FAILED idx={frame.Index} {step.Type}");
-                return;
-            }
+            if (!ResolveMoveTarget(step, out Vector6 target)) return;
 
             bool hasToolOffset = HasToolOffset(step);
 
@@ -2426,7 +2405,7 @@ namespace Controller.RobotControl
                 frame.Index++;
                 _awaitingAuxMove = true;
                 _pendingAuxStep  = step;
-                Diag.AuxDispatch(_controller.IsAuxMoving);
+                if (Diag.Enabled) Diag.AuxDispatch(_controller.IsAuxMoving);
             }
             else
             {
@@ -2742,7 +2721,7 @@ namespace Controller.RobotControl
         /// <summary>Increments the completed step count and emits the updated progress.</summary>
         private void ReportStepCompleted(ProgramStep step)
         {
-            Diag.StepDone(step.Type);
+            if (Diag.Enabled) Diag.StepDone(step.Type);
             if (_loopDepth == 0) _globalStepIndex++;
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
@@ -2758,7 +2737,6 @@ namespace Controller.RobotControl
 
         private void Finish(global::ProgramStatus status, string description)
         {
-            Diag.Log($"[exec] FINISH {status}: {description}");
             SavePersistentVars();
             _controller.ActiveCncToolpath = null;
             _running              = false;

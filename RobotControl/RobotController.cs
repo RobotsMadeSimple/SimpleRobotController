@@ -294,10 +294,12 @@ namespace Controller.RobotControl
             {
                 try
                 {
-                    // [diag] phase timing — logs only when a motion tick stalls.
-                    Diag.LoopSw.Restart();
-                    int gc0 = GC.CollectionCount(0);
-                    int gc2 = GC.CollectionCount(2);
+                    // [diag] phase timing — off unless Diag.Enabled (guarded so the
+                    // interpolated strings below never allocate in normal operation).
+                    bool diag = Diag.Enabled;
+                    if (diag) Diag.LoopSw.Restart();
+                    int gc0 = diag ? GC.CollectionCount(0) : 0;
+                    int gc2 = diag ? GC.CollectionCount(2) : 0;
 
                     // Consume hard-stop flag before anything else touches the profilers
                     if (_hardStopRequested)
@@ -305,28 +307,31 @@ namespace Controller.RobotControl
 
                     // Execute pending robot commands (creates/updates profilers)
                     RunCommands();
-                    double tCmds = Diag.LoopSw.Elapsed.TotalMilliseconds;
+                    double tCmds = diag ? Diag.LoopSw.Elapsed.TotalMilliseconds : 0;
 
                     // Advance the active motion profile toward the target
                     RunMotion();
-                    double tMotion = Diag.LoopSw.Elapsed.TotalMilliseconds;
+                    double tMotion = diag ? Diag.LoopSw.Elapsed.TotalMilliseconds : 0;
 
                     // Execute Homing
                     RunHoming();
-                    double tHoming = Diag.LoopSw.Elapsed.TotalMilliseconds;
+                    double tHoming = diag ? Diag.LoopSw.Elapsed.TotalMilliseconds : 0;
 
                     // Let the stepper motor drive toward the new targets, and publish
                     // the motion-busy signal the program thread polls for completion.
                     stb.moving   = IsMoving;
                     _motionActive = IsMoving;
 
-                    if (tHoming > Diag.SlowTickMs)
-                        Diag.Log($"motion-cycle {tHoming:F1}ms | cmds={tCmds:F1} " +
-                                 $"motion={tMotion - tCmds:F1} homing={tHoming - tMotion:F1} " +
-                                 $"| gc0={GC.CollectionCount(0) - gc0} gc2={GC.CollectionCount(2) - gc2}");
-                    Diag.Tick(tHoming, $"q={QueuedCommands.Count} mv={IsMoving} busy={_motionActive} " +
-                              $"lin={linearMotionProfiler is not null} cont={continuousProfiler is not null} " +
-                              $"jnt={jointMotionProfiler is not null} jog={IsJogging}/{IsJointJogging}/{IsToolJogging} home={homingState}");
+                    if (diag)
+                    {
+                        if (tHoming > Diag.SlowTickMs)
+                            Diag.Log($"motion-cycle {tHoming:F1}ms | cmds={tCmds:F1} " +
+                                     $"motion={tMotion - tCmds:F1} homing={tHoming - tMotion:F1} " +
+                                     $"| gc0={GC.CollectionCount(0) - gc0} gc2={GC.CollectionCount(2) - gc2}");
+                        Diag.Tick(tHoming, $"q={QueuedCommands.Count} mv={IsMoving} busy={_motionActive} " +
+                                  $"lin={linearMotionProfiler is not null} cont={continuousProfiler is not null} " +
+                                  $"jnt={jointMotionProfiler is not null} jog={IsJogging}/{IsJointJogging}/{IsToolJogging} home={homingState}");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -348,13 +353,16 @@ namespace Controller.RobotControl
             {
                 try
                 {
-                    long ts = Diag.Now();
+                    bool diag = Diag.Enabled;
+                    long ts = diag ? Diag.Now() : 0;
                     programExecutor?.Update();
-                    programExecutor?.DiagHeartbeat();
                     backgroundProgramManager.Update();
-                    double progMs = Diag.MsBetween(ts);
-                    if (progMs > Diag.SlowStepMs)
-                        Diag.Log($"prog-cycle {progMs:F1}ms (executor thread — motion NOT affected)");
+                    if (diag)
+                    {
+                        double progMs = Diag.MsBetween(ts);
+                        if (progMs > Diag.SlowStepMs)
+                            Diag.Log($"prog-cycle {progMs:F1}ms (executor thread — motion NOT affected)");
+                    }
 
                     long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     if (nowMs - _lastStatusLightMs >= 500)

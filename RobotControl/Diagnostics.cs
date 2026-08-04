@@ -4,25 +4,32 @@ using System.Diagnostics;
 namespace Controller.RobotControl
 {
     /// <summary>
-    /// Temporary diagnostic instrumentation for the program-execution / control-loop
-    /// stutter investigation. Everything here writes to stdout (captured by
-    /// journald) with a `[diag]` prefix so it can be grepped and correlated with
-    /// journald's own timestamps. Cheap on the hot path: timing uses
-    /// Stopwatch.GetTimestamp() (allocation-free) and cycle logging only fires when
-    /// a tick exceeds SlowTickMs. Remove before merging the fix to main.
+    /// Opt-in diagnostic instrumentation for the control-loop / program-execution
+    /// pipeline. Everything writes to stdout (captured by journald) with a `[diag]`
+    /// prefix so it can be grepped and correlated with journald timestamps.
+    ///
+    /// DISABLED by default — when <see cref="Enabled"/> is false the methods return
+    /// immediately, and callers guard the hot paths (which build interpolated
+    /// strings) with `if (Diag.Enabled)` so there is zero allocation or timing cost
+    /// in normal operation. Turn it on for a debugging session by setting the
+    /// environment variable RMS_DIAG=1 before launching, or flip Diag.Enabled at
+    /// runtime.
     /// </summary>
     internal static class Diag
     {
+        /// <summary>Master switch. Off unless RMS_DIAG=1 (or set at runtime).</summary>
+        public static volatile bool Enabled =
+            Environment.GetEnvironmentVariable("RMS_DIAG") is "1" or "true" or "TRUE";
+
         // Log a control-loop tick only when it runs longer than this. Normal
         // unthrottled ticks are sub-millisecond; anything above this is a stall.
         public const double SlowTickMs = 15.0;
 
-        // Log a single ExecuteStep call only when it blocks the shared control-loop
-        // thread longer than this (which stalls RunMotion in the same tick).
+        // Log a single ExecuteStep call only when it blocks the program thread
+        // longer than this.
         public const double SlowStepMs = 40.0;
 
-        // Single reusable stopwatch for control-loop phase timing. The control loop
-        // is single-threaded (one thread calls Loop()), so a shared instance is safe.
+        // Single reusable stopwatch for motion-loop phase timing (one thread only).
         public static readonly Stopwatch LoopSw = new();
 
         private static long _stepStartTs;
@@ -30,19 +37,23 @@ namespace Controller.RobotControl
         private static int    _lastIdx = int.MinValue;
         private static string? _lastType;
 
-        public static void Log(string msg) => Console.WriteLine($"[diag] {msg}");
+        public static void Log(string msg)
+        {
+            if (!Enabled) return;
+            Console.WriteLine($"[diag] {msg}");
+        }
 
+        // Pure timing helpers — no side effects, safe to call unguarded.
         private static double MsSince(long ts) =>
             ts == 0 ? 0 : (Stopwatch.GetTimestamp() - ts) * 1000.0 / Stopwatch.Frequency;
-
         public static long Now() => Stopwatch.GetTimestamp();
         public static double MsBetween(long startTs) =>
             (Stopwatch.GetTimestamp() - startTs) * 1000.0 / Stopwatch.Frequency;
 
         // ── Continuous heartbeat ──────────────────────────────────────────────
-        // Called every control-loop tick. Tracks the worst tick and GC cadence and
-        // emits one line every ~30s, so steady-state smoothness and gen-2 GC
-        // frequency are visible even when nothing crosses the stall threshold.
+        // Tracks the worst tick and GC cadence and emits one line every ~5s, so
+        // steady-state smoothness and gen-2 GC frequency are visible even when
+        // nothing crosses the stall threshold.
         private static double _hbMaxTickMs;
         private static long   _hbTs;
         private static int    _hbGc0, _hbGc2;
@@ -52,6 +63,7 @@ namespace Controller.RobotControl
 
         public static void Tick(double tickMs, string motionState)
         {
+            if (!Enabled) return;
             if (tickMs > _hbMaxTickMs) _hbMaxTickMs = tickMs;
             _hbMotion = motionState;
             if (_hbTs == 0) { _hbTs = Stopwatch.GetTimestamp(); _hbGc0 = GC.CollectionCount(0); _hbGc2 = GC.CollectionCount(2); return; }
@@ -63,10 +75,11 @@ namespace Controller.RobotControl
         }
 
         // ── Program step trace ────────────────────────────────────────────────
-        // Log only on transition INTO a step. A polling step (e.g. Wait) re-enters
-        // ExecuteStep every unthrottled tick; without this it floods the log.
+        // Logs only on transition INTO a step; a polling step (e.g. Wait) re-enters
+        // ExecuteStep every program tick and would otherwise flood the log.
         public static void StepStart(int index, object stepType)
         {
+            if (!Enabled) return;
             string t = stepType.ToString() ?? "";
             if (index == _lastIdx && t == _lastType) return;
             _lastIdx = index; _lastType = t;
@@ -76,36 +89,33 @@ namespace Controller.RobotControl
 
         public static void StepDone(object stepType)
         {
+            if (!Enabled) return;
             Console.WriteLine($"[diag] step done  {stepType} ({MsSince(_stepStartTs):F1}ms since last start)");
-            _lastIdx = int.MinValue; _lastType = null; // let the next step log even if same idx
+            _lastIdx = int.MinValue; _lastType = null;
         }
 
-        // Times one synchronous ExecuteStep call. Logs only if it blocked the shared
-        // control-loop thread past SlowStepMs — i.e. froze RunMotion in the same tick.
+        // Times one synchronous ExecuteStep call; logs only if it blocked the
+        // program thread past SlowStepMs.
         public static void StepExec(object stepType, int index, long startTs)
         {
+            if (!Enabled) return;
             double ms = MsBetween(startTs);
             if (ms > SlowStepMs)
-                Console.WriteLine($"[diag] SLOW step exec {stepType} idx={index} {ms:F1}ms — blocked the control loop (motion frozen this long)");
-        }
-
-        // ── Executor dispatch trace (rate-limited to avoid flooding) ──────────
-        private static long _execTs;
-        public static void ExecMove(int idx, string type, bool awaiting)
-        {
-            if (_execTs != 0 && MsBetween(_execTs) < 400) return;
-            _execTs = Stopwatch.GetTimestamp();
-            Console.WriteLine($"[diag] exec ExecuteMove idx={idx} {type} awaitingMove={awaiting}");
+                Console.WriteLine($"[diag] SLOW step exec {stepType} idx={index} {ms:F1}ms");
         }
 
         // ── Aux move dispatch → wait-complete ─────────────────────────────────
         public static void AuxDispatch(bool isAuxMovingNow)
         {
+            if (!Enabled) return;
             _auxStartTs = Stopwatch.GetTimestamp();
             Console.WriteLine($"[diag] aux dispatch — IsAuxMoving now={isAuxMovingNow}");
         }
 
-        public static void AuxWaitDone() =>
+        public static void AuxWaitDone()
+        {
+            if (!Enabled) return;
             Console.WriteLine($"[diag] aux wait done ({MsSince(_auxStartTs):F0}ms)");
+        }
     }
 }
