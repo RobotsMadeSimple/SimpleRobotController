@@ -39,6 +39,25 @@ namespace Controller.RobotControl
         public static double MsBetween(long startTs) =>
             (Stopwatch.GetTimestamp() - startTs) * 1000.0 / Stopwatch.Frequency;
 
+        // ── Continuous heartbeat ──────────────────────────────────────────────
+        // Called every control-loop tick. Tracks the worst tick and GC cadence and
+        // emits one line every ~30s, so steady-state smoothness and gen-2 GC
+        // frequency are visible even when nothing crosses the stall threshold.
+        private static double _hbMaxTickMs;
+        private static long   _hbTs;
+        private static int    _hbGc0, _hbGc2;
+
+        public static void Tick(double tickMs)
+        {
+            if (tickMs > _hbMaxTickMs) _hbMaxTickMs = tickMs;
+            if (_hbTs == 0) { _hbTs = Stopwatch.GetTimestamp(); _hbGc0 = GC.CollectionCount(0); _hbGc2 = GC.CollectionCount(2); return; }
+            if (MsBetween(_hbTs) < 30000) return;
+
+            int g0 = GC.CollectionCount(0), g2 = GC.CollectionCount(2);
+            Console.WriteLine($"[diag] hb maxTick={_hbMaxTickMs:F1}ms/30s | gen0GCs={g0 - _hbGc0} gen2GCs={g2 - _hbGc2}");
+            _hbMaxTickMs = 0; _hbTs = Stopwatch.GetTimestamp(); _hbGc0 = g0; _hbGc2 = g2;
+        }
+
         // ── Program step trace ────────────────────────────────────────────────
         // Log only on transition INTO a step. A polling step (e.g. Wait) re-enters
         // ExecuteStep every unthrottled tick; without this it floods the log.

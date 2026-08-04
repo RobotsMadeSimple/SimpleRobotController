@@ -326,6 +326,8 @@ namespace Controller.RobotControl
                          $"bg={tBg - tProg:F1} motion={tMotion - tBg:F1} homing={tHoming - tMotion:F1} " +
                          $"| gc0={GC.CollectionCount(0) - _gc0} gc2={GC.CollectionCount(2) - _gc2}");
 
+            Diag.Tick(tHoming);
+
             // Let the stepper motor drive towards the new targets
             stb.moving = IsMoving;
 
