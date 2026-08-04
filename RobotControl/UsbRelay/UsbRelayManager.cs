@@ -14,6 +14,11 @@ namespace Controller.RobotControl.UsbRelay
 
         private RelayConfig _config;
 
+        // Cached relay state so the frequent status broadcast can report live
+        // relay state without a USB read on every tick. Updated on every Set and
+        // refreshed from the board by the poll loop. Guarded by _lock.
+        private readonly bool[] _cached = new bool[UsbRelayDevice.RelayCount];
+
         /// <summary>Number of relay channels on the board.</summary>
         public int RelayCount => UsbRelayDevice.RelayCount;
 
@@ -63,6 +68,7 @@ namespace Controller.RobotControl.UsbRelay
                 try
                 {
                     _device.Set(relay, on);
+                    if (relay >= 1 && relay <= RelayCount) _cached[relay - 1] = on;
                 }
                 catch (Exception ex)
                 {
@@ -81,22 +87,11 @@ namespace Controller.RobotControl.UsbRelay
         {
             lock (_lock)
             {
+                // Return the cached state (kept fresh by SetRelay and the poll
+                // loop) rather than a blocking USB read — this is called on every
+                // status broadcast.
                 if (_device == null) return null;
-                try
-                {
-                    int mask   = _device.ReadBitmask();
-                    var states = new bool[RelayCount];
-                    for (int i = 0; i < RelayCount; i++)
-                        states[i] = UsbRelayDevice.IsOn(mask, i + 1);
-                    return states;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[UsbRelay] Read error: {ex.Message} — marking disconnected.");
-                    _device.Dispose();
-                    _device = null;
-                    return null;
-                }
+                return (bool[])_cached.Clone();
             }
         }
 
@@ -128,12 +123,38 @@ namespace Controller.RobotControl.UsbRelay
 
                 if (needsConnect)
                 {
+                    // Open outside the lock — it can block for a moment.
                     var dev = UsbRelayDevice.TryOpen();
                     if (dev != null)
                         lock (_lock) _device = dev;
                 }
 
-                try { Task.Delay(3000, _cts.Token).Wait(); }
+                // While connected, refresh the cached state from the board so the
+                // status broadcast reflects relays changed by a running program
+                // (or anything else) without a USB read per broadcast.
+                lock (_lock)
+                {
+                    if (_device != null)
+                    {
+                        try
+                        {
+                            int mask = _device.ReadBitmask();
+                            for (int i = 0; i < RelayCount; i++)
+                                _cached[i] = UsbRelayDevice.IsOn(mask, i + 1);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[UsbRelay] Read error: {ex.Message} — marking disconnected.");
+                            _device.Dispose();
+                            _device = null;
+                        }
+                    }
+                }
+
+                // Poll ~1s while connected; back off to 3s while searching.
+                bool connected;
+                lock (_lock) connected = _device != null;
+                try { Task.Delay(connected ? 1000 : 3000, _cts.Token).Wait(); }
                 catch (OperationCanceledException) { break; }
             }
         }

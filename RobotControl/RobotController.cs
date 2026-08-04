@@ -1237,6 +1237,17 @@ namespace Controller.RobotControl
                             output3 = stb.Output3,
                             output4 = stb.Output4,
 
+                            // USB relay board — cached state (updated on Set + a 1s
+                            // board poll) so relays changed by a running program
+                            // update live in the app without a per-broadcast USB read.
+                            relay = new UsbRelayState
+                            {
+                                Connected = RelayManager.IsConnected,
+                                Serial    = RelayManager.GetSerial(),
+                                Relays    = RelayManager.GetRelayStates(),
+                                Names     = RelayManager.GetRelayNames(),
+                            },
+
                             // Program cycle — summary only (no logs / images)
                             programs = programManager.GetProgramsSummary(),
 
