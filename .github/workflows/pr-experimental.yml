@@ -1,0 +1,93 @@
+name: PR Experimental Build
+
+# Publishes a self-contained Linux binary for every push to an open PR as a
+# GitHub *prerelease* tagged `exp-pr<N>`. Because `releases/latest` excludes
+# prereleases, production boxes (which install from `latest`) never see these —
+# only a box explicitly switched with `install.sh --tag exp-pr<N>` gets the code.
+#
+# One rolling prerelease per PR (the asset is overwritten in place on each
+# push), auto-deleted when the PR closes, so the Releases page self-cleans.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# One in-flight build per PR; a newer push cancels the older build so the
+# rolling prerelease always reflects the latest commit.
+concurrency:
+  group: exp-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Every push while the PR is open. Skipped on close (handled by cleanup).
+    if: github.event.action != 'closed'
+    name: Build experimental Linux binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish self-contained Linux binary
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+          dotnet publish RobotControl/Controller.csproj \
+            -c Release \
+            -r linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            "-p:Version=0.0.0-exp.pr${PR}" \
+            "-p:InformationalVersion=exp-pr${PR}-${SHA}" \
+            -o publish
+
+      - name: Publish/refresh rolling prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: exp-pr${{ github.event.pull_request.number }}
+          target_commitish: ${{ github.event.pull_request.head.sha }}
+          prerelease: true
+          make_latest: "false"
+          name: "Experimental — PR #${{ github.event.pull_request.number }}"
+          body: |
+            ⚠️ **Experimental build** of PR #${{ github.event.pull_request.number }}
+            (`${{ github.event.pull_request.head.sha }}`). Not for production.
+
+            Install on a test box:
+            ```
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash -s -- --tag exp-pr${{ github.event.pull_request.number }}
+            ```
+
+            Return the box to production:
+            ```
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash -s -- --channel stable
+            ```
+          files: publish/SimpleRobotController
+
+  cleanup:
+    # PR closed or merged — delete its experimental prerelease and tag.
+    if: github.event.action == 'closed'
+    name: Delete experimental prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=exp-pr${{ github.event.pull_request.number }}
+          gh release delete "$TAG" \
+            --repo "${{ github.repository }}" \
+            --cleanup-tag \
+            --yes || echo "No experimental release for $TAG — nothing to delete."

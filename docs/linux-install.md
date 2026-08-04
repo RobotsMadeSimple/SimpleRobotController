@@ -56,13 +56,56 @@ You should see `active (running)` in the output. The controller is now listening
 
 ## Updating
 
-To update to the latest version, simply re-run the install command:
+To update, simply re-run the install command:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/RobotsMadeSimple/SimpleRobotController/main/install.sh | sudo bash
 ```
 
-It will download the latest release and restart the service automatically.
+A bare re-run updates **within the channel the box is already on** (see below).
+A fresh box, or one on the stable channel, gets the latest production release.
+
+---
+
+## Experimental / PR Test Builds
+
+Every push to an open pull request publishes a self-contained Linux binary as a
+GitHub **prerelease** tagged `exp-pr<N>` (where `<N>` is the PR number). Because
+`releases/latest` never resolves to a prerelease, **production boxes are never
+affected** — only a box you explicitly switch will run experimental code.
+
+### Switch a box to a specific PR
+
+```bash
+curl -sSL https://raw.githubusercontent.com/RobotsMadeSimple/SimpleRobotController/main/install.sh | sudo bash -s -- --tag exp-pr123
+```
+
+The box remembers this channel, so a later bare re-run pulls the newest build of
+that same PR (handy while you iterate on it).
+
+### Switch a box to the newest experimental build (any PR)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/RobotsMadeSimple/SimpleRobotController/main/install.sh | sudo bash -s -- --channel experimental
+```
+
+### Return a box to production
+
+```bash
+curl -sSL https://raw.githubusercontent.com/RobotsMadeSimple/SimpleRobotController/main/install.sh | sudo bash -s -- --channel stable
+```
+
+| Flag | Effect |
+|---|---|
+| *(none)* | Update within the box's current channel (stable by default) |
+| `--channel stable` | Latest production release; rejoins normal users |
+| `--channel experimental` | Newest PR prerelease across all open PRs |
+| `--tag exp-pr<N>` | A specific PR's build |
+
+The current channel is recorded in `/etc/robot-controller/channel`. Experimental
+prereleases are deleted automatically when their PR closes or merges, so a box
+left on a merged PR's tag will fail to update until you point it back at
+`--channel stable` (or another live tag).
 
 ---
 
