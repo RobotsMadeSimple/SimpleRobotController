@@ -631,7 +631,9 @@ namespace Controller.RobotControl
 
             var step = frame.Steps[frame.Index];
             Diag.StepStart(frame.Index, step.Type);
+            long execTs = Diag.Now();
             ExecuteStep(step, frame);
+            Diag.StepExec(step.Type, frame.Index, execTs);
         }
 
         // ── Step execution ────────────────────────────────────────────────────
