@@ -54,7 +54,8 @@ namespace Controller.RobotControl.MotionProfilers
                 startVelocity: startScalarVelocity
             );
 
-            stopwatch.Restart();
+            // Clock intentionally NOT started here — it is started lazily on the
+            // first Update() so the move cannot begin partway down the path. See Update().
         }
 
         // -----------------------------------------
@@ -64,6 +65,16 @@ namespace Controller.RobotControl.MotionProfilers
         {
             if (scalar == null)
                 return start;
+
+            // Start the move clock on the FIRST sample, not at construction. The clock
+            // measures how far along the move we should be; if it started in the ctor,
+            // any gap before the first sample (a busy control-loop tick, a heavy program
+            // step on the same shared thread, a GC pause) would make the first sample
+            // land partway down the path — the robot lurches into the middle of the move
+            // instead of easing off the start. Lazy start makes the first sample
+            // elapsed≈0, so it returns `start` exactly.
+            if (!stopwatch.IsRunning)
+                stopwatch.Restart();
 
             double elapsed = stopwatch.Elapsed.TotalSeconds;
 
