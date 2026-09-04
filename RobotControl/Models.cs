@@ -148,7 +148,7 @@ public class ProgramActionParams
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -168,6 +168,29 @@ public class Vector6Val
     public double GetComponent(int idx) => idx switch {
         0 => X, 1 => Y, 2 => Z, 3 => RX, 4 => RY, 5 => RZ, _ => 0
     };
+}
+
+/// <summary>One key/expression pair for the outbound JSON body of a JsonExchange step.</summary>
+public class JsonKeyValue
+{
+    [JsonPropertyName("key")]      public string  Key      { get; set; } = "";
+    [JsonPropertyName("expr")]     public string  Expr     { get; set; } = "";
+    /// <summary>When set, this row sends the named image variable as a base64 string instead of evaluating Expr.</summary>
+    [JsonPropertyName("imageVar")] public string? ImageVar { get; set; }
+}
+
+/// <summary>Maps one response JSON key to a program variable for a JsonExchange step.</summary>
+public class JsonInboundMapping
+{
+    [JsonPropertyName("key")]          public string Key          { get; set; } = "";
+    [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
+}
+
+/// <summary>Maps an image variable to a JSON key for the outbound body of a JsonExchange step (sent as a base64 JPEG string).</summary>
+public class JsonImageMapping
+{
+    [JsonPropertyName("key")]          public string Key          { get; set; } = "";
+    [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
 }
 
 /// <summary>Maps one BlobInspection's outputs to program variable names.</summary>
@@ -456,6 +479,25 @@ public class ProgramStep
     [JsonPropertyName("cncSafeZ")]      public double?           CncSafeZ      { get; set; }
     [JsonPropertyName("cncProgramSteps")] public List<ProgramStep>? CncProgramSteps { get; set; }
     [JsonPropertyName("cncSpec")]       public CncSpec?          CncSpec       { get; set; }
+
+    // JsonExchange — POST a JSON body to a URL; optionally load numeric values from the response
+    [JsonPropertyName("jsonUrl")]             public string?                   JsonUrl             { get; set; }
+    [JsonPropertyName("jsonWaitForResponse")] public bool?                     JsonWaitForResponse { get; set; }
+    [JsonPropertyName("jsonTimeoutMs")]       public int?                      JsonTimeoutMs       { get; set; }
+    [JsonPropertyName("jsonOutbound")]        public List<JsonKeyValue>?       JsonOutbound        { get; set; }
+    [JsonPropertyName("jsonInbound")]         public List<JsonInboundMapping>? JsonInbound         { get; set; }
+    [JsonPropertyName("jsonImageOutbound")]   public List<JsonImageMapping>?   JsonImageOutbound   { get; set; }
+    // CaptureImage
+    [JsonPropertyName("captureImageVariableName")] public string? CaptureImageVariableName { get; set; }
+    [JsonPropertyName("captureImageCameraId")]     public string? CaptureImageCameraId     { get; set; }
+    // HttpReceive
+    [JsonPropertyName("httpReceiveName")]      public string?                   HttpReceiveName      { get; set; }
+    [JsonPropertyName("httpReceiveTimeoutMs")] public int?                      HttpReceiveTimeoutMs { get; set; }
+    [JsonPropertyName("httpReceiveInbound")]   public List<JsonInboundMapping>? HttpReceiveInbound   { get; set; }
+
+    // Unknown — placeholder for steps whose type string could not be parsed
+    [JsonPropertyName("unknownStepType")]
+    public string? UnknownStepType { get; set; }
 }
 
 /// <summary>Hole position for CNC threading (robot coordinates, mm).</summary>
@@ -563,6 +605,9 @@ public class ProgramVariable
     /// <summary>String variable initial/default value — only meaningful when IsString is true.</summary>
     [JsonPropertyName("stringValue")]
     public string? StringValue { get; set; }
+    /// <summary>When true, this variable holds a JPEG image as a base64 string, populated at runtime by CaptureImage steps.</summary>
+    [JsonPropertyName("isImage")]
+    public bool? IsImage { get; set; }
 }
 
 public class BuiltProgram
