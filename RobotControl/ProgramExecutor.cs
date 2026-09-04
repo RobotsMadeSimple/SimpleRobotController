@@ -862,7 +862,6 @@ namespace Controller.RobotControl
                     ExecuteHttpReceive(step, frame);
                     break;
                 case StepType.Unknown:
-                    _logger?.LogWarning("Skipping unknown step type '{Type}' in program", step.UnknownStepType ?? "?");
                     ReportStepCompleted(step);
                     break;
             }
