@@ -1,7 +1,13 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace Controller.RobotControl
@@ -88,12 +94,15 @@ namespace Controller.RobotControl
         private readonly Dictionary<string, List<Vector6Val>>  _pointVariables   = new();
         private readonly HashSet<string>                       _booleanVariables = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string>            _stringVariables  = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string>            _imageVariables   = new(StringComparer.OrdinalIgnoreCase);
 
         // Background execution support
         private readonly bool                    _isBackground;
         private readonly GlobalVariableStore?    _globalVars;
+        private readonly GlobalImageStore?       _globalImages;
         private readonly BackgroundProgramManager? _backgroundManager;
-        private readonly HashSet<string>         _globalVarNames = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string>         _globalVarNames   = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string>         _globalImageNames = new(StringComparer.OrdinalIgnoreCase);
 
         // WaitForBackground: set to a program name while blocking on it
         private string? _waitingForBackground;
@@ -106,6 +115,17 @@ namespace Controller.RobotControl
         // Stopwatch state per variable name
         private struct StopwatchEntry { public bool Running; public long AccumMs; public long StartTick; }
         private readonly Dictionary<string, StopwatchEntry> _stopwatches = new(StringComparer.OrdinalIgnoreCase);
+
+        // JsonExchange — HTTP client (reused across all requests), pending sync task, and
+        // action queue for writing inbound variables from fire-and-continue completions.
+        private static readonly HttpClient _httpClient = new();
+        private Task<Dictionary<string, JsonElement>?>? _pendingJsonTask;
+        private readonly ConcurrentQueue<Action> _pendingActions = new();
+
+        // HttpReceive — pending webhook wait task + subscription handle
+        private Task<Dictionary<string, JsonElement>?>? _pendingWebhookTask;
+        private (string Name, Guid Id)?                  _pendingWebhookSub;
+        private CancellationTokenSource?                 _webhookCts;
 
         public bool IsRunning => _running;
         public bool IsPaused  => _isPaused;
@@ -121,7 +141,7 @@ namespace Controller.RobotControl
             foreach (var v in _program.Variables)
             {
                 if (v.DisplayOnMonitor != true) continue;
-                if (v.Values != null || v.Points != null || v.IsString == true) continue; // non-scalar types not supported in numeric display
+                if (v.Values != null || v.Points != null || v.IsString == true || v.IsImage == true) continue; // non-scalar types not supported in numeric display
                 merged.TryGetValue(v.Name, out double val);
                 result.Add((v.Name, val, v.IsBoolean == true));
             }
@@ -132,7 +152,8 @@ namespace Controller.RobotControl
             RobotController controller, ProgramCycleManager programManager,
             PointRepository pointRepo, ToolRepository toolRepo, LocalRepository localRepo,
             BuiltProgramRepository builtProgramRepo, GridRepository gridRepo, StackRepository stackRepo,
-            bool isBackground = false, GlobalVariableStore? globalVars = null, BackgroundProgramManager? backgroundManager = null)
+            bool isBackground = false, GlobalVariableStore? globalVars = null,
+            GlobalImageStore? globalImages = null, BackgroundProgramManager? backgroundManager = null)
         {
             _controller        = controller;
             _programManager    = programManager;
@@ -144,6 +165,7 @@ namespace Controller.RobotControl
             _stackRepo         = stackRepo;
             _isBackground      = isBackground;
             _globalVars        = globalVars;
+            _globalImages      = globalImages;
             _backgroundManager = backgroundManager;
         }
 
@@ -211,6 +233,21 @@ namespace Controller.RobotControl
                 _globalVars.Set(name, value);
             else
                 _variables[name] = value;
+        }
+
+        private void SetImageVariable(string name, string value)
+        {
+            _imageVariables[name] = value;
+            if (_globalImageNames.Contains(name) && _globalImages != null)
+                _globalImages.Set(name, value);
+        }
+
+        private string GetImageVariable(string name)
+        {
+            if (_globalImageNames.Contains(name) && _globalImages != null
+                && _globalImages.TryGet(name, out var gv))
+                return gv;
+            return _imageVariables.TryGetValue(name, out var lv) ? lv : "";
         }
 
         // ── ForEach helpers ───────────────────────────────────────────────────
@@ -288,7 +325,9 @@ namespace Controller.RobotControl
             _pointVariables.Clear();
             _booleanVariables.Clear();
             _stringVariables.Clear();
+            _imageVariables.Clear();
             _globalVarNames.Clear();
+            _globalImageNames.Clear();
             _persistentVarNames.Clear();
             _stopwatches.Clear();
             _waitingForBackground = null;
@@ -452,6 +491,15 @@ namespace Controller.RobotControl
             _resumeDispatchPending = false;
             _controller.ActiveCncToolpath = null;
             _frameStack.Clear();
+            _webhookCts?.Cancel();
+            _webhookCts?.Dispose();
+            _webhookCts         = null;
+            _pendingWebhookTask = null;
+            if (_pendingWebhookSub.HasValue)
+            {
+                _controller.WebhookManager.Unsubscribe(_pendingWebhookSub.Value.Name, _pendingWebhookSub.Value.Id);
+                _pendingWebhookSub = null;
+            }
             _variables.Clear();
             _listVariables.Clear();
             _pointVariables.Clear();
@@ -459,6 +507,7 @@ namespace Controller.RobotControl
             _booleanVariables.Clear();
             _stringVariables.Clear();
             _globalVarNames.Clear();
+            _globalImageNames.Clear();
             _persistentVarNames.Clear();
         }
 
@@ -467,6 +516,9 @@ namespace Controller.RobotControl
         public void Update()
         {
             if (!_running || _program is null) return;
+
+            // Drain variable writes queued by fire-and-continue JsonExchange completions.
+            while (_pendingActions.TryDequeue(out var action)) action();
 
             // Re-dispatch motion interrupted by a pause — done here so it runs on
             // the control loop thread, before any step execution can advance.
@@ -798,6 +850,20 @@ namespace Controller.RobotControl
 
                 case StepType.CncProgram:
                     ExecuteCncProgram(step, frame);
+                    break;
+
+                case StepType.HttpRequest:
+                    ExecuteHttpRequest(step, frame);
+                    break;
+                case StepType.CaptureImage:
+                    ExecuteCaptureImage(step, frame);
+                    break;
+                case StepType.HttpReceive:
+                    ExecuteHttpReceive(step, frame);
+                    break;
+                case StepType.Unknown:
+                    _logger?.LogWarning("Skipping unknown step type '{Type}' in program", step.UnknownStepType ?? "?");
+                    ReportStepCompleted(step);
                     break;
             }
         }
@@ -1751,6 +1817,18 @@ namespace Controller.RobotControl
                 {
                     _stringVariables[v.Name] = v.StringValue ?? "";
                 }
+                else if (v.IsImage == true)
+                {
+                    bool isGlobalImage = v.IsGlobal == true && _globalImages != null;
+                    if (isGlobalImage)
+                    {
+                        _globalImageNames.Add(v.Name);
+                        _globalImages!.InitIfAbsent(v.Name, "");
+                        _imageVariables[v.Name] = ""; // local shadow, kept in sync on read
+                    }
+                    else
+                        _imageVariables[v.Name] = ""; // populated at runtime by CaptureImage steps
+                }
                 else
                 {
                     // Persistent: restore saved value if available (keyed by programId:varName), else use declared default
@@ -2648,6 +2726,211 @@ namespace Controller.RobotControl
             frame.Index++;
         }
 
+        // ── HttpRequest ──────────────────────────────────────────────────────
+
+        private void ExecuteHttpRequest(ProgramStep step, StepListFrame frame)
+        {
+            bool waitForResponse = step.JsonWaitForResponse ?? true;
+
+            if (waitForResponse)
+            {
+                if (!frame.WaitStarted)
+                {
+                    var snapshot = BuildJsonBody(step);
+                    _pendingJsonTask = FireJsonRequest(step.JsonUrl, snapshot, step.JsonTimeoutMs ?? 10_000);
+                    frame.WaitStarted = true;
+                    ReportStepStarted(step);
+                    return;
+                }
+
+                if (_pendingJsonTask == null || !_pendingJsonTask.IsCompleted) return;
+
+                var result = _pendingJsonTask.IsCompletedSuccessfully ? _pendingJsonTask.Result : null;
+                _pendingJsonTask  = null;
+                frame.WaitStarted = false;
+                ApplyJsonInbound(step.JsonInbound, result);
+                frame.Index++;
+                ReportStepCompleted(step);
+            }
+            else
+            {
+                // Fire and continue — evaluate expressions now (on loop thread), then let the
+                // HTTP request finish in the background and queue variable writes back here.
+                var snapshot = BuildJsonBody(step);
+                var inbound  = step.JsonInbound?.ToList();
+                FireJsonRequest(step.JsonUrl, snapshot, step.JsonTimeoutMs ?? 10_000)
+                    .ContinueWith(t =>
+                    {
+                        if (t.IsCompletedSuccessfully && t.Result != null && inbound != null)
+                            _pendingActions.Enqueue(() => ApplyJsonInbound(inbound, t.Result));
+                    });
+                ReportStepCompleted(step);
+                frame.Index++;
+            }
+        }
+
+        /// <summary>Evaluates all outbound fields on the control-loop thread (numeric expressions +
+        /// image base64) and returns a plain snapshot the async HTTP task can serialize safely.</summary>
+        private Dictionary<string, object> BuildJsonBody(ProgramStep step)
+        {
+            var body = new Dictionary<string, object>();
+            var vars = EvalVars();
+            foreach (var kv in step.JsonOutbound ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(kv.Key)) continue;
+                if (!string.IsNullOrWhiteSpace(kv.ImageVar))
+                {
+                    body[kv.Key] = GetImageVariable(kv.ImageVar);
+                }
+                else
+                {
+                    double val = 0;
+                    if (!string.IsNullOrWhiteSpace(kv.Expr))
+                        try { val = ExpressionEvaluator.Evaluate(kv.Expr, vars, _listVariables, _pointVariables); }
+                        catch { /* leave as 0 */ }
+                    body[kv.Key] = val;
+                }
+            }
+            // Backwards compat: old programs that used the separate jsonImageOutbound field
+            foreach (var m in step.JsonImageOutbound ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(m.Key) || string.IsNullOrWhiteSpace(m.VariableName)) continue;
+                body[m.Key] = GetImageVariable(m.VariableName);
+            }
+            return body;
+        }
+
+        private static async Task<Dictionary<string, JsonElement>?> FireJsonRequest(
+            string? url, Dictionary<string, object> body, int timeoutMs)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            try
+            {
+                var json    = JsonSerializer.Serialize(body);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var cts = new CancellationTokenSource(timeoutMs);
+                var response = await _httpClient.PostAsync(url, content, cts.Token).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) return null;
+                var responseBody = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(responseBody)) return null;
+                return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(responseBody);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void ExecuteCaptureImage(ProgramStep step, StepListFrame frame)
+        {
+            var varName  = step.CaptureImageVariableName;
+            var cameraId = step.CaptureImageCameraId ?? "";
+            if (string.IsNullOrWhiteSpace(varName))
+            {
+                Finish(global::ProgramStatus.Error, "CaptureImage step has no target variable set");
+                return;
+            }
+            if (!_imageVariables.ContainsKey(varName))
+            {
+                Finish(global::ProgramStatus.Error, $"CaptureImage: variable '{varName}' is not an image variable");
+                return;
+            }
+            var camera = string.IsNullOrEmpty(cameraId)
+                ? _controller.CameraManager.GetFirstCamera()
+                : _controller.CameraManager.GetCamera(cameraId);
+            var frameBytes = camera?.GetLatestFrame();
+            if (frameBytes == null || frameBytes.Length == 0)
+            {
+                Finish(global::ProgramStatus.Error,
+                    $"CaptureImage: no frame available from camera '{(string.IsNullOrEmpty(cameraId) ? "default" : cameraId)}'");
+                return;
+            }
+            SetImageVariable(varName, Convert.ToBase64String(frameBytes));
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        // ── HttpReceive ──────────────────────────────────────────────────────
+
+        private void ExecuteHttpReceive(ProgramStep step, StepListFrame frame)
+        {
+            if (!frame.WaitStarted)
+            {
+                var name = step.HttpReceiveName ?? "";
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    Finish(global::ProgramStatus.Error, "HttpReceive step has no webhook name set");
+                    return;
+                }
+                var cts = new CancellationTokenSource(step.HttpReceiveTimeoutMs ?? 30_000);
+                _webhookCts            = cts;
+                var id                 = _controller.WebhookManager.Subscribe(name, out var chan);
+                _pendingWebhookSub     = (name, id);
+                _pendingWebhookTask    = WaitForWebhook(chan, cts.Token);
+                frame.WaitStarted      = true;
+                ReportStepStarted(step);
+                return;
+            }
+
+            if (_pendingWebhookTask == null || !_pendingWebhookTask.IsCompleted) return;
+
+            var result = _pendingWebhookTask.IsCompletedSuccessfully ? _pendingWebhookTask.Result : null;
+            _pendingWebhookTask = null;
+            _webhookCts?.Dispose();
+            _webhookCts = null;
+            if (_pendingWebhookSub.HasValue)
+            {
+                _controller.WebhookManager.Unsubscribe(_pendingWebhookSub.Value.Name, _pendingWebhookSub.Value.Id);
+                _pendingWebhookSub = null;
+            }
+            frame.WaitStarted = false;
+
+            if (result == null)
+            {
+                Finish(global::ProgramStatus.Error,
+                    $"HttpReceive: timeout waiting for webhook '{step.HttpReceiveName}'");
+                return;
+            }
+
+            ApplyJsonInbound(step.HttpReceiveInbound, result);
+            ReportStepCompleted(step);
+            frame.Index++;
+        }
+
+        private static async Task<Dictionary<string, JsonElement>?> WaitForWebhook(
+            Channel<Dictionary<string, JsonElement>> chan, CancellationToken ct)
+        {
+            try   { return await chan.Reader.ReadAsync(ct).ConfigureAwait(false); }
+            catch { return null; }
+        }
+
+        private void ApplyJsonInbound(List<JsonInboundMapping>? mappings, Dictionary<string, JsonElement>? data)
+        {
+            if (data == null || mappings == null) return;
+            foreach (var m in mappings)
+            {
+                if (string.IsNullOrWhiteSpace(m.Key) || string.IsNullOrWhiteSpace(m.VariableName)) continue;
+                if (!data.TryGetValue(m.Key, out var elem)) continue;
+                if (_imageVariables.ContainsKey(m.VariableName))
+                {
+                    var str = elem.ValueKind == JsonValueKind.String ? (elem.GetString() ?? "") : "";
+                    SetImageVariable(m.VariableName, str);
+                }
+                else
+                {
+                    double val = elem.ValueKind switch
+                    {
+                        JsonValueKind.Number => elem.GetDouble(),
+                        JsonValueKind.True   => 1,
+                        JsonValueKind.False  => 0,
+                        JsonValueKind.String => double.TryParse(elem.GetString(), out var d) ? d : 0,
+                        _ => 0,
+                    };
+                    SetVariable(m.VariableName, val);
+                }
+            }
+        }
+
         // ── Helpers ──────────────────────────────────────────────────────────
 
         /// <summary>Merged program/global variables plus live IO values — the full
@@ -2748,6 +3031,15 @@ namespace Controller.RobotControl
             _awaitingVision       = false;
             _visionProgramId      = null;
             _waitingForBackground = null;
+            _webhookCts?.Cancel();
+            _webhookCts?.Dispose();
+            _webhookCts         = null;
+            _pendingWebhookTask = null;
+            if (_pendingWebhookSub.HasValue)
+            {
+                _controller.WebhookManager.Unsubscribe(_pendingWebhookSub.Value.Name, _pendingWebhookSub.Value.Id);
+                _pendingWebhookSub = null;
+            }
             _frameStack.Clear();
 
             // Main program finishing: optionally kill all background programs

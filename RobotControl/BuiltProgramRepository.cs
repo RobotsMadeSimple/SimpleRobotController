@@ -1,19 +1,20 @@
 using System.Text.Json;
 
 /// <summary>
-/// Persists built programs (step sequences) to disk as builtPrograms.json.
+/// Persists built programs to disk as individual JSON files under builtPrograms/.
 /// Program images are stored as separate JPEG files under programImages/.
 /// Thread-safe via lock.
 /// </summary>
 public class BuiltProgramRepository
 {
-    private readonly string _file;
-    private readonly string _imageDir;
+    private readonly string _dir;        // builtPrograms/
+    private readonly string _imageDir;   // programImages/
+    private readonly string _legacyFile; // builtPrograms.json — read once for migration, then renamed
     private readonly object _lock = new();
     private readonly JsonSerializerOptions _opts = new()
     {
-        WriteIndented          = true,
-        Converters             = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+        WriteIndented               = true,
+        Converters                  = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
         PropertyNameCaseInsensitive = true,
     };
 
@@ -21,48 +22,159 @@ public class BuiltProgramRepository
 
     public long LastUpdatedUnixMs { get; private set; }
 
-    public BuiltProgramRepository(string file = "builtPrograms.json")
+    public BuiltProgramRepository(string baseDir = ".")
     {
-        _file     = file;
-        _imageDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(file)) ?? ".", "programImages");
+        _dir        = Path.Combine(baseDir, "builtPrograms");
+        _imageDir   = Path.Combine(baseDir, "programImages");
+        _legacyFile = Path.Combine(baseDir, "builtPrograms.json");
+        Directory.CreateDirectory(_dir);
+        MigrateIfNeeded();
         Load();
     }
 
-    // ── Persistence ──────────────────────────────────────────────────────────
+    // ── Migration from single-file format ────────────────────────────────────
+
+    private void MigrateIfNeeded()
+    {
+        if (!File.Exists(_legacyFile)) return;
+        try
+        {
+            var json = File.ReadAllText(_legacyFile);
+            var raw  = JsonSerializer.Deserialize<List<JsonElement>>(json, _opts);
+            if (raw != null)
+            {
+                foreach (var elem in raw)
+                {
+                    BuiltProgram? p = null;
+                    try { p = elem.Deserialize<BuiltProgram>(_opts); }
+                    catch { /* skip programs with unrecognized step types */ }
+                    if (p == null || string.IsNullOrWhiteSpace(p.Name)) continue;
+
+                    if (string.IsNullOrEmpty(p.Id)) p.Id = Guid.NewGuid().ToString();
+
+                    var dest = ProgramPath(p.Name);
+                    if (!File.Exists(dest))
+                        File.WriteAllText(dest, JsonSerializer.Serialize(p, _opts));
+                }
+            }
+            // Rename so migration doesn't re-run on next boot
+            File.Move(_legacyFile, _legacyFile + ".migrated", overwrite: true);
+        }
+        catch { /* best-effort — if migration fails, Load() still reads any files already written */ }
+    }
+
+    // ── Persistence ───────────────────────────────────────────────────────────
+
+    // All valid StepType names — used by the patcher to detect unknown values.
+    private static readonly HashSet<string> _knownStepTypes =
+        Enum.GetNames<StepType>().ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private void Load()
     {
-        if (!File.Exists(_file)) return;
-        try
+        foreach (var file in Directory.GetFiles(_dir, "*.json"))
         {
-            var json = File.ReadAllText(_file);
-            var list = JsonSerializer.Deserialize<List<BuiltProgram>>(json, _opts);
-            if (list != null)
-            {
-                bool migrated = false;
-                foreach (var p in list)
-                {
-                    if (string.IsNullOrEmpty(p.Id))
-                    {
-                        p.Id = Guid.NewGuid().ToString();
-                        migrated = true;
-                    }
-                }
-                _programs = list.ToDictionary(p => p.Name, p => p);
-                if (migrated) Save();
-            }
+            var p = LoadFile(file);
+            if (p != null && !string.IsNullOrWhiteSpace(p.Name))
+                _programs[p.Name] = p;
         }
-        catch { /* corrupt file — start fresh */ }
     }
 
-    private void Save()
+    private BuiltProgram? LoadFile(string file)
     {
-        var json = JsonSerializer.Serialize(_programs.Values.ToList(), _opts);
-        File.WriteAllText(_file, json);
+        string json;
+        try { json = File.ReadAllText(file); }
+        catch { return null; }
+
+        // Fast path — normal deserialization
+        try
+        {
+            var p = JsonSerializer.Deserialize<BuiltProgram>(json, _opts);
+            if (p != null) return p;
+        }
+        catch { }
+
+        // Slow path — patch unrecognized step types so the rest of the program loads
+        try
+        {
+            var patched = PatchUnknownStepTypes(json);
+            return JsonSerializer.Deserialize<BuiltProgram>(patched, _opts);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Walks the raw JSON and replaces any step object whose "type" value is not a
+    /// known StepType with {"type":"Unknown","unknownStepType":"&lt;original&gt;",...}.
+    /// This lets programs with renamed or removed step types still load and be edited.
+    /// </summary>
+    private static string PatchUnknownStepTypes(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        using var ms  = new System.IO.MemoryStream();
+        using var w   = new Utf8JsonWriter(ms);
+        WritePatched(doc.RootElement, w);
+        w.Flush();
+        return System.Text.Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    private static void WritePatched(JsonElement elem, Utf8JsonWriter w)
+    {
+        switch (elem.ValueKind)
+        {
+            case JsonValueKind.Object:
+                w.WriteStartObject();
+                // Detect a step object: has a "type" property with an unrecognized value
+                string? unknownType = null;
+                if (elem.TryGetProperty("type", out var typeProp) && typeProp.ValueKind == JsonValueKind.String)
+                {
+                    var typeStr = typeProp.GetString() ?? "";
+                    if (!_knownStepTypes.Contains(typeStr))
+                        unknownType = typeStr;
+                }
+                foreach (var prop in elem.EnumerateObject())
+                {
+                    if (unknownType != null && prop.Name == "type")
+                    {
+                        w.WriteString("type", "Unknown");
+                        w.WriteString("unknownStepType", unknownType);
+                    }
+                    else
+                    {
+                        w.WritePropertyName(prop.Name);
+                        WritePatched(prop.Value, w);
+                    }
+                }
+                w.WriteEndObject();
+                break;
+
+            case JsonValueKind.Array:
+                w.WriteStartArray();
+                foreach (var item in elem.EnumerateArray())
+                    WritePatched(item, w);
+                w.WriteEndArray();
+                break;
+
+            case JsonValueKind.String:  w.WriteStringValue(elem.GetString()); break;
+            case JsonValueKind.Number:  w.WriteRawValue(elem.GetRawText());   break;
+            case JsonValueKind.True:    w.WriteBooleanValue(true);             break;
+            case JsonValueKind.False:   w.WriteBooleanValue(false);            break;
+            case JsonValueKind.Null:    w.WriteNullValue();                    break;
+        }
+    }
+
+    private void WriteFile(BuiltProgram program)
+    {
+        File.WriteAllText(ProgramPath(program.Name), JsonSerializer.Serialize(program, _opts));
         LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 
-    // ── Public API ───────────────────────────────────────────────────────────
+    private string ProgramPath(string name)
+    {
+        var safe = string.Concat(name.Split(Path.GetInvalidFileNameChars()));
+        return Path.Combine(_dir, safe + ".json");
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
 
     public void Save(BuiltProgram program)
     {
@@ -71,8 +183,20 @@ public class BuiltProgramRepository
             if (string.IsNullOrEmpty(program.Id))
                 program.Id = Guid.NewGuid().ToString();
             program.LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            // If a program with the same ID already exists under a different name, remove the old file
+            var previous = _programs.Values.FirstOrDefault(p =>
+                p.Id == program.Id &&
+                !string.Equals(p.Name, program.Name, StringComparison.OrdinalIgnoreCase));
+            if (previous != null)
+            {
+                var oldFile = ProgramPath(previous.Name);
+                if (File.Exists(oldFile)) File.Delete(oldFile);
+                _programs.Remove(previous.Name);
+            }
+
             _programs[program.Name] = program;
-            Save();
+            WriteFile(program);
         }
     }
 
@@ -81,8 +205,9 @@ public class BuiltProgramRepository
         lock (_lock)
         {
             if (!_programs.Remove(name)) return false;
-            Save();
-            // Remove associated image file if present
+            var path = ProgramPath(name);
+            if (File.Exists(path)) File.Delete(path);
+            LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var imgPath = ImagePath(name);
             if (File.Exists(imgPath)) File.Delete(imgPath);
             return true;
@@ -91,34 +216,23 @@ public class BuiltProgramRepository
 
     public BuiltProgram? Get(string name)
     {
-        lock (_lock)
-        {
-            _programs.TryGetValue(name, out var p);
-            return p;
-        }
+        lock (_lock) { _programs.TryGetValue(name, out var p); return p; }
     }
 
     public BuiltProgram? GetById(string id)
     {
-        lock (_lock)
-        {
-            return _programs.Values.FirstOrDefault(p => p.Id == id);
-        }
+        lock (_lock) { return _programs.Values.FirstOrDefault(p => p.Id == id); }
     }
 
     public List<BuiltProgram> GetAll()
     {
-        lock (_lock)
-        {
-            return _programs.Values.ToList();
-        }
+        lock (_lock) { return _programs.Values.ToList(); }
     }
 
     // ── Image storage ─────────────────────────────────────────────────────────
 
     private string ImagePath(string name)
     {
-        // Sanitise the program name so it's safe as a filename
         var safe = string.Concat(name.Split(Path.GetInvalidFileNameChars()));
         return Path.Combine(_imageDir, safe + ".jpg");
     }
@@ -135,7 +249,6 @@ public class BuiltProgramRepository
         return File.Exists(path) ? File.ReadAllBytes(path) : null;
     }
 
-    /// <summary>Returns a map of programName → base-64 image string for every program that has an image file.</summary>
     public Dictionary<string, string?> GetAllImages()
     {
         var result = new Dictionary<string, string?>();

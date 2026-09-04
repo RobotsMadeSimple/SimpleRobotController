@@ -423,5 +423,7 @@ RobotControl/pointsHistory.json
 RobotControl/tools.json
 RobotControl/toolsHistory.json
 RobotControl/builtPrograms.json
+RobotControl/builtPrograms.json.migrated
+RobotControl/builtPrograms/
 RobotControl/identity.json
 RobotControl/programImages/*

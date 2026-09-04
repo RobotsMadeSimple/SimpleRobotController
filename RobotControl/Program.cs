@@ -127,6 +127,29 @@ class Program
 
         wsServer.Map(app);
 
+        // ── Webhook endpoints ──────────────────────────────────────────────────
+        // Any HTTP POST to /webhook/{name} delivers the JSON body to all HttpReceive
+        // steps currently listening on that name (including other robots).
+        app.MapPost("/webhook/{name}", async (string name, HttpContext context) =>
+        {
+            Dictionary<string, System.Text.Json.JsonElement>? payload;
+            try
+            {
+                payload = await System.Text.Json.JsonSerializer
+                    .DeserializeAsync<Dictionary<string, System.Text.Json.JsonElement>>(context.Request.Body);
+            }
+            catch
+            {
+                context.Response.StatusCode = 400;
+                return;
+            }
+            if (payload == null) { context.Response.StatusCode = 400; return; }
+            robotController.WebhookManager.Deliver(name, payload);
+            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+            context.Response.StatusCode = 200;
+            await context.Response.WriteAsync("ok");
+        });
+
         // ── Camera endpoints ───────────────────────────────────────────────────
         // WebSocket stream: sends base64 data-URI frames as text messages.
         // Works on web, Android, and Electron (React Native <Image source={{ uri }}>).

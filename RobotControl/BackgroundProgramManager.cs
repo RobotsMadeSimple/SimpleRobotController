@@ -40,6 +40,33 @@ namespace Controller.RobotControl
         }
     }
 
+    /// <summary>Thread-safe store for image variables (base64 strings) shared across all concurrently running programs.</summary>
+    internal class GlobalImageStore
+    {
+        private readonly Dictionary<string, string> _images = new(System.StringComparer.OrdinalIgnoreCase);
+        private readonly object _lock = new();
+
+        public bool TryGet(string name, out string value)
+        {
+            lock (_lock) return _images.TryGetValue(name, out value!);
+        }
+
+        public void Set(string name, string value)
+        {
+            lock (_lock) _images[name] = value;
+        }
+
+        public void InitIfAbsent(string name, string value)
+        {
+            lock (_lock) { if (!_images.ContainsKey(name)) _images[name] = value; }
+        }
+
+        public void Clear()
+        {
+            lock (_lock) _images.Clear();
+        }
+    }
+
     /// <summary>Status snapshot for one running background program.</summary>
     public class BackgroundProgramStatus
     {
@@ -64,7 +91,8 @@ namespace Controller.RobotControl
         private readonly GridRepository         _gridRepo;
         private readonly StackRepository        _stackRepo;
 
-        public readonly GlobalVariableStore GlobalVars = new();
+        public readonly GlobalVariableStore GlobalVars   = new();
+        public readonly GlobalImageStore   GlobalImages = new();
 
         private readonly Dictionary<string, ProgramExecutor> _running = new();
         private readonly object _lock = new();
@@ -102,7 +130,7 @@ namespace Controller.RobotControl
                 var executor = new ProgramExecutor(
                     _controller, _programManager, _pointRepo, _toolRepo, _localRepo,
                     _builtProgramRepo, _gridRepo, _stackRepo,
-                    isBackground: true, globalVars: GlobalVars, backgroundManager: this);
+                    isBackground: true, globalVars: GlobalVars, globalImages: GlobalImages, backgroundManager: this);
 
                 _running[program.Id] = executor;
                 executor.Start(program, imageBase64);

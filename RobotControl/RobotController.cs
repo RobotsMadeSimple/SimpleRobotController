@@ -209,6 +209,9 @@ namespace Controller.RobotControl
         public Vision.VisionProgramRepository VisionRepo    { get; private set; } = null!;
         public Vision.VisionManager           VisionManager { get; private set; } = null!;
 
+        // ── Webhooks ──────────────────────────────────────────────────────────
+        public WebhookManager WebhookManager { get; private set; } = new();
+
         // ── Program vision snapshots ──────────────────────────────────────────
         private readonly Dictionary<string, byte[]> _programVisionSnapshots = new();
         private readonly object _visionSnapshotLock = new();
@@ -270,7 +273,8 @@ namespace Controller.RobotControl
 
             programExecutor = new ProgramExecutor(
                 this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo,
-                isBackground: false, globalVars: backgroundProgramManager.GlobalVars, backgroundManager: backgroundProgramManager);
+                isBackground: false, globalVars: backgroundProgramManager.GlobalVars,
+                globalImages: backgroundProgramManager.GlobalImages, backgroundManager: backgroundProgramManager);
 
             // Motion and program execution run on SEPARATE threads. The motion
             // thread owns all motion state and runs unthrottled; the program thread
