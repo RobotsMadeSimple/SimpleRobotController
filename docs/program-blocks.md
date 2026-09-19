@@ -24,8 +24,9 @@ block's `type` are used.
 Programs define variables (`ProgramVariable`) that blocks can read and write:
 
 - **Scalar** (number), **boolean**, or **string** (`isString` + `stringValue`).
-- **Array** (`values`) and **point-array** (`points`, a list of Vector6) — e.g.
-  vision blob results.
+  A number or boolean can start from an expression via `valueExpression` — see
+  [Expressions](#expressions).
+- **List** (`items` + `elementType`) — see below.
 - **`isGlobal`** — shared across all concurrently running programs.
 - **`isPersistent`** — value is saved on finish and restored next run.
 - **`isStopwatch`** — value holds elapsed milliseconds (driven by
@@ -33,13 +34,126 @@ Programs define variables (`ProgramVariable`) that blocks can read and write:
 - **`displayOnMonitor`** — current value is shown on the monitor page while
   running.
 
+#### List variables
+
+There is one list type. `items` holds the elements and `elementType` says what
+they are: `Number`, `Boolean`, `Point`, or `Record`. Every element is stored as a
+record of named **number** fields whatever the element type, because a point is a
+record with a known field set and a number is a record with one reserved key.
+Numbers only — a boolean is `0`/`1` — because expressions evaluate to numbers, so
+a string field would have nothing to evaluate to.
+
+| `elementType` | Element on the wire | Read as |
+|---|---|---|
+| `Number` | `{"value": 5}` | `$name[expr]` |
+| `Boolean` | `{"value": 1}` | `$name[expr]` → `1`/`0`; interpolates as `True`/`False` |
+| `Point` | `{"x":1,"y":2, … ,"rz":6}` | `$name[expr].x`, or `$name[expr][2]` for z |
+| `Record` | `{"coverage": 42.5, …}` | `$name[expr].coverage` |
+
+`$name.length` and `$name.count` give the element count for all four. In an
+expression an out-of-range index or an unknown field reads as `0` rather than
+throwing — the field set depends on whatever produced the elements.
+[Interpolation](#variable-interpolation) instead clamps the index to the nearest
+element, since a status message reading `0` would look like real data.
+
+The element type decides which index *forms* apply, which is why it is carried
+even though the storage is the same:
+
+- `Number` and `Boolean` elements **are** the value, so `$name[expr]` resolves on
+  its own and any accessor after it is left unconsumed rather than applied —
+  `$flags[0].foo` and `$flags[0][2]` both read the element itself. On a `Point`
+  or `Record` list that bare form has no field to read and evaluates to `0`.
+- Positional `$name[expr][2]` only *means* something on a `Point` list, which is
+  the only one with a defined axis order. On a `Record` list it reads `0`; on the
+  two scalar types it is the unconsumed-accessor case above.
+- Only a `Point` list can be a [move target](#pointnameexpr). A `Record` that
+  happens to carry `x`/`y`/`z` is still refused, so a typo'd variable name
+  cannot become a move to somewhere unintended.
+
+`Number` and `Boolean` lists are the ones authored by hand — the variable editor
+gives the first value rows and the second toggles. `Point` and `Record` lists are
+normally declared empty and filled at run time by `RunVision`: blob results fill
+a `Point` list, and a color inspection on a [gridded zone](#zone-grids) fills a
+`Record` list with one record per cell.
+
+A `forEach` loop works on any element type, but only `Number` and `Boolean` lists
+have a scalar to hand to `forEachValueVariableName` (a boolean arrives as the
+`0`/`1` it is stored as). On a `Point` or `Record` list that variable receives the
+index instead, and the element is read with `$name[$i].field`.
+
+**Legacy fields.** Programs saved before the list types were unified carry
+`values`, `points`, or `objects` instead of `items`. Those still load and mean
+the same thing (`Number`, `Point`, `Record` respectively — there was never a
+legacy spelling for `Boolean`, so it only ever appears as `items`), and the controller
+writes them back unchanged; re-saving from the app is what migrates a program to
+`items`. One quirk is preserved on purpose: an *empty* legacy `values` list was
+indistinguishable from a scalar and is still read as one. An empty `items` with
+`elementType: "Number"` is a real empty list. Write `items` + `elementType` in
+anything new.
+
 ### Expressions
 
 Most numeric fields can be a **math expression** instead of a literal. A step's
 `expressions` map holds `{ "<fieldName>": "<expr>" }` keyed by the JSON field
-name (e.g. `"speed": "baseSpeed * 2"`, `"offsetZ": "$layer * 5"`). Expressions
-are evaluated at execution time and reference variables by name (or `$name`).
-The built-in `$time_ms` is also available (e.g. in `SaveImage` paths).
+name (e.g. `"speed": "$baseSpeed * 2"`, `"offsetZ": "$layer * 5"`). Expressions
+are evaluated at execution time. Variable references **require the `$` sigil** —
+a bare `baseSpeed` is not a lookup, it evaluates to `0`. The built-in `$time_ms`
+is also available (e.g. in `SaveImage` paths).
+
+| Operators | | 
+|---|---|
+| Arithmetic | `+` `-` `*` `/` |
+| Comparison | `==` `!=` `<` `<=` `>` `>=` |
+| Logic | `and` `or` `not` — `&&`, `\|\|` and `!` are accepted spellings of the same three |
+| Grouping | `(…)` |
+
+Precedence, tightest first: `* /`, `+ -`, comparison, `not`, `and`, `or`. So
+`$count > 5 and $count < 10` needs no parentheses, and `not $a > 5` means
+`not ($a > 5)`.
+
+Comparison and logic yield `1` or `0` — which is exactly how a boolean variable
+is stored, so a comparison can be assigned to one directly. Any non-zero value
+counts as true on the way in. Chained comparisons are left-associative as in C
+rather than mathematical: `1 < 2 < 3` is `(1 < 2) < 3`, which is `1`. `==`
+compares within `1e-9`, the same tolerance an `IfCondition` row uses, so
+`0.1 + 0.2 == 0.3` holds.
+
+#### Expressions as a variable's initial value
+
+A number or boolean variable can carry `valueExpression` instead of a literal
+`value`. It is evaluated **once at program start**, and again each time a routine
+is entered, against the variables declared *above* it plus IO — variables
+initialise in declaration order, so it cannot see one declared below. Any
+non-zero result makes a boolean `True`.
+
+`value` should still be written alongside it: it is the fallback used if the
+expression cannot be evaluated. An unknown `$name` in it is not a fallback case —
+it errors the program at start, the same as an unknown variable anywhere else.
+
+### Variable interpolation
+
+Text fields — `statusMessage`/`statusWarning`/`statusError`, `saveImagePath`,
+`pointNameExpr`, and `variableExpr` on a string variable — substitute variable
+references into the surrounding text:
+
+| Form | Meaning |
+|---|---|
+| `$name` / `{$name}` | Scalar → value, string → value, list → a count worded by element type: `"N items"`, `"N points"`, `"N objects"`. |
+| `$name[expr]` / `{$name[expr]}` | One element, rendered by element type — a `Number` as the value, a `Boolean` as `True`/`False`, a `Point` as `(x=…, y=…, …)`, a `Record` as `(row=0, col=1, …)`. `expr` is itself an expression, and an empty list renders `(empty)`. |
+| `$name[expr].z` / `{$name[expr].z}` | One named field of that element — a point's axis, or a record's field. Unknown fields render `0`. |
+| `{expr}` | Any math expression, e.g. `{$index + 1}` or `{$row * 3 + $col}`. Braced form only. |
+
+The braces are purely a delimiter — the `$` is required inside them just as it is
+everywhere else. They exist for two reasons. They let a reference sit directly
+against other text: `{$prefix}{$index}` → `bin3`, where `$prefix_2` would instead
+read the `_2` as part of the variable name. And they bound a full expression,
+which the bare `$` form has no way to terminate.
+
+Anything that resolves to neither a known variable nor a valid expression is left
+in the text as written rather than substituted. A braced body containing a name
+written *without* its `$` is left alone for the same reason: to the evaluator a
+bare word is not a lookup but the value `0`, so substituting it would quietly
+produce a wrong answer instead of an obvious one.
 
 ### Conditions
 
@@ -56,10 +170,29 @@ A move's destination is resolved from the first of these that is set:
 
 | Field | Meaning |
 |---|---|
-| `pointName` | A saved point by name. |
 | `gridPoint` `{ gridId, rowIndex, colIndex }` | A cell of a named grid. |
 | `stackPoint` `{ stackId, index }` | An entry of a named stack. |
-| `varPointName` (+ `varPointIndex`) | A point stored in a point-array variable. |
+| `varPointName` (+ `varPointIndex`) | **Deprecated** — an element of a `Point` list. Still honoured for programs saved before the merge; `pointNameExpr` expresses the same thing as `$name[index]`. |
+| `pointNameExpr` | A variable target, resolved fresh on every execution (see below). |
+| `pointName` | A saved point by name. |
+
+With none of them set, the move uses the robot's current TCP position, so offsets
+act as relative displacements.
+
+#### `pointNameExpr`
+
+One field covering both kinds of variable target. Which one applies depends on
+the shape of the expression:
+
+| Expression | Resolves to |
+|---|---|
+| `$pts[$i]`, `{$pts[0]}` | The **coordinates** of that element, when `pts` is a list with `elementType: "Point"`. The index is itself an expression. |
+| `$target`, `{$binPrefix}{$index}`, `bin{$i + 1}` | Interpolated to text, then looked up as the **name** of a saved point. Errors if nothing matches. |
+
+The coordinate form is deliberately anchored — the expression must be *only* the
+indexed reference. `bin$pts[0]` is text being assembled, so it takes the name
+path. Either way the expression is re-resolved on every execution, so assigning
+the variables it references retargets the move.
 
 Then these modifiers apply (all optional):
 
@@ -160,8 +293,8 @@ Repeats its child steps (`loopSteps`).
 | `loopMode` | `"count"` (default), `"forEach"`, or `"while"`. |
 | `loopCount` | Iterations for count mode; **`0` = infinite**. |
 | `loopWhileCondition` | ConditionGroup re-checked each iteration (while mode). |
-| `forEachVariableName` | Array variable to iterate (forEach mode). |
-| `forEachValueVariableName` | Variable that receives the current element. |
+| `forEachVariableName` | [List variable](#list-variables) to iterate (forEach mode) — any `elementType`. |
+| `forEachValueVariableName` | Variable that receives the current element. Only a `Number` or `Boolean` list has a scalar to give it; on a `Point` or `Record` list it receives the index instead, and the element is read with `$name[$i]`. |
 | `forEachIndexVariableName` | Variable that receives the current index. |
 | `loopSteps` | The child steps executed each iteration. |
 
@@ -227,13 +360,48 @@ program variables.
 |---|---|
 | `visionProgramId` / `visionProgramName` | Which vision program to run. |
 | `visionZoneId` / `visionZoneVar` | Optional inspection zone (fixed or from a variable). |
-| `visionOutputs` | Blob/measurement outputs → `{ inspectionId, countVar, pointsVar, detectedVar }`. |
-| `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar }`. |
+| `visionOutputs` | Blob/measurement outputs → `{ inspectionId, countVar, pointsVar, detectedVar }`. `pointsVar` receives a `Point` list. |
+| `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar, cellsVar, cellsPassedVar }`. |
 | `polygonOutputs` | Polygon/shape → `{ inspectionId, countVar, foundVar, angleVar, centerXVar, centerYVar }`. |
 | `arucoOutputs` | ArUco markers → `{ inspectionId, countVar, foundVar, firstIdVar, firstCenterXVar, firstCenterYVar }`. |
 
 Each `*Var` names a program variable that receives that result (counts, points,
 booleans, angles, coordinates).
+
+#### Zone grids
+
+A vision zone can carry a `grid` of `{ rows, cols }`, a lattice laid over the
+zone's bounding box. Cells are clipped to the zone shape, so a corner cell of a
+circular zone only covers the part inside the circle. No grid, or a 1×1 one,
+leaves behaviour unchanged.
+
+A rectangle zone can also carry a `rotation` in degrees, and its lattice turns
+with the rectangle rather than sitting on the bounding box — so a tray that is
+not square to the camera still gets one cell per pocket. Rotation is a
+rectangle-only idea: circles ignore it, and a polygon's points are already
+absolute. A zone saved before rotation existed has none, which reads as 0 and
+takes the original untilted path.
+
+Only **color coverage** inspections measure per cell today; the other inspection
+types ignore the grid.
+
+On a gridded zone the color output changes shape:
+
+| Field | Meaning |
+|---|---|
+| `coverageVar` | Still the whole-zone percentage. |
+| `passedVar` | **Every cell passed**, not the zone average. A zone-wide average hides half-full cells, which is the thing a grid exists to catch. |
+| `cellsVar` | A [list variable](#list-variables) with `elementType: "Record"`, filled with one record per cell, row-major: `row`, `col`, `index` (= `row * cols + col`), `coverage`, `passed` (1/0). |
+| `cellsPassedVar` | How many cells passed. |
+
+`cellsVar` is emptied rather than left alone when the zone has no grid, so a
+stale lattice from a previous run cannot be read as current.
+
+```
+$cells.length            → number of cells
+$cells[0].coverage       → coverage % of the top-left cell
+$cells[$i].passed == 1   → condition on the cell a forEach loop is on
+```
 
 ### SaveImage
 Saves the current camera frame to disk.

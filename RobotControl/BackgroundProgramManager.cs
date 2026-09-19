@@ -43,7 +43,8 @@ namespace Controller.RobotControl
     /// <summary>Thread-safe store for image variables (base64 strings) shared across all concurrently running programs.</summary>
     internal class GlobalImageStore
     {
-        private readonly Dictionary<string, string> _images = new(System.StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _images    = new(System.StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, long>   _revisions = new(System.StringComparer.OrdinalIgnoreCase);
         private readonly object _lock = new();
 
         public bool TryGet(string name, out string value)
@@ -53,17 +54,38 @@ namespace Controller.RobotControl
 
         public void Set(string name, string value)
         {
-            lock (_lock) _images[name] = value;
+            lock (_lock)
+            {
+                _images[name] = value;
+                _revisions[name] = _revisions.TryGetValue(name, out var r) ? r + 1 : 1;
+            }
         }
 
         public void InitIfAbsent(string name, string value)
         {
-            lock (_lock) { if (!_images.ContainsKey(name)) _images[name] = value; }
+            lock (_lock)
+            {
+                if (_images.ContainsKey(name)) return;
+                _images[name] = value;
+                // Revision 0 means "declared but never written". The monitor uses that to
+                // show a placeholder instead of asking for an image that is not there yet.
+                _revisions[name] = 0;
+            }
+        }
+
+        /// <summary>
+        /// How many times this image has been written. The monitor polls revisions rather
+        /// than images — a base64 camera frame is hundreds of kilobytes and the poll runs
+        /// several times a second, so the bytes are only fetched once per actual change.
+        /// </summary>
+        public bool TryGetRevision(string name, out long revision)
+        {
+            lock (_lock) return _revisions.TryGetValue(name, out revision);
         }
 
         public void Clear()
         {
-            lock (_lock) _images.Clear();
+            lock (_lock) { _images.Clear(); _revisions.Clear(); }
         }
     }
 
@@ -194,12 +216,21 @@ namespace Controller.RobotControl
 
         /// <summary>Returns display variables for a background program identified by display name.</summary>
         public IReadOnlyList<(string Name, double Value, bool IsBoolean)> GetDisplayVariables(string name)
+            => FindByName(name)?.GetDisplayVariables() ?? [];
+
+        /// <summary>Returns display image names and revisions for a background program.</summary>
+        public IReadOnlyList<(string Name, long Revision)> GetDisplayImages(string name)
+            => FindByName(name)?.GetDisplayImages() ?? [];
+
+        /// <summary>Returns the base64 bytes of one display image for a background program.</summary>
+        public string GetDisplayImage(string name, string variable)
+            => FindByName(name)?.GetDisplayImage(variable) ?? "";
+
+        private ProgramExecutor? FindByName(string name)
         {
-            ProgramExecutor? executor;
             lock (_lock)
-                executor = _running.Values.FirstOrDefault(e =>
+                return _running.Values.FirstOrDefault(e =>
                     string.Equals(e.CurrentProgramName, name, StringComparison.OrdinalIgnoreCase));
-            return executor?.GetDisplayVariables() ?? [];
         }
 
         /// <summary>Resets global variable state — called when no programs are running.</summary>

@@ -169,7 +169,34 @@ move targets (a `MoveL`/`MoveJ` `name` can be a grid/stack cell reference).
 | `DeleteBuiltProgram` | name | Delete a program. |
 | `ExecuteBuiltProgram` | `name` | Start running a built program from the beginning. |
 | `StopBuiltProgram` | — | Stop/pause the running built program (frame stack kept for resume). |
-| `GetProgramVariables` | program name | Returns the program's current variable values. |
+| `GetProgramVariables` | program name | Returns the program's current variable values, plus its display images as name + revision. |
+| `GetProgramVariableImage` | `name` (program) + `variable` | Returns the base64 bytes of one display image variable in `image`. |
+
+### Display images
+
+Variables flagged both `isImage` and `displayOnMonitor` are reported by
+`GetProgramVariables` under `images`, as name and revision only:
+
+```json
+{ "variables": [ … ], "images": [ { "name": "boardImage", "revision": 7 } ] }
+```
+
+The bytes are fetched separately with `GetProgramVariableImage` — note that
+`GetProgramImages` is the unrelated program-thumbnail list. That split is deliberate:
+the monitor polls variables several times a second, and a base64 camera frame runs to
+a few hundred kilobytes — inlining one would make every poll carry a picture that has
+almost always not changed. The revision counts writes to the variable, so a client
+re-fetches only when it moves.
+
+- **Revision `0`** means declared but never written. There is nothing to fetch yet.
+- Compare revisions for **inequality**, not for increase. A program restarted in a
+  fresh executor starts counting again, so a revision can legitimately go down.
+- `GetProgramVariableImage` answers `""` for an unknown program, an unknown variable, or one
+  that is not flagged for display — a monitor asking about a program that has just
+  stopped is ordinary, not an error.
+- The format is whatever was written. `CaptureImage` writes JPEG; an `HttpRequest`
+  mapped onto an image variable writes whatever the server sent. Detect it from the
+  data rather than assuming.
 
 ---
 
