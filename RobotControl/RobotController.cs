@@ -1626,13 +1626,37 @@ namespace Controller.RobotControl
                 case "GetProgramVariables":
                     {
                         var p    = LoadParams<BuiltProgramNameParams>(command);
-                        var vars = (programExecutor?.CurrentProgramName?.Equals(p.Name, StringComparison.OrdinalIgnoreCase) == true)
-                            ? programExecutor.GetDisplayVariables()
+                        bool foreground = programExecutor?.CurrentProgramName?.Equals(p.Name, StringComparison.OrdinalIgnoreCase) == true;
+                        var vars = foreground
+                            ? programExecutor!.GetDisplayVariables()
                             : backgroundProgramManager.GetDisplayVariables(p.Name);
+                        // Images are listed by name and revision only — see GetDisplayImages.
+                        // The monitor fetches the bytes with GetProgramImage when a revision
+                        // moves, which keeps this poll the same size whether or not the
+                        // program holds a camera frame.
+                        var images = foreground
+                            ? programExecutor!.GetDisplayImages()
+                            : backgroundProgramManager.GetDisplayImages(p.Name);
                         payload = new
                         {
-                            variables = vars.Select(v => new { name = v.Name, value = v.Value, isBoolean = v.IsBoolean }).ToList()
+                            variables = vars.Select(v => new { name = v.Name, value = v.Value, isBoolean = v.IsBoolean }).ToList(),
+                            images    = images.Select(i => new { name = i.Name, revision = i.Revision }).ToList()
                         };
+                    }
+                    break;
+
+                // Not "GetProgramImage" — GetProgramImages is the program *thumbnail*
+                // list, an unrelated thing, and the two would be a singular/plural apart.
+                case "GetProgramVariableImage":
+                    {
+                        var p = LoadParams<ProgramImageParams>(command);
+                        bool foreground = programExecutor?.CurrentProgramName?.Equals(p.Name, StringComparison.OrdinalIgnoreCase) == true;
+                        var data = foreground
+                            ? programExecutor!.GetDisplayImage(p.Variable)
+                            : backgroundProgramManager.GetDisplayImage(p.Name, p.Variable);
+                        // Empty rather than an error when there is nothing to send: a monitor
+                        // asking about a program that has just stopped is ordinary, not a fault.
+                        payload = new { name = p.Name, variable = p.Variable, image = data };
                     }
                     break;
 

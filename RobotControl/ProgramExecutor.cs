@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -90,11 +90,41 @@ namespace Controller.RobotControl
 
         // Program variables — initialised from BuiltProgram.Variables on Start(), mutated by SetVariable steps
         private readonly Dictionary<string, double>            _variables        = new();
-        private readonly Dictionary<string, List<double>>      _listVariables    = new();
-        private readonly Dictionary<string, List<Vector6Val>>  _pointVariables   = new();
+        /// <summary>
+        /// Every list variable, whatever its elements are. One dictionary rather than three
+        /// because a number and a point are both records of named doubles — see ListVar.
+        /// </summary>
+        private readonly Dictionary<string, ListVar> _listVariables = new();
+
+        /// <summary>
+        /// A list usable as a move target. Point elements only — a record list may happen to
+        /// carry x/y/z, but treating it as a pose was never allowed and guessing here would
+        /// turn a typo'd variable name into a move to somewhere unintended.
+        /// </summary>
+        private bool TryGetPointList(string name, out ListVar list)
+        {
+            if (_listVariables.TryGetValue(name, out var lv) && lv.ElementType == ListElementType.Point)
+            {
+                list = lv;
+                return true;
+            }
+            list = null!;
+            return false;
+        }
+
+        /// <summary>A pose as it appears interpolated into a status message.</summary>
+        private static string FormatPoint(Vector6Val pt) =>
+            $"(x={pt.X:G6}, y={pt.Y:G6}, z={pt.Z:G6}, rx={pt.RX:G6}, ry={pt.RY:G6}, rz={pt.RZ:G6})";
+
         private readonly HashSet<string>                       _booleanVariables = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string>            _stringVariables  = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string>            _imageVariables   = new(StringComparer.OrdinalIgnoreCase);
+
+        // How many times each image variable has been written. Deliberately not cleared on
+        // Start(): the counter is what the monitor compares against to decide whether to
+        // re-fetch, and resetting it on a re-run would make the second run's first frame
+        // look like a revision the monitor had already drawn.
+        private readonly Dictionary<string, long>              _imageRevisions   = new(StringComparer.OrdinalIgnoreCase);
 
         // Background execution support
         private readonly bool                    _isBackground;
@@ -141,11 +171,67 @@ namespace Controller.RobotControl
             foreach (var v in _program.Variables)
             {
                 if (v.DisplayOnMonitor != true) continue;
-                if (v.Values != null || v.Points != null || v.IsString == true || v.IsImage == true) continue; // non-scalar types not supported in numeric display
+                // Non-scalar types are not supported in numeric display. The legacy list
+                // fields are still tested alongside Items so that an empty saved list —
+                // which ToListVar deliberately reads as a scalar — stays excluded here,
+                // exactly as it was before the list types were unified.
+                if (v.Items != null || v.Values != null || v.Points != null || v.Objects != null
+                    || v.IsString == true || v.IsImage == true) continue;
                 merged.TryGetValue(v.Name, out double val);
                 result.Add((v.Name, val, v.IsBoolean == true));
             }
             return result;
+        }
+
+        /// <summary>
+        /// Names and write-counts of image variables flagged DisplayOnMonitor.
+        /// </summary>
+        /// <remarks>
+        /// The bytes are not included on purpose. This rides along with the variable poll,
+        /// which the monitor runs several times a second; a base64 camera frame is a few
+        /// hundred kilobytes, so inlining one would turn a cheap poll into a steady
+        /// megabyte-a-second stream of a picture that usually has not changed. The revision
+        /// is enough for the monitor to notice a change and ask for the image itself.
+        /// </remarks>
+        public IReadOnlyList<(string Name, long Revision)> GetDisplayImages()
+        {
+            if (_program?.Variables == null) return [];
+            var result = new List<(string, long)>();
+            foreach (var v in _program.Variables)
+            {
+                if (v.DisplayOnMonitor != true || v.IsImage != true) continue;
+                result.Add((v.Name, ImageRevision(v.Name)));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// The base64 bytes of one DisplayOnMonitor image variable, or "" if there is no
+        /// such variable or nothing has been written to it.
+        /// </summary>
+        /// <remarks>
+        /// Gated on the same two flags as <see cref="GetDisplayImages"/> rather than reading
+        /// any image variable by name, so what can be fetched is exactly what was listed —
+        /// a program that captures a frame for its own use does not publish it by accident.
+        /// </remarks>
+        public string GetDisplayImage(string name)
+        {
+            if (_program?.Variables == null) return "";
+            bool listed = _program.Variables.Any(v =>
+                v.DisplayOnMonitor == true && v.IsImage == true
+                && string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase));
+            return listed ? GetImageVariable(name) : "";
+        }
+
+        /// <summary>Write-count for one image, preferring the shared store for globals.</summary>
+        private long ImageRevision(string name)
+        {
+            // Same precedence as GetImageVariable: a global is written by whichever program
+            // got there last, which may not be this one, so its count lives in the store.
+            if (_globalImageNames.Contains(name) && _globalImages != null
+                && _globalImages.TryGetRevision(name, out var gr))
+                return gr;
+            return _imageRevisions.TryGetValue(name, out var lr) ? lr : 0;
         }
 
         public ProgramExecutor(
@@ -238,6 +324,7 @@ namespace Controller.RobotControl
         private void SetImageVariable(string name, string value)
         {
             _imageVariables[name] = value;
+            _imageRevisions[name] = _imageRevisions.TryGetValue(name, out var r) ? r + 1 : 1;
             if (_globalImageNames.Contains(name) && _globalImages != null)
                 _globalImages.Set(name, value);
         }
@@ -276,13 +363,17 @@ namespace Controller.RobotControl
             if (!string.IsNullOrEmpty(frame.ForEachIndexVar))
                 SetVariable(frame.ForEachIndexVar, idx);
 
-            // Write value variable — for point arrays the value is the index itself
+            // Write value variable — only an element that is itself a value has one to give.
+            // A boolean arrives as the 0/1 it is stored as, which is what a boolean variable
+            // holds anyway. For point/record lists the element is not a number, so the value
+            // variable gets the index instead and the element is read with $name[$i].field.
             if (!string.IsNullOrEmpty(frame.ForEachValueVar))
             {
-                if (_listVariables.TryGetValue(frame.ForEachSourceVar, out var list))
-                    SetVariable(frame.ForEachValueVar, idx < list.Count ? list[idx] : 0);
+                if (_listVariables.TryGetValue(frame.ForEachSourceVar, out var list) &&
+                    list.HasScalarElements)
+                    SetVariable(frame.ForEachValueVar, idx < list.Count ? list.Items[idx].Scalar : 0);
                 else
-                    SetVariable(frame.ForEachValueVar, idx); // point array or unknown: expose index
+                    SetVariable(frame.ForEachValueVar, idx); // point/object array or unknown: expose index
             }
         }
 
@@ -322,7 +413,6 @@ namespace Controller.RobotControl
             // Initialise variables from the program definition
             _variables.Clear();
             _listVariables.Clear();
-            _pointVariables.Clear();
             _booleanVariables.Clear();
             _stringVariables.Clear();
             _imageVariables.Clear();
@@ -332,9 +422,20 @@ namespace Controller.RobotControl
             _stopwatches.Clear();
             _waitingForBackground = null;
 
-            InitializeVariables(program);
-
+            // Set before initialising, because a variable whose initial value is an
+            // expression can now fail here — and reporting that failure needs the program.
             _program = program;
+            try
+            {
+                InitializeVariables(program);
+            }
+            catch (UnknownVariableException ex)
+            {
+                Finish(global::ProgramStatus.Error,
+                    $"Unknown variable '${ex.VariableName}' in a variable's initial value");
+                return;
+            }
+
             _stopRequested = false;
             _isPaused      = false;
             _awaitingMove    = false;
@@ -502,7 +603,6 @@ namespace Controller.RobotControl
             }
             _variables.Clear();
             _listVariables.Clear();
-            _pointVariables.Clear();
             _stopwatches.Clear();
             _booleanVariables.Clear();
             _stringVariables.Clear();
@@ -1132,7 +1232,7 @@ namespace Controller.RobotControl
             }
             else if (!string.IsNullOrEmpty(step.VarPointName))
             {
-                if (!_pointVariables.TryGetValue(step.VarPointName, out var ptList) || ptList.Count == 0)
+                if (!TryGetPointList(step.VarPointName, out var ptList) || ptList.Count == 0)
                 {
                     Finish(global::ProgramStatus.Error, $"Variable point '{step.VarPointName}' is empty or not set");
                     return false;
@@ -1140,13 +1240,58 @@ namespace Controller.RobotControl
                 int ptIdx = 0;
                 if (!string.IsNullOrEmpty(step.VarPointIndex))
                 {
-                    try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(step.VarPointIndex, EvalVars(), _listVariables, _pointVariables)); }
+                    try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(step.VarPointIndex, EvalVars(), _listVariables)); }
                     catch (UnknownVariableException) { throw; }
                     catch { /* malformed expression — default 0 */ }
                 }
                 ptIdx = Math.Clamp(ptIdx, 0, ptList.Count - 1);
-                var vp = ptList[ptIdx];
+                var vp = ptList.Items[ptIdx].ToPoint();
                 point = new Point { X = vp.X, Y = vp.Y, Z = vp.Z, RX = vp.RX, RY = vp.RY, RZ = vp.RZ };
+            }
+            else if (!string.IsNullOrEmpty(step.PointNameExpr))
+            {
+                // One field, two kinds of target. An expression that is nothing but an
+                // indexed points variable ("$pts[$i]") already *is* a coordinate, so it is
+                // used directly; anything else is text naming a saved point. Both are
+                // resolved fresh on every execution, so assigning the variables they
+                // reference retargets the move.
+                if (TryParsePointsRef(step.PointNameExpr, out var refName, out var idxExpr) &&
+                    TryGetPointList(refName, out var ptList))
+                {
+                    if (ptList.Count == 0)
+                    {
+                        Finish(global::ProgramStatus.Error, $"Points variable '{refName}' is empty or not set");
+                        return false;
+                    }
+
+                    int ptIdx = 0;
+                    if (!string.IsNullOrEmpty(idxExpr))
+                    {
+                        try { ptIdx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, EvalVars(), _listVariables)); }
+                        catch (UnknownVariableException) { throw; }
+                        catch { /* malformed expression — default 0 */ }
+                    }
+                    ptIdx = Math.Clamp(ptIdx, 0, ptList.Count - 1);
+                    var vp = ptList.Items[ptIdx].ToPoint();
+                    point = new Point { X = vp.X, Y = vp.Y, Z = vp.Z, RX = vp.RX, RY = vp.RY, RZ = vp.RZ };
+                }
+                else
+                {
+                    var targetName = InterpolateVariables(step.PointNameExpr).Trim();
+                    if (string.IsNullOrEmpty(targetName))
+                    {
+                        Finish(global::ProgramStatus.Error, $"Point name '{step.PointNameExpr}' resolved to nothing");
+                        return false;
+                    }
+
+                    var namedPoint = _pointRepo.Get(targetName);
+                    if (namedPoint is null)
+                    {
+                        Finish(global::ProgramStatus.Error, $"Point not found: {targetName} (from '{step.PointNameExpr}')");
+                        return false;
+                    }
+                    point = namedPoint;
+                }
             }
             else if (string.IsNullOrEmpty(step.PointName))
             {
@@ -1442,15 +1587,23 @@ namespace Controller.RobotControl
 
         private string InterpolateVariables(string template)
         {
-            // Matches: $name, $name[expr], $name[expr].component
+            // Matches $name, $name[expr], $name[expr].component and the braced form {…}.
+            // Braces delimit a reference so it can butt straight up against surrounding text —
+            // "{$prefix}{$index}" has no bare equivalent, because while "$prefix$index" works,
+            // "$prefix_2" swallows the underscore into the name — and they may hold any math
+            // expression, so "{$index + 1}" and "{$row * 3 + $col}" also interpolate. The $
+            // stays required inside braces, matching expressions everywhere else.
             var allVarsForTemplate = MergedVars();
-            return Regex.Replace(template, @"\$(\w+)(?:\[([^\]]*)\](?:\.(\w+))?)?", m =>
+            const string varRef = @"(?<name>\w+)(?:\[(?<idx>[^\]]*)\](?:\.(?<comp>\w+))?)?";
+
+            // Expands a plain variable reference; null when the name isn't a known variable.
+            string? ExpandRef(Match r)
             {
-                var name     = m.Groups[1].Value;
-                var hasIndex = m.Groups[2].Success;
-                var idxExpr  = m.Groups[2].Value.Trim();
-                var hasComp  = m.Groups[3].Success;
-                var compName = m.Groups[3].Value.ToLower();
+                var name     = r.Groups["name"].Value;
+                var hasIndex = r.Groups["idx"].Success;
+                var idxExpr  = r.Groups["idx"].Value.Trim();
+                var hasComp  = r.Groups["comp"].Success;
+                var compName = r.Groups["comp"].Value.ToLower();
 
                 if (!hasIndex)
                 {
@@ -1459,43 +1612,72 @@ namespace Controller.RobotControl
                         return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : sv.ToString("G6");
                     if (_stringVariables.TryGetValue(name, out var strVal))
                         return strVal;
-                    if (_listVariables.ContainsKey(name))
-                        return $"{_listVariables[name].Count} items";
-                    if (_pointVariables.ContainsKey(name))
-                        return $"{_pointVariables[name].Count} points";
-                    return m.Value;
+                    if (_listVariables.TryGetValue(name, out var bare))
+                        return bare.Describe();
+                    return null;
                 }
 
                 // Evaluate index expression (literal int or variable expression)
                 int idx = 0;
                 if (!string.IsNullOrEmpty(idxExpr))
                 {
-                    try { idx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, allVarsForTemplate, _listVariables, _pointVariables)); }
+                    try { idx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, allVarsForTemplate, _listVariables)); }
                     catch { idx = 0; }
                 }
 
-                // Points variable
-                if (_pointVariables.TryGetValue(name, out var ptList))
+                if (_listVariables.TryGetValue(name, out var lv))
                 {
-                    if (ptList.Count == 0) return "(empty)";
-                    idx = Math.Clamp(idx, 0, ptList.Count - 1);
-                    var pt = ptList[idx];
+                    if (lv.Count == 0) return "(empty)";
+                    idx = Math.Clamp(idx, 0, lv.Count - 1);
+                    var item = lv.Items[idx];
 
                     if (hasComp)
-                        return pt.GetComponent(compName).ToString("G6");
+                        return item.TryGetValue(compName, out var fv) ? fv.ToString("G6") : "0";
 
-                    return $"(x={pt.X:G6}, y={pt.Y:G6}, z={pt.Z:G6}, rx={pt.RX:G6}, ry={pt.RY:G6}, rz={pt.RZ:G6})";
+                    // No field named — render the whole element. A point keeps its familiar
+                    // axis-ordered form rather than dictionary order, which is what makes
+                    // "$pts[0]" readable in a status message. A boolean prints True/False to
+                    // match how a scalar boolean variable interpolates, not the 0/1 it is
+                    // stored as — that spelling is the reason the element type exists.
+                    return lv.ElementType switch
+                    {
+                        ListElementType.Number  => item.Scalar.ToString("G6"),
+                        ListElementType.Boolean => item.Scalar != 0 ? "True" : "False",
+                        ListElementType.Point   => FormatPoint(item.ToPoint()),
+                        _ => "(" + string.Join(", ", item.Select(kv => $"{kv.Key}={kv.Value:G6}")) + ")",
+                    };
                 }
 
-                // List variable indexed
-                if (_listVariables.TryGetValue(name, out var list))
-                {
-                    if (list.Count == 0) return "(empty)";
-                    idx = Math.Clamp(idx, 0, list.Count - 1);
-                    return list[idx].ToString("G6");
-                }
+                return null;
+            }
 
-                return m.Value;
+            return Regex.Replace(template, @"\{(?<body>[^{}]*)\}|\$" + varRef, m =>
+            {
+                if (!m.Groups["body"].Success)
+                    return ExpandRef(m) ?? m.Value;
+
+                var body = m.Groups["body"].Value.Trim();
+
+                // A name written without its $ would tokenize as a word and evaluate to 0,
+                // turning a forgotten sigil into a plausible-looking wrong answer. Leave the
+                // braces written as-is instead, so it surfaces downstream. Words after a dot
+                // are components (.z, .length) and true/false are literals — both fine bare.
+                var bare = Regex.Matches(body, @"(?<![$.\w])[A-Za-z_]\w*")
+                                .Any(w => !w.Value.Equals("true",  StringComparison.OrdinalIgnoreCase)
+                                       && !w.Value.Equals("false", StringComparison.OrdinalIgnoreCase));
+                if (body.Length == 0 || bare) return m.Value;
+
+                var inner = Regex.Match(body, @"^\$" + varRef + "$");
+                if (inner.Success)
+                    // A lone reference. When the name isn't a known variable, leave it written
+                    // as-is rather than handing a typo to the evaluator.
+                    return ExpandRef(inner) ?? m.Value;
+
+                // Anything else is an expression. A failure leaves the braces in place,
+                // which surfaces downstream (a point lookup, say) rather than silently
+                // substituting something wrong.
+                try { return ExpressionEvaluator.Evaluate(body, allVarsForTemplate, _listVariables).ToString("G6"); }
+                catch { return m.Value; }
             });
         }
 
@@ -1686,9 +1868,8 @@ namespace Controller.RobotControl
 
                 if (!string.IsNullOrEmpty(output.PointsVar))
                 {
-                    _pointVariables[output.PointsVar] = ir.Blobs
-                        .Select(b => new Vector6Val { X = b.X, Y = b.Y })
-                        .ToList();
+                    _listVariables[output.PointsVar] = ListVar.OfPoints(
+                        ir.Blobs.Select(b => new Vector6Val { X = b.X, Y = b.Y }));
                 }
 
                 if (!string.IsNullOrEmpty(output.DetectedVar))
@@ -1706,6 +1887,24 @@ namespace Controller.RobotControl
 
                 if (!string.IsNullOrEmpty(output.PassedVar))
                     _variables[output.PassedVar] = cr.Passed ? 1 : 0;
+
+                // Grid cells. An ungridded zone has no cells, so the variable is emptied
+                // rather than left holding the previous run's grid.
+                if (!string.IsNullOrEmpty(output.CellsVar))
+                {
+                    _listVariables[output.CellsVar] = ListVar.OfRecords(
+                        (cr.Cells ?? []).Select(cell => new ObjectRecord
+                        {
+                            ["row"]      = cell.Row,
+                            ["col"]      = cell.Col,
+                            ["index"]    = cell.Index,
+                            ["coverage"] = cell.Coverage,
+                            ["passed"]   = cell.Passed ? 1 : 0,
+                        }));
+                }
+
+                if (!string.IsNullOrEmpty(output.CellsPassedVar))
+                    _variables[output.CellsPassedVar] = cr.CellsPassed ?? 0;
             }
 
             foreach (var output in step.PolygonOutputs ?? [])
@@ -1803,10 +2002,10 @@ namespace Controller.RobotControl
             {
                 bool isGlobal     = v.IsGlobal == true && _globalVars != null;
                 bool isPersistent = v.IsPersistent == true;
-                if (v.Points != null)
-                    _pointVariables[v.Name] = new List<Vector6Val>(v.Points);
-                else if (v.Values != null && v.Values.Count > 0)
-                    _listVariables[v.Name] = v.Values;
+                // Lists of every element type, including ones saved before the list types
+                // were unified — ToListVar folds the legacy points/objects/values fields in.
+                if (v.ToListVar() is { } declaredList)
+                    _listVariables[v.Name] = declaredList;
                 else if (v.IsStopwatch == true)
                 {
                     _stopwatches[v.Name] = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
@@ -1833,7 +2032,7 @@ namespace Controller.RobotControl
                     // Persistent: restore saved value if available (keyed by programId:varName), else use declared default
                     double initialValue = isPersistent && savedPersistent.TryGetValue(persistPrefix + v.Name, out var saved)
                         ? saved
-                        : v.Value;
+                        : ResolveInitialValue(v);
 
                     if (isGlobal)
                     {
@@ -1847,6 +2046,34 @@ namespace Controller.RobotControl
                     if (v.IsBoolean == true) _booleanVariables.Add(v.Name);
                 }
             }
+        }
+
+        /// <summary>
+        /// A scalar's starting value: its expression if it declares one, otherwise its plain
+        /// number.
+        ///
+        /// Evaluated here, once, as the variable is registered — and variables are registered
+        /// in declaration order, so an expression can reference a variable declared above it
+        /// but not one below. A persistent variable with a restored value never reaches this:
+        /// the point of persistence is to carry the last value across runs.
+        /// </summary>
+        private double ResolveInitialValue(ProgramVariable v)
+        {
+            if (string.IsNullOrWhiteSpace(v.ValueExpression)) return v.Value;
+
+            double result;
+            // An unknown variable propagates, as it does everywhere else an expression is
+            // evaluated — a typo'd name quietly starting at 0 is how a clearance height
+            // becomes a collision. Value is the fallback for anything else that goes wrong,
+            // since it holds the last result the editor computed.
+            try { result = ExpressionEvaluator.Evaluate(v.ValueExpression, EvalVars(), _listVariables); }
+            catch (UnknownVariableException) { throw; }
+            catch { return v.Value; }
+
+            // A boolean holds 0 or 1, and an expression can produce any number — "$count"
+            // on its own, say. Comparisons already yield 1 or 0, so this only bites the
+            // cases that would otherwise store something no boolean step expects.
+            return v.IsBoolean == true ? (result != 0 ? 1 : 0) : result;
         }
 
         private void ExecuteCncProgram(ProgramStep step, StepListFrame frame)
@@ -1871,7 +2098,7 @@ namespace Controller.RobotControl
                 var e = step.CncSpec?.Expressions;
                 if (e == null || !e.TryGetValue(key, out var expr) || string.IsNullOrWhiteSpace(expr))
                     return fallback;
-                try { return ExpressionEvaluator.Evaluate(expr, EvalVars(), _listVariables, _pointVariables); }
+                try { return ExpressionEvaluator.Evaluate(expr, EvalVars(), _listVariables); }
                 catch (UnknownVariableException) { throw; }
                 catch { return fallback; }
             }
@@ -2118,11 +2345,8 @@ namespace Controller.RobotControl
             else if (step.LoopMode == "forEach" && !string.IsNullOrEmpty(step.ForEachVariableName))
             {
                 // Determine iteration count from the source collection
-                int count = 0;
-                if (_listVariables.TryGetValue(step.ForEachVariableName, out var lst))
-                    count = lst.Count;
-                else if (_pointVariables.TryGetValue(step.ForEachVariableName, out var pts))
-                    count = pts.Count;
+                int count = _listVariables.TryGetValue(step.ForEachVariableName, out var lst)
+                    ? lst.Count : 0;
 
                 if (count == 0) { _loopDepth++; _loopDepth--; return; } // empty — skip body
 
@@ -2311,23 +2535,15 @@ namespace Controller.RobotControl
             // Unknown variables propagate (and error the program) — a typo'd condition
             // silently comparing 0 could take the wrong branch on a machine that moves.
             double left, right;
-            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables, _pointVariables); }
+            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables); }
             catch (UnknownVariableException) { throw; }
             catch { left  = 0; }
-            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables, _pointVariables); }
+            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables); }
             catch (UnknownVariableException) { throw; }
             catch { right = 0; }
-            const double eps = 1e-9;
-            return item.Operator switch
-            {
-                "==" => Math.Abs(left - right) < eps,
-                "!=" => Math.Abs(left - right) >= eps,
-                ">"  => left > right,
-                ">=" => left >= right,
-                "<"  => left < right,
-                "<=" => left <= right,
-                _    => false,
-            };
+            // Shared with the comparison operators inside expressions, so "==" cannot come
+            // to mean one thing in a condition row and another in "$a == $b".
+            return ExpressionEvaluator.Compare(left, item.Operator, right);
         }
 
         private bool IsStringVarRef(string expr) =>
@@ -2582,7 +2798,7 @@ namespace Controller.RobotControl
                 {
                     try
                     {
-                        double value = ExpressionEvaluator.Evaluate(step.VariableExpr, EvalVars(), _listVariables, _pointVariables);
+                        double value = ExpressionEvaluator.Evaluate(step.VariableExpr, EvalVars(), _listVariables);
                         if (_globalVars != null && _globalVarNames.Contains(step.VariableName))
                             _globalVars.Set(step.VariableName, value);
                         else
@@ -2777,7 +2993,16 @@ namespace Controller.RobotControl
             foreach (var kv in step.JsonOutbound ?? [])
             {
                 if (string.IsNullOrWhiteSpace(kv.Key)) continue;
-                if (!string.IsNullOrWhiteSpace(kv.ImageVar))
+                if (!string.IsNullOrWhiteSpace(kv.ListVar))
+                {
+                    // An undeclared list sends [] rather than being skipped. A server that
+                    // expects the key should see an empty list, not a body with the key
+                    // missing — the second is far harder to diagnose from the other end.
+                    body[kv.Key] = _listVariables.TryGetValue(kv.ListVar, out var lv)
+                        ? ListToJson(lv)
+                        : new List<double>();
+                }
+                else if (!string.IsNullOrWhiteSpace(kv.ImageVar))
                 {
                     body[kv.Key] = GetImageVariable(kv.ImageVar);
                 }
@@ -2785,7 +3010,7 @@ namespace Controller.RobotControl
                 {
                     double val = 0;
                     if (!string.IsNullOrWhiteSpace(kv.Expr))
-                        try { val = ExpressionEvaluator.Evaluate(kv.Expr, vars, _listVariables, _pointVariables); }
+                        try { val = ExpressionEvaluator.Evaluate(kv.Expr, vars, _listVariables); }
                         catch { /* leave as 0 */ }
                     body[kv.Key] = val;
                 }
@@ -2798,6 +3023,23 @@ namespace Controller.RobotControl
             }
             return body;
         }
+
+        /// <summary>
+        /// One list variable as something <see cref="JsonSerializer"/> turns into a JSON array.
+        ///
+        /// The element type picks the shape, and each one matches how that list reads in an
+        /// expression: a Boolean list sends <c>[true, false]</c> because <c>$v[0]</c> is the
+        /// value itself, while a point or record list sends objects because those are read by
+        /// field name. So what goes on the wire is what the program would have seen.
+        /// </summary>
+        internal static object ListToJson(ListVar lv) => lv.ElementType switch
+        {
+            ListElementType.Boolean => lv.Items.ConvertAll(r => r.Scalar != 0),
+            ListElementType.Number  => lv.Items.ConvertAll(r => r.Scalar),
+            // Points and records are already dictionaries of named doubles, which is
+            // exactly a JSON object — no conversion needed.
+            _                       => lv.Items,
+        };
 
         private static async Task<Dictionary<string, JsonElement>?> FireJsonRequest(
             string? url, Dictionary<string, object> body, int timeoutMs)
@@ -2910,24 +3152,78 @@ namespace Controller.RobotControl
             {
                 if (string.IsNullOrWhiteSpace(m.Key) || string.IsNullOrWhiteSpace(m.VariableName)) continue;
                 if (!data.TryGetValue(m.Key, out var elem)) continue;
-                if (_imageVariables.ContainsKey(m.VariableName))
+                if (elem.ValueKind == JsonValueKind.Array
+                    && _listVariables.TryGetValue(m.VariableName, out var target))
+                {
+                    _listVariables[m.VariableName] = ListFromJson(elem, target.ElementType);
+                }
+                else if (_imageVariables.ContainsKey(m.VariableName))
                 {
                     var str = elem.ValueKind == JsonValueKind.String ? (elem.GetString() ?? "") : "";
                     SetImageVariable(m.VariableName, str);
                 }
                 else
                 {
-                    double val = elem.ValueKind switch
-                    {
-                        JsonValueKind.Number => elem.GetDouble(),
-                        JsonValueKind.True   => 1,
-                        JsonValueKind.False  => 0,
-                        JsonValueKind.String => double.TryParse(elem.GetString(), out var d) ? d : 0,
-                        _ => 0,
-                    };
-                    SetVariable(m.VariableName, val);
+                    SetVariable(m.VariableName, ScalarFromJson(elem));
                 }
             }
+        }
+
+        /// <summary>One inbound JSON value as a number. Shared by scalar variables and by the
+        /// elements of a number/boolean list so both coerce identically.</summary>
+        internal static double ScalarFromJson(JsonElement el)
+        {
+            double v = el.ValueKind switch
+            {
+                // TryGetDouble rather than GetDouble: throwing here would abort a program
+                // mid-cycle over a malformed response from someone else's server.
+                JsonValueKind.Number => el.TryGetDouble(out var d) ? d : 0,
+                JsonValueKind.True   => 1,
+                JsonValueKind.False  => 0,
+                JsonValueKind.String => double.TryParse(el.GetString(), out var s) ? s : 0,
+                _ => 0,
+            };
+            // A number too large for a double does not fail to parse — it succeeds as ±∞.
+            // An infinity in a program variable then poisons every expression it reaches
+            // while still comparing and evaluating like a normal value, so it never
+            // surfaces as an error. 0 is also wrong, but it is wrong somewhere visible.
+            return double.IsFinite(v) ? v : 0;
+        }
+
+        /// <summary>
+        /// Rebuilds a list variable from an inbound JSON array.
+        ///
+        /// The element type the program declared wins over whatever arrived: a Boolean list
+        /// stays Boolean whether the server sent <c>true</c> or <c>1</c>, so <c>$v[0]</c>,
+        /// conditions and the editor all keep behaving the way the program was written
+        /// against. The wire supplies values, not types.
+        ///
+        /// The list is replaced whole rather than merged, so its length follows the response —
+        /// a shorter array shortens the list, and <c>$v.length</c> is how many came back.
+        /// Anything that does not fit the declared shape becomes 0 instead of throwing,
+        /// for the same reason as <see cref="ScalarFromJson"/>.
+        /// </summary>
+        internal static ListVar ListFromJson(JsonElement arr, ListElementType type)
+        {
+            var items = new List<ObjectRecord>();
+            bool structured = type is ListElementType.Point or ListElementType.Record;
+            foreach (var el in arr.EnumerateArray())
+            {
+                if (!structured)
+                {
+                    items.Add(ObjectRecord.FromScalar(ScalarFromJson(el)));
+                    continue;
+                }
+                // A structured element needs named fields. A non-object here (say a bare
+                // number where {x,y,z} was expected) yields an empty record, which reads
+                // as 0 on every field rather than shifting the rest of the list.
+                var rec = new ObjectRecord();
+                if (el.ValueKind == JsonValueKind.Object)
+                    foreach (var p in el.EnumerateObject())
+                        rec[p.Name] = ScalarFromJson(p.Value);
+                items.Add(rec);
+            }
+            return new ListVar { ElementType = type, Items = items };
         }
 
         // ── Helpers ──────────────────────────────────────────────────────────
@@ -2952,7 +3248,7 @@ namespace Controller.RobotControl
         {
             if (step.Expressions != null && step.Expressions.TryGetValue(fieldName, out var expr))
             {
-                try { return ExpressionEvaluator.Evaluate(expr, EvalVars(), _listVariables, _pointVariables); }
+                try { return ExpressionEvaluator.Evaluate(expr, EvalVars(), _listVariables); }
                 catch (UnknownVariableException) { throw; }
                 catch { /* malformed expression — fall through to the literal */ }
             }
@@ -3066,14 +3362,44 @@ namespace Controller.RobotControl
             _loopDepth       = 0;
         }
 
+        /// <summary>
+        /// Recognises a pointNameExpr that is <em>only</em> an indexed variable reference,
+        /// e.g. "$pts[$i]" or "{$pts[0]}" — the form that resolves to coordinates rather
+        /// than to the name of a saved point.
+        ///
+        /// Deliberately anchored: "bin$pts[0]" is text being assembled, not a coordinate,
+        /// and must fall through to the name lookup. Whether <paramref name="name"/> is
+        /// actually a points variable is the caller's to decide, since only it knows the
+        /// variable state.
+        /// </summary>
+        internal static bool TryParsePointsRef(string expr, out string name, out string indexExpr)
+        {
+            var m = Regex.Match(expr?.Trim() ?? "", @"^\{?\s*\$(?<name>\w+)\s*\[(?<idx>[^\]]*)\]\s*\}?$");
+            name      = m.Success ? m.Groups["name"].Value        : "";
+            indexExpr = m.Success ? m.Groups["idx"].Value.Trim()  : "";
+            return m.Success;
+        }
+
+        /// <summary>
+        /// Label for a move's destination, in the same precedence order the executor resolves it.
+        /// Static, so variable-backed targets show the variable reference rather than a runtime value.
+        /// </summary>
+        private static string MoveTargetLabel(ProgramStep step) =>
+              step.GridPoint  != null                  ? "grid point"
+            : step.StackPoint != null                  ? "stack point"
+            : !string.IsNullOrEmpty(step.VarPointName) ? $"${step.VarPointName}[{step.VarPointIndex ?? "0"}]"
+            : !string.IsNullOrEmpty(step.PointNameExpr) ? step.PointNameExpr
+            : !string.IsNullOrEmpty(step.PointName)    ? step.PointName
+            : "current position";
+
         private static string StepDescription(ProgramStep step)
         {
             var type = step.Type switch
             {
-                StepType.MoveL        => $"MoveL → {step.PointName}",
-                StepType.MoveJ        => $"MoveJ → {step.PointName}",
-                StepType.JumpL        => $"JumpL → {step.PointName}",
-                StepType.JumpJ        => $"JumpJ → {step.PointName}",
+                StepType.MoveL        => $"MoveL → {MoveTargetLabel(step)}",
+                StepType.MoveJ        => $"MoveJ → {MoveTargetLabel(step)}",
+                StepType.JumpL        => $"JumpL → {MoveTargetLabel(step)}",
+                StepType.JumpJ        => $"JumpJ → {MoveTargetLabel(step)}",
                 StepType.SetOutput    => BuildSetOutputDescription(step),
                 StepType.Wait         => $"Wait {step.WaitMs} ms",
                 StepType.Loop         => $"Loop ×{(step.LoopCount == 0 ? "∞" : step.LoopCount)}",

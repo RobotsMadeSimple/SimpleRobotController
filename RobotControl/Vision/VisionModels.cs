@@ -17,6 +17,18 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("width")]  public double Width  { get; set; } = 1;
         [JsonPropertyName("height")] public double Height { get; set; } = 1;
 
+        /// <summary>
+        /// Rectangle tilt in degrees, clockwise, about the rectangle's own center. 0 means
+        /// axis-aligned and every rectangle path takes its original untilted route, so an
+        /// existing zone behaves exactly as it did before rotation existed.
+        ///
+        /// Applied in pixel space, never in this normalized space: 0–1 coordinates are scaled
+        /// by width and height independently, and rotating inside a non-uniform scale shears
+        /// the rectangle instead of turning it. Ignored by circles (meaningless) and polygons
+        /// (whose points are already absolute).
+        /// </summary>
+        [JsonPropertyName("rotation")] public double Rotation { get; set; }
+
         // Circle — center + radius (radius is fraction of min(width, height))
         [JsonPropertyName("cx")]     public double Cx     { get; set; } = 0.5;
         [JsonPropertyName("cy")]     public double Cy     { get; set; } = 0.5;
@@ -42,12 +54,27 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("blobColor")]            public int   BlobColor           { get; set; } = 0; // 0=dark, 255=light
     }
 
+    /// <summary>
+    /// Splits a zone into a rows×cols lattice, laid out over the zone's bounding box, so an
+    /// inspection pointing at the zone is measured once per cell instead of once overall.
+    /// Cells are clipped to the zone shape, so a corner cell of a circular zone only covers
+    /// the part inside the circle. Null, or 1×1, means "no grid" and behaviour is unchanged.
+    ///
+    /// Only color coverage inspections read this today; the other inspection types ignore it.
+    /// </summary>
+    public class VisionZoneGrid
+    {
+        [JsonPropertyName("rows")] public int Rows { get; set; } = 1;
+        [JsonPropertyName("cols")] public int Cols { get; set; } = 1;
+    }
+
     /// <summary>A named spatial region — geometry only, no detection config.</summary>
     public class VisionZone
     {
         [JsonPropertyName("id")]       public string             Id       { get; set; } = "";
         [JsonPropertyName("name")]     public string             Name     { get; set; } = "";
         [JsonPropertyName("geometry")] public VisionZoneGeometry Geometry { get; set; } = new();
+        [JsonPropertyName("grid")]     public VisionZoneGrid?    Grid     { get; set; }
     }
 
     /// <summary>Blob detection run; optionally restricted to a zone by center-point containment.</summary>
@@ -81,12 +108,33 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("maxCoverage")] public double?          MaxCoverage { get; set; }
     }
 
+    /// <summary>One cell of a gridded color coverage inspection, measured on its own.</summary>
+    public class ColorCellResult
+    {
+        [JsonPropertyName("row")]      public int    Row      { get; set; }
+        [JsonPropertyName("col")]      public int    Col      { get; set; }
+        /// <summary>Row-major position in the grid: row * cols + col.</summary>
+        [JsonPropertyName("index")]    public int    Index    { get; set; }
+        [JsonPropertyName("coverage")] public double Coverage { get; set; }
+        [JsonPropertyName("passed")]   public bool   Passed   { get; set; }
+    }
+
     public class ColorCoverageResult
     {
         [JsonPropertyName("inspectionId")] public string InspectionId { get; set; } = "";
         [JsonPropertyName("name")]         public string Name         { get; set; } = "";
+        /// <summary>Coverage over the whole zone, gridded or not.</summary>
         [JsonPropertyName("coverage")]     public double Coverage     { get; set; }
+        /// <summary>
+        /// Whole-zone min/max test — except on a gridded zone, where it means *every cell*
+        /// passed. A zone-wide average hides half-full cells, which is the thing a grid
+        /// exists to catch.
+        /// </summary>
         [JsonPropertyName("passed")]       public bool   Passed       { get; set; }
+        /// <summary>One entry per cell, row-major. Null when the zone has no grid.</summary>
+        [JsonPropertyName("cells")]        public List<ColorCellResult>? Cells { get; set; }
+        /// <summary>How many cells passed. Null when the zone has no grid.</summary>
+        [JsonPropertyName("cellsPassed")]  public int?   CellsPassed  { get; set; }
     }
 
     public class PolygonInspection
