@@ -157,6 +157,7 @@ namespace Controller.RobotControl.Execution
 
             // Clear any terminal state so the incoming Running update is not blocked by the guard
             _programManager.ResetToReady(program.Name, totalSteps);
+            _programManager.MarkStarted(program.Name);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = program.Name,

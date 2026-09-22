@@ -33,6 +33,10 @@ public class ProgramModel
     // wraps past its cap.
     [JsonIgnore] public int LogBaseIndex        { get; set; } = 0;
     public ProgramStatus Status                { get; set; } = ProgramStatus.Ready;
+    /// <summary>Number of times this program has been started since the controller booted.</summary>
+    public int  RunCount          { get; set; }
+    /// <summary>Unix ms of the most recent start. Lets a client notice a run that began and finished between two polls.</summary>
+    public long LastStartedUnixMs { get; set; }
     public string       CurrentStepDescription { get; set; } = "";
     public int          CurrentStepNumber      { get; set; } = 0;
     public int          MaxStepCount           { get; set; } = 0;

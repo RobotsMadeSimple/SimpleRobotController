@@ -83,6 +83,10 @@ internal sealed class BuiltProgramCommands
         if (prog != null)
         {
             _robot.DisplaceRunningBuiltProgram(p.Name);
+            // A jog left running (the app relies on the 1 s watchdog rather than StopJog)
+            // would otherwise hold the motion queue until it times out and decelerates,
+            // delaying the program's first move by a second or more.
+            _robot.StopJog();
             var imgBytes = _robot.builtProgramRepo.GetImage(p.Name);
             _executor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null);
         }

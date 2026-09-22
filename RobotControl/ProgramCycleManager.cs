@@ -144,6 +144,17 @@ namespace Controller.RobotControl
         /// Fully resets a program back to the Ready state, clearing all progress,
         /// descriptions, and error/warning fields. Used by built-program Reset and Abort.
         /// </summary>
+        /// <summary>Records a start: bumps the run counter and timestamp reported in the programs summary.</summary>
+        public void MarkStarted(string programName)
+        {
+            lock (_lock)
+            {
+                if (!_programs.TryGetValue(programName, out var program)) return;
+                program.RunCount++;
+                program.LastStartedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            }
+        }
+
         public void ResetToReady(string programName, int maxStepCount)
         {
             lock (_lock)
@@ -235,6 +246,8 @@ namespace Controller.RobotControl
                     currentStepDescription = p.CurrentStepDescription,
                     currentStepNumber      = p.CurrentStepNumber,
                     maxStepCount           = p.MaxStepCount,
+                    runCount               = p.RunCount,
+                    lastStartedUnixMs      = p.LastStartedUnixMs,
                     errorDescription       = p.ErrorDescription,
                     warningDescription     = p.WarningDescription,
                     currentPointName    = p.CurrentPointName,

@@ -110,7 +110,12 @@ stack cell reference).
 `localX/Y/Z/RZ` (in the active local frame); `targetX…targetRZ`; joint readouts
 `joint1Angle, joint2X, joint2Z, joint4Angle`; visual `poseX…poseRZ`; motion
 defaults `speedS/accelS/decelS`, `speedJ/accelJ/decelJ`; STB `input1–4` /
-`output1–4`; `programs` summary; `activeTool`, `activeLocal`;
+`output1–4`; `programs` summary (per program: `name, status, currentStepNumber,
+maxStepCount, currentStepDescription, errorDescription, warningDescription`,
+the current point/offsets, the action flags, plus `runCount` and
+`lastStartedUnixMs` — these two change on every start, so a client polling
+status can detect a run that started and finished between two polls even
+though `status` reads `Complete` both times); `activeTool`, `activeLocal`;
 `backgroundPrograms`; repository update timestamps; `speedOverridePercent`; fault
 state `faulted, faultJoint, faultDirection, faultMessage, limitBypass`;
 `jointLimitsEnabled`, `robotType`, `version`, `isLinux`.
