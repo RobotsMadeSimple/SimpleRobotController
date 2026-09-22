@@ -16,6 +16,9 @@ namespace Controller.RobotControl.AuxAxis
         private readonly string              _configPath;
         private AuxAxisManagerConfig         _config;
         private readonly List<AuxAxisDevice> _devices = new();
+        // Guards _devices: populated on Start() while GetState() and device lookups can be
+        // called concurrently from status-broadcast / motion-command threads.
+        private readonly object              _devicesLock = new();
 
         private static readonly JsonSerializerOptions _json = new()
         {
@@ -37,20 +40,30 @@ namespace Controller.RobotControl.AuxAxis
             foreach (var cfg in _config.Devices)
             {
                 var device = new AuxAxisDevice(cfg);
-                _devices.Add(device);
+                lock (_devicesLock) _devices.Add(device);
                 device.Start();
             }
         }
 
         public void Stop()
         {
-            foreach (var d in _devices) d.Stop();
+            List<AuxAxisDevice> snapshot;
+            lock (_devicesLock) snapshot = new List<AuxAxisDevice>(_devices);
+            foreach (var d in snapshot) d.Stop();
         }
 
         // ── Device lookup ─────────────────────────────────────────────────────
 
-        public AuxAxisDevice? GetDevice(string id)    => _devices.FirstOrDefault(d => d.Id == id);
-        public AuxAxisDevice? GetFirstDevice()        => _devices.Count > 0 ? _devices[0] : null;
+        public AuxAxisDevice? GetDevice(string id)
+        {
+            lock (_devicesLock) return _devices.FirstOrDefault(d => d.Id == id);
+        }
+
+        public AuxAxisDevice? GetFirstDevice()
+        {
+            lock (_devicesLock) return _devices.Count > 0 ? _devices[0] : null;
+        }
+
         public AuxAxisManagerConfig GetConfig()       => _config;
 
         public AuxAxisChannelConfig? GetAxisConfig(string deviceId, int axis)
@@ -81,7 +94,9 @@ namespace Controller.RobotControl.AuxAxis
 
         public void StopAllDevices()
         {
-            foreach (var d in _devices) d.StopAll();
+            List<AuxAxisDevice> snapshot;
+            lock (_devicesLock) snapshot = new List<AuxAxisDevice>(_devices);
+            foreach (var d in snapshot) d.StopAll();
         }
 
         public void Enable(string deviceId, bool enable) =>
@@ -97,8 +112,11 @@ namespace Controller.RobotControl.AuxAxis
 
         public List<AuxAxisState> GetState()
         {
+            List<AuxAxisDevice> snapshot;
+            lock (_devicesLock) snapshot = new List<AuxAxisDevice>(_devices);
+
             var result = new List<AuxAxisState>();
-            foreach (var device in _devices)
+            foreach (var device in snapshot)
             {
                 var cfg   = _config.Devices.FirstOrDefault(c => c.Id == device.Id);
                 result.Add(new AuxAxisState

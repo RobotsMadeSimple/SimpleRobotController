@@ -309,5 +309,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("arucoResults")]    public List<ArucoResult>    ArucoResults    { get; set; } = new();
         [JsonPropertyName("lineResults")]     public List<LineResult>     LineResults     { get; set; } = new();
         [JsonPropertyName("barcodeResults")] public List<BarcodeResult>  BarcodeResults  { get; set; } = new();
+        /// <summary>Per-inspection error messages from this pass, formatted "{inspectionId}: {message}".</summary>
+        [JsonPropertyName("errors")]         public List<string>        Errors          { get; set; } = new();
     }
 }
