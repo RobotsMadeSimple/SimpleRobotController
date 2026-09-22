@@ -52,7 +52,7 @@ class Program
 
         var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 
-        var wsServer = new RobotWebSocketServer("/control", robot.AddCommand);
+        var wsServer = new RobotWebSocketServer("/control", async cmd => await robot.AddCommand(cmd));
         // Wire shutdown token so active WebSocket receive loops unblock immediately.
         wsServer.SetShutdownToken(lifetime.ApplicationStopping);
         wsServer.Map(app);

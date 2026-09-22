@@ -51,7 +51,7 @@ namespace Controller.RobotControl.Hosting
             // Live stream: base64 data-URI frames as WebSocket text messages (works in
             // web, Android and Electron <Image source={{ uri }}>).
             app.MapGet("/camera/{id}/ws", (string id, HttpContext context) =>
-                StreamFramesAsync(context, robot.CameraManager.GetCamera(id)?.GetLatestFrame));
+                StreamFramesAsync(context, robot.CameraManager.GetCamera(id) is { } cam ? cam.GetLatestFrame : null));
 
             // Single JPEG snapshot — lightweight still image for thumbnails / testing.
             app.MapGet("/camera/{id}/snapshot", (string id, HttpContext context) =>
@@ -66,7 +66,7 @@ namespace Controller.RobotControl.Hosting
         {
             // Stream of annotated frames for a running vision program.
             app.MapGet("/vision/{id}/ws", (string id, HttpContext context) =>
-                StreamFramesAsync(context, robot.VisionManager.GetProcessor(id)?.GetLatestAnnotated));
+                StreamFramesAsync(context, robot.VisionManager.GetProcessor(id) is { } proc ? proc.GetLatestAnnotated : null));
 
             // Raw (unannotated) snapshot for the vision editor zone-drawing canvas.
             app.MapGet("/vision/{id}/snapshot", (string id, HttpContext context) =>
