@@ -1,3 +1,4 @@
+using Controller.RobotControl.Commands;
 using Controller.RobotControl.Controllers.STB4100;
 using Controller.RobotControl.Hosting;
 using Controller.RobotControl.Persistence;
@@ -12,13 +13,20 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Controller.RobotControl
 {
-    internal class RobotController
+    internal class RobotController : IHomingHost
     {
+        // ── Tuning constants ──────────────────────────────────────────────────
+        /// <summary>Speed override bounds: 5%–200% of the programmed speed.</summary>
+        internal const double MinSpeedOverrideFactor = 0.05;
+        internal const double MaxSpeedOverrideFactor = 2.0;
+        /// <summary>CNC jogs run at a third of the commanded jog speed.</summary>
+        private const double CncJogSpeedDivisor = 3.0;
+        /// <summary>How often the program thread refreshes the Nano status light.</summary>
+        private const long StatusLightPeriodMs = 500;
+
         public PointRepository       pointRepo       = new();
         public ToolRepository        toolRepo        = new();
         public LocalRepository       localRepo       = new();
@@ -44,27 +52,9 @@ namespace Controller.RobotControl
         private ProgramExecutor? programExecutor;
         private BackgroundProgramManager backgroundProgramManager = null!;
 
-        // Shared deserialisation options — handles string enums and camelCase from the client
-        private static readonly JsonSerializerOptions _jsonOptions = new()
-        {
-            Converters = { new JsonStringEnumConverter() },
-            PropertyNameCaseInsensitive = true
-        };
-
-        // Shared serialisation options for payloads the app receives as JSON strings.
-        private static readonly JsonSerializerOptions CamelCase = new()
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        };
-        private static readonly JsonSerializerOptions CamelCaseWithEnums = new()
-        {
-            Converters           = { new JsonStringEnumConverter() },
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        };
-
         // Command names AddCommand may enqueue — exactly the cases RunCommands handles.
         // Anything else is rejected with "unknownCommand" instead of being queued as a no-op.
-        private static readonly HashSet<string> QueuedMotionCommandNames = new(StringComparer.Ordinal)
+        internal static readonly HashSet<string> QueuedMotionCommandNames = new(StringComparer.Ordinal)
         {
             "MoveL", "OffsetL", "MoveJ", "StartContinuous", "SetTool",
             "SpeedS", "AccelS", "SpeedJ", "AccelJ", "JogL", "JogJ", "JogTool",
@@ -175,7 +165,8 @@ namespace Controller.RobotControl
         // Active local name — "" means no local (zero offset)
         private string activeLocal = "";
         public Vector6 CurrentLocal = Vector6.Zero;
-        public string HomingState => homingState;
+        /// <summary>Legacy string homing state ("WaitingForStart" when idle), backed by the sequencer's phase.</summary>
+        public string HomingState => _homing.StateName;
         public void TriggerHoming() => startHoming = true;
         public void ApplyLocal(string? name)
         {
@@ -214,15 +205,21 @@ namespace Controller.RobotControl
             CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
         }
 
-        // Robot configuration (homing offsets, speeds, etc.)
-        private RobotConfig _config = new();
+        // Robot configuration (homing offsets, speeds, etc.). Volatile reference:
+        // replaced by SetConfig, read on the motion, program and WS threads.
+        private volatile RobotConfig _config = new();
 
         // If the Robot was homed from startup
         // Volatile: written on the motion thread, read on WS/program threads (and
         // startHoming is requested from those threads).
         private volatile bool homed = false;
         private volatile bool startHoming = false;
-        private String homingState = "WaitingForStart";
+
+        // Homing state machine — ticked by RunHoming on the motion thread.
+        private readonly HomingSequencer _homing;
+
+        // WebSocket command name → handler (see Commands/).
+        private readonly CommandDispatcher _commands;
 
         private JoggingMotionProfiler joggingMotionProfiler = new();
         private JoggingMotionProfiler jointJoggingProfiler = new();
@@ -247,8 +244,8 @@ namespace Controller.RobotControl
         public sealed record CncToolpathInfo(string ProgramName, List<List<double>> Paths, List<CncHole> Holes);
         public volatile CncToolpathInfo? ActiveCncToolpath;
 
-        // Speed override: 0.05–2.0 (5%–200%), default 1.0 (100%)
-        public double SpeedOverrideFactor { get; private set; } = 1.0;
+        // Speed override: MinSpeedOverrideFactor–MaxSpeedOverrideFactor (5%–200%), default 1.0 (100%)
+        public double SpeedOverrideFactor { get; internal set; } = 1.0;
 
         // ── Nano IO ───────────────────────────────────────────────────────────
         public NanoManager NanoManager { get; private set; } = null!;
@@ -311,6 +308,8 @@ namespace Controller.RobotControl
             // Construction only — no device connections or threads are started
             // here. Call Start() once identity/config have been applied so the
             // first motion tick and the first STB write already see the real config.
+            _homing = new HomingSequencer(this);
+
             NanoManager = new NanoManager("nano_config.json");
 
             RelayManager = new UsbRelayManager();
@@ -330,6 +329,8 @@ namespace Controller.RobotControl
                 this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo,
                 isBackground: false, globalVars: backgroundProgramManager.GlobalVars,
                 globalImages: backgroundProgramManager.GlobalImages, backgroundManager: backgroundProgramManager);
+
+            _commands = CommandDispatcher.Create(this, programManager, programExecutor, backgroundProgramManager);
         }
 
         private int _started;
@@ -414,7 +415,7 @@ namespace Controller.RobotControl
                                      $"| gc0={GC.CollectionCount(0) - gc0} gc2={GC.CollectionCount(2) - gc2}");
                         Diag.Tick(tHoming, $"q={QueuedCommands.Count} mv={IsMoving} busy={_motionActive} " +
                                   $"lin={linearMotionProfiler is not null} cont={continuousProfiler is not null} " +
-                                  $"jnt={jointMotionProfiler is not null} jog={IsJogging}/{IsJointJogging}/{IsToolJogging} home={homingState}");
+                                  $"jnt={jointMotionProfiler is not null} jog={IsJogging}/{IsJointJogging}/{IsToolJogging} home={_homing.StateName}");
                     }
                 }
                 catch (Exception ex)
@@ -456,7 +457,7 @@ namespace Controller.RobotControl
                     }
 
                     long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    if (nowMs - _lastStatusLightMs >= 500)
+                    if (nowMs - _lastStatusLightMs >= StatusLightPeriodMs)
                     {
                         _lastStatusLightMs = nowMs;
                         UpdateStatusLight();
@@ -494,7 +495,7 @@ namespace Controller.RobotControl
                 color = NeoPixelColor.Purple;
             else if (!stb.connected)
                 color = NeoPixelColor.Red;
-            else if (startHoming || homingState != "WaitingForStart")
+            else if (startHoming || _homing.IsActive)
                 color = NeoPixelColor.Yellow;
             else if (!homed)
                 color = NeoPixelColor.Orange;
@@ -641,7 +642,7 @@ namespace Controller.RobotControl
 
             // Homing deliberately drives toward the mechanical limit switches, which
             // may sit outside the soft window — never fault or clamp while homing.
-            if (homingState != "WaitingForStart")
+            if (_homing.IsActive)
                 return;
 
             // Bypass overrides the limits entirely: the operator has taken
@@ -682,7 +683,7 @@ namespace Controller.RobotControl
             {
                 _faultJoint = joint;
                 _faultDirection = direction;
-                var names = _config.RobotType == "CNC4Axis" ? CncJointNames : AstroJointNames;
+                var names = _config.RobotType == RobotTypes.Cnc4Axis ? CncJointNames : AstroJointNames;
                 string name = joint >= 0 && joint < names.Length ? names[joint] : $"joint {joint}";
                 string edge = direction > 0 ? "upper" : "lower";
                 _faultMessage = $"{name} reached its {edge} limit. Bypass and jog it back into range to recover.";
@@ -785,7 +786,7 @@ namespace Controller.RobotControl
 
         private void InitializeKinematics()
         {
-            if (_config.RobotType == "CNC4Axis")
+            if (_config.RobotType == RobotTypes.Cnc4Axis)
             {
                 stb.Motor1.Reconfigure(_config.CncStepsPerRevX);
                 stb.Motor2.Reconfigure(_config.CncStepsPerRevY);
@@ -814,1322 +815,157 @@ namespace Controller.RobotControl
             stb.Motor4.InvertDirection = _config.M4Direction == -1;
         }
 
+        /// <summary>
+        /// Handles one WebSocket command: looks the name up in the dispatcher and
+        /// runs its handler (see Commands/). Any failure while handling a command
+        /// (missing/null params, bad base64, JsonException, …) is reported to the
+        /// caller as { ok:false, error } rather than propagating out and tearing
+        /// down the client's WebSocket.
+        /// </summary>
         public async Task<object> AddCommand(CommandMessage command)
         {
-            object? payload = null;
-
-            // Any failure while handling a command (missing/null params, bad base64,
-            // JsonException, …) is reported to the caller as { ok:false, error } rather
-            // than propagating out and tearing down the client's WebSocket.
+            object? payload;
             try
             {
-            switch (command.Command)
-            {
-                case "GetRobotInfo":
-                    payload = new
-                    {
-                        robotName    = _identity.RobotName,
-                        robotType    = _identity.RobotType,
-                        serialNumber = _identity.SerialNumber,
-                    };
-                    break;
-
-                case "Update":
-                    {
-                        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux))
-                        {
-                            payload = new { ok = false, error = "Update is only supported on Linux." };
-                            break;
-                        }
-
-                        _ = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                Console.WriteLine("[Update] Fetching latest release from GitHub…");
-                                using var http = new System.Net.Http.HttpClient();
-                                http.DefaultRequestHeaders.Add("User-Agent", "SimpleRobotController");
-
-                                var json = await http.GetStringAsync(
-                                    "https://api.github.com/repos/RobotsMadeSimple/SimpleRobotController/releases/latest");
-                                using var doc = JsonDocument.Parse(json);
-
-                                string? downloadUrl = null;
-                                foreach (var asset in doc.RootElement.GetProperty("assets").EnumerateArray())
-                                {
-                                    if (asset.GetProperty("name").GetString() == "SimpleRobotController")
-                                    {
-                                        downloadUrl = asset.GetProperty("browser_download_url").GetString();
-                                        break;
-                                    }
-                                }
-
-                                if (downloadUrl == null)
-                                {
-                                    Console.WriteLine("[Update] Linux binary not found in latest release.");
-                                    return;
-                                }
-
-                                var exePath = Environment.ProcessPath
-                                    ?? System.Diagnostics.Process.GetCurrentProcess().MainModule!.FileName;
-                                var tempPath = exePath + ".update";
-
-                                Console.WriteLine($"[Update] Downloading {downloadUrl}…");
-                                var bytes = await http.GetByteArrayAsync(downloadUrl);
-                                await File.WriteAllBytesAsync(tempPath, bytes);
-
-                                if (!OperatingSystem.IsWindows())
-                                    File.SetUnixFileMode(tempPath,
-                                        System.IO.UnixFileMode.UserRead   | System.IO.UnixFileMode.UserWrite  | System.IO.UnixFileMode.UserExecute |
-                                        System.IO.UnixFileMode.GroupRead  | System.IO.UnixFileMode.GroupExecute |
-                                        System.IO.UnixFileMode.OtherRead  | System.IO.UnixFileMode.OtherExecute);
-
-                                File.Move(tempPath, exePath, overwrite: true);
-                                Console.WriteLine("[Update] Binary replaced. Exiting for systemd restart…");
-                                await Task.Delay(500);
-                                Environment.Exit(0);
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[Update] Failed: {ex.Message}");
-                            }
-                        });
-
-                        payload = new { ok = true };
-                        break;
-                    }
-
-                case "RestartController":
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(500);
-                        try
-                        {
-                            // On a dev machine the project source sits three levels above the
-                            // build output (…/RobotControl/bin/<Config>/net10.0/). When it's
-                            // present, rebuild the latest code and relaunch the fresh binary
-                            // instead of re-running the stale one. In production (published,
-                            // no .csproj) we just relaunch the current binary as before.
-                            var baseDir    = AppContext.BaseDirectory;
-                            var projectDir = Path.GetFullPath(Path.Combine(baseDir, "..", "..", ".."));
-                            var csproj     = Directory.Exists(projectDir)
-                                ? Directory.GetFiles(projectDir, "*.csproj").FirstOrDefault()
-                                : null;
-                            var exePath = Environment.ProcessPath;
-
-                            if (csproj != null && exePath != null)
-                            {
-                                var sep    = Path.DirectorySeparatorChar;
-                                var config = baseDir.Contains($"{sep}Release{sep}") ? "Release" : "Debug";
-                                var psi = new System.Diagnostics.ProcessStartInfo
-                                {
-                                    UseShellExecute  = true,
-                                    WorkingDirectory = projectDir,
-                                };
-                                if (OperatingSystem.IsWindows())
-                                {
-                                    // Wait for this process to release its own binary, rebuild, then relaunch.
-                                    psi.FileName  = "cmd.exe";
-                                    psi.Arguments = $"/c timeout /t 2 /nobreak >nul & dotnet build \"{csproj}\" -c {config} --nologo && start \"\" \"{exePath}\"";
-                                }
-                                else
-                                {
-                                    psi.FileName  = "/bin/bash";
-                                    psi.Arguments = $"-c \"sleep 2 && dotnet build '{csproj}' -c {config} --nologo && nohup '{exePath}' >/dev/null 2>&1 &\"";
-                                }
-                                System.Diagnostics.Process.Start(psi);
-                            }
-                            else if (exePath != null)
-                            {
-                                System.Diagnostics.Process.Start(exePath);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[Restart] Failed: {ex.Message}");
-                        }
-                        Environment.Exit(0);
-                    });
-                    break;
-
-                case "SetRobotIdentity":
-                {
-                    var p = LoadParams<SetRobotIdentityParams>(command);
-                    if (p.RobotName != null) _identity.RobotName = p.RobotName;
-                    if (p.RobotType != null) _identity.RobotType = p.RobotType;
-                    RobotIdentityService.Save(_identity);
-                    OnIdentityChanged?.Invoke(_identity);
-                    break;
-                }
-
-                case "GetRobotConfig":
-                    payload = new
-                    {
-                        robotType                 = _config.RobotType,
-                        homingSpeed               = _config.HomingSpeed,
-                        homingSlowSpeed           = _config.HomingSlowSpeed,
-                        homingBackoffMm           = _config.HomingBackoffMm,
-                        j1HomeOffsetDeg           = _config.J1HomeOffsetDeg,
-                        verticalHomePosition      = _config.VerticalHomePosition,
-                        horizontalHomePosition    = _config.HorizontalHomePosition,
-                        verticalHomingDirection   = _config.VerticalHomingDirection,
-                        horizontalHomingDirection = _config.HorizontalHomingDirection,
-                        j1HomingDirection         = _config.J1HomingDirection,
-                        j4HomeOffsetDeg           = _config.J4HomeOffsetDeg,
-                        m1Direction               = _config.M1Direction,
-                        m2Direction               = _config.M2Direction,
-                        m3Direction               = _config.M3Direction,
-                        m4Direction               = _config.M4Direction,
-                        enableNanoCards           = _config.EnableNanoCards,
-                        enableRelayCard           = _config.EnableRelayCard,
-                        enableAuxAxis             = _config.EnableAuxAxis,
-                        enableCameras             = _config.EnableCameras,
-                        jogSlowSpeed              = _config.JogSlowSpeed,
-                        jogNormalSpeed            = _config.JogNormalSpeed,
-                        jogFastSpeed              = _config.JogFastSpeed,
-                        cncStepsPerRevX           = _config.CncStepsPerRevX,
-                        cncStepsPerRevY           = _config.CncStepsPerRevY,
-                        cncStepsPerRevZ           = _config.CncStepsPerRevZ,
-                        cncStepsPerRevRZ          = _config.CncStepsPerRevRZ,
-                        cncMmPerRevX              = _config.CncMmPerRevX,
-                        cncMmPerRevY              = _config.CncMmPerRevY,
-                        cncMmPerRevZ              = _config.CncMmPerRevZ,
-                        cncDegPerRevRZ            = _config.CncDegPerRevRZ,
-                        cncXHomePosition          = _config.CncXHomePosition,
-                        cncYHomePosition          = _config.CncYHomePosition,
-                        cncZHomePosition          = _config.CncZHomePosition,
-                        cncRzHomePosition         = _config.CncRzHomePosition,
-                        cncXHomingDirection       = _config.CncXHomingDirection,
-                        cncYHomingDirection       = _config.CncYHomingDirection,
-                        cncZHomingDirection       = _config.CncZHomingDirection,
-                        jointLimitsEnabled        = _config.JointLimitsEnabled,
-                        joint1Min                 = _config.Joint1Min,
-                        joint1Max                 = _config.Joint1Max,
-                        joint2Min                 = _config.Joint2Min,
-                        joint2Max                 = _config.Joint2Max,
-                        joint3Min                 = _config.Joint3Min,
-                        joint3Max                 = _config.Joint3Max,
-                        joint4Min                 = _config.Joint4Min,
-                        joint4Max                 = _config.Joint4Max,
-                    };
-                    break;
-
-                case "SetRobotConfig":
-                {
-                    var p = LoadParams<SetRobotConfigParams>(command);
-
-                    // Swapping the kinematics model mid-motion or mid-homing would
-                    // reinterpret live joint targets under a different model.
-                    if (p.RobotType != null && p.RobotType != _config.RobotType
-                        && (IsMoving || MotionBusy || startHoming || homingState != "WaitingForStart"))
-                    {
-                        payload = new { ok = false, error = "Cannot change robot type while the robot is moving or homing." };
-                        break;
-                    }
-
-                    // Kinematics / motor-direction reinit runs on the motion thread (it
-                    // swaps _kinematics and reconfigures the STB motors it drives).
-                    bool motorDirectionsChanged = false;
-                    bool kinematicsChanged      = false;
-                    if (p.HomingSpeed.HasValue)              _config.HomingSpeed               = p.HomingSpeed.Value;
-                    if (p.HomingSlowSpeed.HasValue)           _config.HomingSlowSpeed           = p.HomingSlowSpeed.Value;
-                    if (p.HomingBackoffMm.HasValue)           _config.HomingBackoffMm           = p.HomingBackoffMm.Value;
-                    if (p.J1HomeOffsetDeg.HasValue)           _config.J1HomeOffsetDeg           = p.J1HomeOffsetDeg.Value;
-                    if (p.VerticalHomePosition.HasValue)      _config.VerticalHomePosition      = p.VerticalHomePosition.Value;
-                    if (p.HorizontalHomePosition.HasValue)    _config.HorizontalHomePosition    = p.HorizontalHomePosition.Value;
-                    if (p.VerticalHomingDirection.HasValue)   _config.VerticalHomingDirection   = p.VerticalHomingDirection.Value;
-                    if (p.HorizontalHomingDirection.HasValue) _config.HorizontalHomingDirection = p.HorizontalHomingDirection.Value;
-                    if (p.J1HomingDirection.HasValue)         _config.J1HomingDirection         = p.J1HomingDirection.Value;
-                    if (p.J4HomeOffsetDeg.HasValue)           _config.J4HomeOffsetDeg           = p.J4HomeOffsetDeg.Value;
-                    if (p.M1Direction.HasValue)               { _config.M1Direction             = p.M1Direction.Value;   motorDirectionsChanged = true; }
-                    if (p.M2Direction.HasValue)               { _config.M2Direction             = p.M2Direction.Value;   motorDirectionsChanged = true; }
-                    if (p.M3Direction.HasValue)               { _config.M3Direction             = p.M3Direction.Value;   motorDirectionsChanged = true; }
-                    if (p.M4Direction.HasValue)               { _config.M4Direction             = p.M4Direction.Value;   motorDirectionsChanged = true; }
-                    if (p.EnableNanoCards.HasValue)           _config.EnableNanoCards           = p.EnableNanoCards.Value;
-                    if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
-                    if (p.EnableAuxAxis.HasValue)             _config.EnableAuxAxis             = p.EnableAuxAxis.Value;
-                    if (p.EnableCameras.HasValue)             _config.EnableCameras             = p.EnableCameras.Value;
-                    if (p.JogSlowSpeed.HasValue)              _config.JogSlowSpeed              = p.JogSlowSpeed.Value;
-                    if (p.JogNormalSpeed.HasValue)            _config.JogNormalSpeed            = p.JogNormalSpeed.Value;
-                    if (p.JogFastSpeed.HasValue)              _config.JogFastSpeed              = p.JogFastSpeed.Value;
-                    if (p.RobotType != null)                  { _config.RobotType               = p.RobotType;             kinematicsChanged = true; }
-                    bool cncMotorConfigChanged = false;
-                    if (p.CncStepsPerRevX.HasValue)  { _config.CncStepsPerRevX  = p.CncStepsPerRevX.Value;  cncMotorConfigChanged = true; }
-                    if (p.CncStepsPerRevY.HasValue)  { _config.CncStepsPerRevY  = p.CncStepsPerRevY.Value;  cncMotorConfigChanged = true; }
-                    if (p.CncStepsPerRevZ.HasValue)  { _config.CncStepsPerRevZ  = p.CncStepsPerRevZ.Value;  cncMotorConfigChanged = true; }
-                    if (p.CncStepsPerRevRZ.HasValue) { _config.CncStepsPerRevRZ = p.CncStepsPerRevRZ.Value; cncMotorConfigChanged = true; }
-                    if (p.CncMmPerRevX.HasValue)     { _config.CncMmPerRevX     = p.CncMmPerRevX.Value;     cncMotorConfigChanged = true; }
-                    if (p.CncMmPerRevY.HasValue)     { _config.CncMmPerRevY     = p.CncMmPerRevY.Value;     cncMotorConfigChanged = true; }
-                    if (p.CncMmPerRevZ.HasValue)     { _config.CncMmPerRevZ     = p.CncMmPerRevZ.Value;     cncMotorConfigChanged = true; }
-                    if (p.CncDegPerRevRZ.HasValue)   { _config.CncDegPerRevRZ   = p.CncDegPerRevRZ.Value;   cncMotorConfigChanged = true; }
-                    if (cncMotorConfigChanged)        kinematicsChanged = true;
-                    if (p.CncXHomePosition.HasValue)          _config.CncXHomePosition          = p.CncXHomePosition.Value;
-                    if (p.CncYHomePosition.HasValue)          _config.CncYHomePosition          = p.CncYHomePosition.Value;
-                    if (p.CncZHomePosition.HasValue)          _config.CncZHomePosition          = p.CncZHomePosition.Value;
-                    if (p.CncRzHomePosition.HasValue)         _config.CncRzHomePosition         = p.CncRzHomePosition.Value;
-                    if (p.CncXHomingDirection.HasValue)       _config.CncXHomingDirection       = p.CncXHomingDirection.Value;
-                    if (p.CncYHomingDirection.HasValue)       _config.CncYHomingDirection       = p.CncYHomingDirection.Value;
-                    if (p.CncZHomingDirection.HasValue)       _config.CncZHomingDirection       = p.CncZHomingDirection.Value;
-                    if (p.JointLimitsEnabled.HasValue)        _config.JointLimitsEnabled        = p.JointLimitsEnabled.Value;
-                    // Joint-limit bounds: a property present in the patch is
-                    // authoritative, INCLUDING an explicit null which clears the
-                    // bound (so it is no longer enforced). Absent means unchanged —
-                    // so we read the raw params rather than the HasValue pattern,
-                    // which cannot tell "sent null" from "not sent".
-                    if (command.Params is { } rawCfg)
-                    {
-                        void ApplyLimit(string name, Action<double?> set)
-                        {
-                            if (rawCfg.TryGetProperty(name, out var el))
-                                set(el.ValueKind == JsonValueKind.Null ? (double?)null : el.GetDouble());
-                        }
-                        ApplyLimit("joint1Min", v => _config.Joint1Min = v);
-                        ApplyLimit("joint1Max", v => _config.Joint1Max = v);
-                        ApplyLimit("joint2Min", v => _config.Joint2Min = v);
-                        ApplyLimit("joint2Max", v => _config.Joint2Max = v);
-                        ApplyLimit("joint3Min", v => _config.Joint3Min = v);
-                        ApplyLimit("joint3Max", v => _config.Joint3Max = v);
-                        ApplyLimit("joint4Min", v => _config.Joint4Min = v);
-                        ApplyLimit("joint4Max", v => _config.Joint4Max = v);
-                    }
-                    if (motorDirectionsChanged || kinematicsChanged)
-                    {
-                        PostToMotionThread(() =>
-                        {
-                            if (motorDirectionsChanged) ApplyMotorDirections();
-                            if (kinematicsChanged)      InitializeKinematics();
-                        });
-                    }
-                    RobotConfigService.Save(_config);
-                    break;
-                }
-
-                case "SetSpeedOverride":
-                {
-                    var p = LoadParams<SetSpeedOverrideParams>(command);
-                    SpeedOverrideFactor = Math.Clamp(p.Percent / 100.0, 0.05, 2.0);
-                    break;
-                }
-
-                case "Home":
-                    PostToMotionThread(() =>
-                    {
-                        ClearFaultInternal();  // re-homing re-establishes position; drop any latched fault
-                        startHoming = true;
-                    });
-                    break;
-
-                case "SetHomed":
-                    PostToMotionThread(SetAllHomed);
-                    break;
-
-                case "Reset":
-                    stb.Reset();
-                    break;
-
-                case "HardStop":
-                    HardStop();
-                    break;
-
-                // ── Joint-limit fault recovery ─────────────────────────────────────
-                case "ClearFault":
-                    ClearFault();
-                    break;
-
-                case "SetLimitBypass":
-                    {
-                        var p = LoadParams<SetLimitBypassParams>(command);
-                        SetLimitBypass(p.Enable);
-                    }
-                    break;
-
-                // ── Aux axis commands ──────────────────────────────────────────────
-
-                case "GetAuxState":
-                {
-                    var auxStates = AuxAxisManager.GetState();
-                    var auxJson   = JsonSerializer.Serialize(auxStates, CamelCase);
-                    payload = new { state = auxJson };
-                }
-                break;
-
-                case "GetAuxConfig":
-                {
-                    var auxCfg    = AuxAxisManager.GetConfig();
-                    var auxCfgJson = JsonSerializer.Serialize(auxCfg, CamelCase);
-                    payload = new { config = auxCfgJson };
-                }
-                break;
-
-                // ── Camera commands ────────────────────────────────────────────────
-
-                case "GetCameras":
-                {
-                    var states    = CameraManager.GetState();
-                    var statesJson = JsonSerializer.Serialize(states, CamelCase);
-                    payload = new { cameras = statesJson };
-                }
-                break;
-
-                case "AddCamera":
-                {
-                    var p = LoadParams<AddCameraParams>(command);
-                    CameraManager.AddCamera(new Camera.CameraConfig
-                    {
-                        Name        = p.Name,
-                        DeviceIndex = p.DeviceIndex,
-                        Enabled     = p.Enabled,
-                        Width       = p.Width,
-                        Height      = p.Height,
-                        TargetFps   = p.TargetFps,
-                    });
-                    break;
-                }
-
-                case "RemoveCamera":
-                {
-                    var p = LoadParams<RemoveCameraParams>(command);
-                    CameraManager.RemoveCamera(p.Id);
-                    break;
-                }
-
-                case "SetCameraConfig":
-                {
-                    var p = LoadParams<SetCameraConfigParams>(command);
-                    CameraManager.UpdateCamera(p.Id, new Camera.CameraConfig
-                    {
-                        Id          = p.Id,
-                        Name        = p.Name,
-                        DeviceIndex = p.DeviceIndex,
-                        Enabled     = p.Enabled,
-                        Width       = p.Width,
-                        Height      = p.Height,
-                        TargetFps   = p.TargetFps,
-                    });
-                    break;
-                }
-
-                case "GetCameraResolutions":
-                {
-                    var p = LoadParams<GetCameraResolutionsParams>(command);
-                    var deviceIndex = p.DeviceIndex;
-                    var resolutions = await Task.Run(() => CameraManager.ProbeResolutionsForIndex(deviceIndex));
-                    var json = JsonSerializer.Serialize(resolutions, CamelCase);
-                    payload = new { resolutions = json };
-                }
-                break;
-
-                // ── End camera commands ────────────────────────────────────────────
-
-                case "MoveAux":
-                {
-                    var p = LoadParams<MoveAuxParams>(command);
-                    StartAuxMove(p.DeviceId, p.Axis, p.Steps, p.Velocity, p.Accel, p.Decel);
-                    break;
-                }
-
-                case "JogAux":
-                {
-                    var p = LoadParams<JogAuxParams>(command);
-                    if (p.Velocity == 0)
-                        StopAux(p.Decel);
-                    else
-                        StartAuxContinuous(p.DeviceId, p.Axis, p.Velocity, p.Accel);
-                    break;
-                }
-
-                case "StopAux":
-                {
-                    var p = LoadParams<StopAuxParams>(command);
-                    StopAux(p.Decel, p.Immediate);
-                    break;
-                }
-
-                case "SetAuxAxisConfig":
-                {
-                    var p = LoadParams<SetAuxAxisConfigParams>(command);
-                    AuxAxisManager.UpdateAxisConfig(p.DeviceId, p.AxisIndex, new AuxAxis.AuxAxisChannelConfig
-                    {
-                        AxisIndex       = p.AxisIndex,
-                        Name            = p.Name,
-                        StepsPerRev     = p.StepsPerRev,
-                        InvertDirection = p.InvertDirection,
-                        AxisType        = p.AxisType,
-                        GearRatio       = p.GearRatio,
-                        MmPerRev        = p.MmPerRev,
-                    });
-                    break;
-                }
-
-                case "EnableAux":
-                {
-                    var p = LoadParams<EnableAuxParams>(command);
-                    AuxAxisManager.Enable(p.DeviceId, p.Enable);
-                    break;
-                }
-
-                // ── End aux axis commands ──────────────────────────────────────────
-
-                case "StopJog":
-                    // Bump the epoch first so any jog already queued (but not yet
-                    // processed on the loop thread) is invalidated and cannot
-                    // re-enable motion after this stop.
-                    // The profiler stop itself runs on the motion thread (drained
-                    // before RunCommands on the next tick).
-                    System.Threading.Interlocked.Increment(ref _jogGeneration);
-                    PostToMotionThread(() =>
-                    {
-                        joggingMotionProfiler.StopJog();
-                        jointJoggingProfiler.StopJog();
-                        toolJoggingMotionProfiler.StopJog();
-                    });
-                    break;
-
-                case "GetPoints":
-                    payload = new
-                    {
-                        points = pointRepo.pointsJson
-                    };
-                    break;
-
-                case "TeachPoint":
-                    {
-                        var tp = LoadParams<TeachPointParams>(command);
-                        // Points are stored base-frame: teaching under an active
-                        // local inverts the frame (rotation + translation), so
-                        // "move to point" returns exactly here while that local
-                        // stays active — and re-targets correctly when a
-                        // different local is applied later.
-                        var pos = CurrentPosition;
-                        var loc = ActiveLocalOffset;
-                        var basePos = loc == null ? pos : LocalFrame.Inverse(loc, pos);
-                        pointRepo.SavePoint(tp.Name, basePos);
-                    }
-                    break;
-
-                case "DeletePoint":
-                    {
-                        var dp = LoadParams<TeachPointParams>(command);
-                        pointRepo.DeletePoint(dp.Name);
-                    }
-                    break;
-
-                case "EditPoint":
-                    {
-                        var ep = LoadParams<EditPointParams>(command);
-                        var values = new Dictionary<string, object?>();
-                        if (ep.NewName != null)   values["Name"] = ep.NewName;
-                        if (ep.X.HasValue)        values["X"]    = ep.X.Value;
-                        if (ep.Y.HasValue)        values["Y"]    = ep.Y.Value;
-                        if (ep.Z.HasValue)        values["Z"]    = ep.Z.Value;
-                        if (ep.RX.HasValue)       values["RX"]   = ep.RX.Value;
-                        if (ep.RY.HasValue)       values["RY"]   = ep.RY.Value;
-                        if (ep.RZ.HasValue)       values["RZ"]   = ep.RZ.Value;
-                        pointRepo.EditPoint(ep.Name, values);
-                    }
-                    break;
-
-                case "GetStatus":
-                    {
-                        Vector6? pose = _kinematics.GetVisualRobotPose(CurrentPosition, CurrentTool);
-                        var (j1, j2x, j2z, j4) = _kinematics.GetJointAngles();
-
-                        // Position expressed in the active local's frame — the jog page
-                        // shows this so the readout tracks the selected local. Equals
-                        // the world position when no local is active.
-                        var localPos = ActiveLocalOffset is { } locStat
-                            ? LocalFrame.Inverse(locStat, CurrentPosition)
-                            : CurrentPosition;
-
-                        payload = new
-                        {
-                            moving = IsMoving,
-                            wasHomed = homed,
-                            homingState = this.homingState,
-                            isHoming = this.homingState != "WaitingForStart",
-                            lastPointUpdate = pointRepo.LastUpdatedUnixMs,
-                            driverConnected = stb.connected,
-                            driverOk = stb.connected && stb.status != 0,
-
-                            x = CurrentPosition.X,
-                            y = CurrentPosition.Y,
-                            z = CurrentPosition.Z,
-                            rx = CurrentPosition.RX,
-                            ry = CurrentPosition.RY,
-                            rz = CurrentPosition.RZ,
-
-                            localX = localPos.X,
-                            localY = localPos.Y,
-                            localZ = localPos.Z,
-                            localRZ = localPos.RZ,
-
-                            targetX = this.TargetPosition.X,
-                            targetY = this.TargetPosition.Y,
-                            targetZ = this.TargetPosition.Z,
-                            targetRX = this.TargetPosition.RX,
-                            targetRY = this.TargetPosition.RY,
-                            targetRZ = this.TargetPosition.RZ,
-
-                            joint1Angle = j1,
-                            joint2X = j2x,
-                            joint2Z = j2z,
-                            joint4Angle = j4,
-
-                            poseX = pose?.X ?? 0,
-                            poseY = pose?.Y ?? 0,
-                            poseZ = pose?.Z ?? 0,
-                            poseRX = pose?.RX ?? 0,
-                            poseRY = pose?.RY ?? 0,
-                            poseRZ = pose?.RZ ?? 0,
-
-                            speedS = SpeedS,
-                            accelS = AccelS,
-                            decelS = DecelS,
-
-                            speedJ = SpeedJ,
-                            accelJ = AccelJ,
-                            decelJ = DecelJ,
-
-                            // STB digital inputs
-                            input1 = stb.Input1,
-                            input2 = stb.Input2,
-                            input3 = stb.Input3,
-                            input4 = stb.Input4,
-
-                            // STB digital outputs
-                            output1 = stb.Output1,
-                            output2 = stb.Output2,
-                            output3 = stb.Output3,
-                            output4 = stb.Output4,
-
-                            // USB relay board — cached state (updated on Set + a 1s
-                            // board poll) so relays changed by a running program
-                            // update live in the app without a per-broadcast USB read.
-                            relay = new UsbRelayState
-                            {
-                                Connected = RelayManager.IsConnected,
-                                Serial    = RelayManager.GetSerial(),
-                                Relays    = RelayManager.GetRelayStates(),
-                                Names     = RelayManager.GetRelayNames(),
-                            },
-
-                            // Program cycle — summary only (no logs / images)
-                            programs = programManager.GetProgramsSummary(),
-
-                            // Tool repository
-                            lastToolUpdate = toolRepo.LastUpdatedUnixMs,
-                            activeTool     = this.activeTool,
-
-                            // Local repository
-                            lastLocalUpdate = localRepo.LastUpdatedUnixMs,
-                            activeLocal     = this.activeLocal,
-
-                            // Background programs currently running
-                            backgroundPrograms = backgroundProgramManager.GetStatuses()
-                                .Select(s => new { name = s.Name, currentStep = s.CurrentStep })
-                                .ToList(),
-
-                            // Built program repository
-                            lastBuiltProgramUpdate = builtProgramRepo.LastUpdatedUnixMs,
-
-                            // Grid repository
-                            lastGridUpdate = gridRepo.LastUpdatedUnixMs,
-
-                            // Stack repository
-                            lastStackUpdate = stackRepo.LastUpdatedUnixMs,
-
-                            speedOverridePercent = SpeedOverrideFactor * 100.0,
-
-                            // Joint soft-limit fault state
-                            faulted            = _faulted,
-                            faultJoint         = _faultJoint,
-                            faultDirection     = _faultDirection,
-                            faultMessage       = _faultMessage,
-                            limitBypass        = _limitBypass,
-                            jointLimitsEnabled = _config.JointLimitsEnabled,
-                            robotType          = _config.RobotType,
-
-                            version = _version,
-                            isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
-                        };
-                        break;
-                    }
-
-                // ── Program cycle ─────────────────────────────────────────
-
-                case "SetAvailablePrograms":
-                    {
-                        var p = LoadParams<SetAvailableProgramsParams>(command);
-                        programManager.SetAvailablePrograms(p.Programs);
-                    }
-                    break;
-
-                case "SetProgramStatus":
-                    {
-                        var update = LoadParams<ProgramCycleUpdate>(command);
-                        programManager.ApplyStatusUpdate(update);
-                    }
-                    break;
-
-                case "GetProgramImages":
-                    {
-                        // Merge live in-memory images (Python/external) with persisted images
-                        // for built programs so idle built programs still show their image.
-                        var merged = programManager.GetAllImages();
-                        foreach (var kv in builtProgramRepo.GetAllImages())
-                            if (kv.Value != null) merged[kv.Key] = kv.Value;
-                        payload = new { images = merged };
-                    }
-                    break;
-
-                case "GetProgramLogs":
-                    {
-                        var p = LoadParams<GetProgramLogsParams>(command);
-                        var (total, start, logs) = programManager.GetProgramLogs(p.ProgramName, p.Start, p.End);
-                        payload = new
-                        {
-                            programName = p.ProgramName,
-                            totalCount  = total,
-                            start,
-                            logs
-                        };
-                    }
-                    break;
-
-                case "StartProgram":
-                    {
-                        var p     = LoadParams<ProgramActionParams>(command);
-                        var built = builtProgramRepo.Get(p.ProgramName);
-                        if (built != null)
-                        {
-                            if (programExecutor?.IsPaused == true && programExecutor.CurrentProgramName == p.ProgramName)
-                                programExecutor.Resume();
-                            else
-                            {
-                                DisplaceRunningBuiltProgram(p.ProgramName);
-                                programExecutor?.Start(built);
-                            }
-                        }
-                        else
-                            programManager.SetFlag(p.ProgramName, "Start");
-                    }
-                    break;
-
-                case "StopProgram":
-                    {
-                        var p     = LoadParams<ProgramActionParams>(command);
-                        var built = builtProgramRepo.Get(p.ProgramName);
-                        if (built != null)
-                        {
-                            if (programExecutor?.CurrentProgramName == p.ProgramName)
-                                programExecutor.Stop();
-                        }
-                        else
-                            programManager.SetFlag(p.ProgramName, "Stop");
-                    }
-                    break;
-
-                case "ResetProgram":
-                    {
-                        var p     = LoadParams<ProgramActionParams>(command);
-                        var built = builtProgramRepo.Get(p.ProgramName);
-                        if (built != null)
-                        {
-                            if (programExecutor?.CurrentProgramName == p.ProgramName)
-                                programExecutor.Reset();
-                            programManager.ResetToReady(p.ProgramName,
-                                ProgramExecutor.CountSteps(built.Steps));
-                        }
-                        else
-                        {
-                            programManager.SetFlag(p.ProgramName, "Reset");
-                        }
-                    }
-                    break;
-
-                case "AbortProgram":
-                    {
-                        var p     = LoadParams<ProgramActionParams>(command);
-                        var built = builtProgramRepo.Get(p.ProgramName);
-                        if (built != null)
-                        {
-                            if (programExecutor?.CurrentProgramName == p.ProgramName)
-                                programExecutor.Reset();
-                            programManager.ResetToReady(p.ProgramName,
-                                ProgramExecutor.CountSteps(built.Steps));
-                        }
-                        else
-                        {
-                            programManager.SetFlag(p.ProgramName, "Abort");
-                        }
-                    }
-                    break;
-
-                case "ClearProgramActions":
-                    {
-                        var p = LoadParams<ProgramActionParams>(command);
-                        programManager.ClearActions(p.ProgramName);
-                    }
-                    break;
-
-                // ── Tool repository ───────────────────────────────────────
-
-                case "GetTools":
-                    payload = new { tools = toolRepo.toolsJson };
-                    break;
-
-                case "CreateTool":
-                    {
-                        var ep = LoadParams<EditToolParams>(command);
-                        var v  = new Vector6(ep.X ?? 0, ep.Y ?? 0, ep.Z ?? 0,
-                                             ep.RX ?? 0, ep.RY ?? 0, ep.RZ ?? 0);
-                        var tool = toolRepo.SaveTool(ep.Name, v);
-                        if (!string.IsNullOrEmpty(ep.Description))
-                        {
-                            toolRepo.EditTool(ep.Name, new()
-                            {
-                                ["Description"] = ep.Description
-                            });
-                        }
-                    }
-                    break;
-
-                case "EditTool":
-                    {
-                        var ep     = LoadParams<EditToolParams>(command);
-                        var values = new Dictionary<string, object?>();
-                        if (ep.NewName      != null) values["Name"]        = ep.NewName;
-                        if (ep.Description  != null) values["Description"] = ep.Description;
-                        if (ep.X.HasValue)           values["X"]           = ep.X.Value;
-                        if (ep.Y.HasValue)           values["Y"]           = ep.Y.Value;
-                        if (ep.Z.HasValue)           values["Z"]           = ep.Z.Value;
-                        if (ep.RX.HasValue)          values["RX"]          = ep.RX.Value;
-                        if (ep.RY.HasValue)          values["RY"]          = ep.RY.Value;
-                        if (ep.RZ.HasValue)          values["RZ"]          = ep.RZ.Value;
-                        toolRepo.EditTool(ep.Name, values);
-
-                        // Keep activeTool name in sync after a rename (motion thread owns it)
-                        if (ep.NewName != null)
-                        {
-                            string oldName = ep.Name, newName = ep.NewName;
-                            PostToMotionThread(() =>
-                            {
-                                if (activeTool == oldName) activeTool = newName;
-                            });
-                        }
-                    }
-                    break;
-
-                case "DeleteTool":
-                    {
-                        var tp = LoadParams<ToolNameParams>(command);
-                        toolRepo.DeleteTool(tp.Name);
-                        // Clear active tool if the deleted one was active — on the
-                        // motion thread, which owns the tool/position state.
-                        string deletedTool = tp.Name;
-                        PostToMotionThread(() =>
-                        {
-                            if (activeTool == deletedTool)
-                            {
-                                activeTool          = "";
-                                CurrentTool         = Vector6.Zero;
-                                CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
-                            }
-                        });
-                    }
-                    break;
-
-                // ── Local repository ──────────────────────────────────────
-
-                case "GetLocals":
-                    payload = new { locals = localRepo.localsJson };
-                    break;
-
-                case "CreateLocal":
-                    {
-                        var ep = LoadParams<EditLocalParams>(command);
-                        var v  = new Vector6(ep.X ?? 0, ep.Y ?? 0, ep.Z ?? 0,
-                                             ep.RX ?? 0, ep.RY ?? 0, ep.RZ ?? 0);
-                        localRepo.SaveLocal(ep.Name, v);
-                        if (!string.IsNullOrEmpty(ep.Description))
-                        {
-                            localRepo.EditLocal(ep.Name, new()
-                            {
-                                ["Description"] = ep.Description
-                            });
-                        }
-                    }
-                    break;
-
-                case "EditLocal":
-                    {
-                        var ep     = LoadParams<EditLocalParams>(command);
-                        var values = new Dictionary<string, object?>();
-                        if (ep.NewName      != null) values["Name"]        = ep.NewName;
-                        if (ep.Description  != null) values["Description"] = ep.Description;
-                        if (ep.X.HasValue)           values["X"]           = ep.X.Value;
-                        if (ep.Y.HasValue)           values["Y"]           = ep.Y.Value;
-                        if (ep.Z.HasValue)           values["Z"]           = ep.Z.Value;
-                        if (ep.RX.HasValue)          values["RX"]          = ep.RX.Value;
-                        if (ep.RY.HasValue)          values["RY"]          = ep.RY.Value;
-                        if (ep.RZ.HasValue)          values["RZ"]          = ep.RZ.Value;
-                        localRepo.EditLocal(ep.Name, values);
-
-                        // Keep activeLocal name in sync after a rename (motion thread owns it)
-                        if (ep.NewName != null)
-                        {
-                            string oldName = ep.Name, newName = ep.NewName;
-                            PostToMotionThread(() =>
-                            {
-                                if (activeLocal == oldName) activeLocal = newName;
-                            });
-                        }
-                    }
-                    break;
-
-                case "DeleteLocal":
-                    {
-                        var lp = LoadParams<LocalNameParams>(command);
-                        localRepo.DeleteLocal(lp.Name);
-                        // Clear active local if the deleted one was active — on the
-                        // motion thread, which reads CurrentLocal to resolve moves/jogs.
-                        string deletedLocal = lp.Name;
-                        PostToMotionThread(() =>
-                        {
-                            if (activeLocal == deletedLocal)
-                            {
-                                activeLocal  = "";
-                                CurrentLocal = Vector6.Zero;
-                            }
-                        });
-                    }
-                    break;
-
-                case "SetActiveLocal":
-                    {
-                        var lp = LoadParams<LocalNameParams>(command);
-                        string? localName = lp.Name;
-                        PostToMotionThread(() => ApplyLocal(localName));
-                    }
-                    break;
-
-                // ── Built program repository ──────────────────────────────
-
-                case "SaveBuiltProgram":
-                    {
-                        var p = LoadParams<SaveBuiltProgramParams>(command);
-                        builtProgramRepo.Save(new BuiltProgram
-                        {
-                            Id                  = p.Id,
-                            Name                = p.Name,
-                            Description         = p.Description,
-                            Steps               = p.Steps,
-                            Variables           = p.Variables,
-                            IsRoutine           = p.IsRoutine,
-                            IsBackground        = p.IsBackground,
-                            KillBackgroundOnStop = p.KillBackgroundOnStop,
-                        });
-                    }
-                    break;
-
-                case "StartBackgroundProgram":
-                    {
-                        var p    = LoadParams<ProgramActionParams>(command);
-                        var built = builtProgramRepo.Get(p.ProgramName);
-                        if (built != null && built.IsBackground)
-                            backgroundProgramManager.TryStart(built);
-                    }
-                    break;
-
-                case "StopBackgroundProgram":
-                    {
-                        var p     = LoadParams<ProgramActionParams>(command);
-                        var built = builtProgramRepo.Get(p.ProgramName);
-                        if (built != null) backgroundProgramManager.Stop(built.Id);
-                    }
-                    break;
-
-                case "GetProgramVariables":
-                    {
-                        var p    = LoadParams<BuiltProgramNameParams>(command);
-                        bool foreground = programExecutor?.CurrentProgramName?.Equals(p.Name, StringComparison.OrdinalIgnoreCase) == true;
-                        var vars = foreground
-                            ? programExecutor!.GetDisplayVariables()
-                            : backgroundProgramManager.GetDisplayVariables(p.Name);
-                        // Images are listed by name and revision only — see GetDisplayImages.
-                        // The monitor fetches the bytes with GetProgramImage when a revision
-                        // moves, which keeps this poll the same size whether or not the
-                        // program holds a camera frame.
-                        var images = foreground
-                            ? programExecutor!.GetDisplayImages()
-                            : backgroundProgramManager.GetDisplayImages(p.Name);
-                        payload = new
-                        {
-                            variables = vars.Select(v => new { name = v.Name, value = v.Value, isBoolean = v.IsBoolean }).ToList(),
-                            images    = images.Select(i => new { name = i.Name, revision = i.Revision }).ToList()
-                        };
-                    }
-                    break;
-
-                // Not "GetProgramImage" — GetProgramImages is the program *thumbnail*
-                // list, an unrelated thing, and the two would be a singular/plural apart.
-                case "GetProgramVariableImage":
-                    {
-                        var p = LoadParams<ProgramImageParams>(command);
-                        bool foreground = programExecutor?.CurrentProgramName?.Equals(p.Name, StringComparison.OrdinalIgnoreCase) == true;
-                        var data = foreground
-                            ? programExecutor!.GetDisplayImage(p.Variable)
-                            : backgroundProgramManager.GetDisplayImage(p.Name, p.Variable);
-                        // Empty rather than an error when there is nothing to send: a monitor
-                        // asking about a program that has just stopped is ordinary, not a fault.
-                        payload = new { name = p.Name, variable = p.Variable, image = data };
-                    }
-                    break;
-
-                case "DeleteBuiltProgram":
-                    {
-                        var p = LoadParams<BuiltProgramNameParams>(command);
-                        builtProgramRepo.Delete(p.Name);
-                        programManager.RemoveProgram(p.Name);
-                    }
-                    break;
-
-                case "SaveBuiltProgramImage":
-                    {
-                        var p = LoadParams<SaveBuiltProgramImageParams>(command);
-                        var bytes = Convert.FromBase64String(p.Image);
-                        builtProgramRepo.SaveImage(p.Name, bytes);
-                    }
-                    break;
-
-                case "GetBuiltPrograms":
-                    {
-                        var list = builtProgramRepo.GetAll();
-                        var json = System.Text.Json.JsonSerializer.Serialize(list, CamelCaseWithEnums);
-                        payload = new { programs = json };
-                    }
-                    break;
-
-                // ── Grid repository ───────────────────────────────────────────────
-                case "GetGrids":
-                    {
-                        var list = gridRepo.GetAll();
-                        var json = System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions
-                        {
-                            PropertyNameCaseInsensitive = true,
-                        });
-                        payload = new { grids = json };
-                    }
-                    break;
-
-                case "SaveGrid":
-                    {
-                        var p = LoadParams<SaveGridParams>(command);
-                        gridRepo.Upsert(new Grid
-                        {
-                            Id            = p.Id,
-                            Name          = p.Name,
-                            BasePointName = p.BasePointName,
-                            RowOffsetX    = p.RowOffsetX,
-                            RowOffsetY    = p.RowOffsetY,
-                            RowOffsetZ    = p.RowOffsetZ,
-                            ColOffsetX    = p.ColOffsetX,
-                            ColOffsetY    = p.ColOffsetY,
-                            ColOffsetZ    = p.ColOffsetZ,
-                            RowCount      = p.RowCount,
-                            ColCount      = p.ColCount,
-                            Rotation      = p.Rotation,
-                        });
-                    }
-                    break;
-
-                case "DeleteGrid":
-                    {
-                        var p = LoadParams<GridIdParams>(command);
-                        gridRepo.Delete(p.Id);
-                    }
-                    break;
-
-                // ── Stack repository ──────────────────────────────────────────────
-                case "GetStacks":
-                    {
-                        var list = stackRepo.GetAll();
-                        var json = System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions
-                        {
-                            PropertyNameCaseInsensitive = true,
-                        });
-                        payload = new { stacks = json };
-                    }
-                    break;
-
-                case "SaveStack":
-                    {
-                        var p = LoadParams<SaveStackParams>(command);
-                        stackRepo.Upsert(new RobotStack
-                        {
-                            Id            = p.Id,
-                            Name          = p.Name,
-                            BasePointName = p.BasePointName,
-                            OffsetX       = p.OffsetX,
-                            OffsetY       = p.OffsetY,
-                            OffsetZ       = p.OffsetZ,
-                            MaxCount      = p.MaxCount,
-                        });
-                    }
-                    break;
-
-                case "DeleteStack":
-                    {
-                        var p = LoadParams<StackIdParams>(command);
-                        stackRepo.Delete(p.Id);
-                    }
-                    break;
-
-                case "ExecuteBuiltProgram":
-                    {
-                        var p    = LoadParams<BuiltProgramNameParams>(command);
-                        var prog = builtProgramRepo.Get(p.Name);
-                        if (prog != null)
-                        {
-                            DisplaceRunningBuiltProgram(p.Name);
-                            var imgBytes = builtProgramRepo.GetImage(p.Name);
-                            programExecutor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null);
-                        }
-                    }
-                    break;
-
-                case "StopBuiltProgram":
-                    programExecutor?.Stop();
-                    break;
-
-                case "SetActiveTool":
-                    {
-                        var tp = LoadParams<ToolNameParams>(command);
-                        string? toolName = tp.Name;
-                        // Tool/position state is owned by the motion thread — apply there.
-                        PostToMotionThread(() =>
-                        {
-                            if (string.IsNullOrEmpty(toolName) || toolName == "None")
-                            {
-                                activeTool  = "";
-                                CurrentTool = Vector6.Zero;
-                            }
-                            else
-                            {
-                                var tool = toolRepo.Get(toolName);
-                                if (tool != null)
-                                {
-                                    activeTool  = toolName;
-                                    CurrentTool = new Vector6(tool.X, tool.Y, tool.Z,
-                                                              tool.RX, tool.RY, tool.RZ);
-                                }
-                            }
-                            // Recalculate position with new tool offset
-                            CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                            CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
-                        });
-                    }
-                    break;
-
-                // ── STB4100 IO ────────────────────────────────────────────────
-
-                case "SetSTBOutput":
-                    {
-                        var p = LoadParams<SetNanoOutputParams>(command); // reuse same params shape
-                        stb.SetOutput(p.Pin, p.Value);
-                    }
-                    break;
-
-                // ── Nano IO ───────────────────────────────────────────────────
-
-                case "GetIO":
-                    {
-                        var states = NanoManager.GetAllStates();
-                        var nanoJson = JsonSerializer.Serialize(states, CamelCaseWithEnums);
-
-                        var relayStates = RelayManager.GetRelayStates();
-                        var relayState  = new UsbRelayState
-                        {
-                            Connected = RelayManager.IsConnected,
-                            Serial    = RelayManager.GetSerial(),
-                            Relays    = relayStates,
-                            Names     = RelayManager.GetRelayNames(),
-                        };
-                        var relayJson = JsonSerializer.Serialize(relayState, CamelCase);
-
-                        payload = new { nanos = nanoJson, relay = relayJson };
-                    }
-                    break;
-
-                case "SetNanoOutput":
-                    {
-                        var p = LoadParams<SetNanoOutputParams>(command);
-                        NanoManager.SetOutput(p.NanoId, p.Pin, p.Value);
-                    }
-                    break;
-
-                case "SetNeoPixel":
-                    {
-                        var p = LoadParams<SetNeoPixelParams>(command);
-                        var colors = p.Colors
-                            .Select(c => new NeoPixelColor(c.R, c.G, c.B))
-                            .ToArray();
-                        NanoManager.SetNeoPixel(p.NanoId, p.Pin, colors);
-                    }
-                    break;
-
-                case "RenameNanoPin":
-                    {
-                        var p = LoadParams<RenameNanoPinParams>(command);
-                        NanoManager.RenamePin(p.NanoId, p.Pin, p.Name);
-                    }
-                    break;
-
-                case "ConfigureNanoPin":
-                    {
-                        var p    = LoadParams<ConfigureNanoPinParams>(command);
-                        var type = p.Type switch
-                        {
-                            "Output"       => Nano.PinType.Output,
-                            "Neopixel"     => Nano.PinType.Neopixel,
-                            "Unconfigured" => Nano.PinType.Unconfigured,
-                            _              => Nano.PinType.Input,
-                        };
-                        NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount);
-                    }
-                    break;
-
-                case "SetRelay":
-                    {
-                        var p = LoadParams<SetRelayParams>(command);
-                        RelayManager.SetRelay(p.Relay, p.Value);
-                    }
-                    break;
-
-                case "RenameRelay":
-                    {
-                        var p = LoadParams<RenameRelayParams>(command);
-                        RelayManager.RenameRelay(p.Relay, p.Name);
-                    }
-                    break;
-
-                case "GetRelayState":
-                    {
-                        var relayStates = RelayManager.GetRelayStates();
-                        payload = new UsbRelayState
-                        {
-                            Connected = RelayManager.IsConnected,
-                            Serial    = RelayManager.GetSerial(),
-                            Relays    = relayStates,
-                            Names     = RelayManager.GetRelayNames(),
-                        };
-                    }
-                    break;
-
-                // ── Vision commands ───────────────────────────────────────────────
-
-                case "GetVisionPrograms":
-                {
-                    var programs = VisionRepo.GetAll();
-                    var json = JsonSerializer.Serialize(programs, CamelCase);
-                    payload = new { programs = json, runningIds = VisionManager.GetRunningIds() };
-                }
-                break;
-
-                case "SaveVisionProgram":
-                {
-                    var prog = LoadParams<Vision.VisionProgram>(command);
-                    if (string.IsNullOrEmpty(prog.Id))
-                        prog.Id = Guid.NewGuid().ToString("N")[..8];
-                    VisionRepo.Save(prog);
-                    VisionManager.OnProgramSaved(prog);
-                    payload = new { programId = prog.Id, lastUpdatedUnixMs = prog.LastUpdatedUnixMs };
-                }
-                break;
-
-                case "DeleteVisionProgram":
-                {
-                    var p = LoadParams<DeleteVisionProgramParams>(command);
-                    VisionManager.StopProgram(p.Id);
-                    VisionRepo.Delete(p.Id);
-                }
-                break;
-
-                case "StartVision":
-                {
-                    var p = LoadParams<StartStopVisionParams>(command);
-                    VisionManager.StartProgram(p.Id);
-                }
-                break;
-
-                case "StopVision":
-                {
-                    var p = LoadParams<StartStopVisionParams>(command);
-                    VisionManager.StopProgram(p.Id);
-                }
-                break;
-
-                case "GetCncToolpath":
-                {
-                    // Resolved toolpath of the CNC block currently executing —
-                    // anchor and variables applied. Null when no block is active.
-                    var tp = ActiveCncToolpath;
-                    payload = new
-                    {
-                        toolpath = tp == null ? null : new
-                        {
-                            programName = tp.ProgramName,
-                            paths       = tp.Paths,
-                            holes       = tp.Holes.Select(h => new { x = h.X, y = h.Y }).ToList(),
-                        },
-                    };
-                }
-                break;
-
-                case "GetVisionResult":
-                {
-                    var p = LoadParams<StartStopVisionParams>(command);
-                    var proc = VisionManager.GetProcessor(p.Id);
-                    // Live result while running, else the last one captured at the end
-                    // of the most recent RunVision step for this program.
-                    var result = proc?.GetLatestResult() ?? GetProgramVisionResult(p.Id);
-                    var json   = result != null
-                        ? JsonSerializer.Serialize(result, CamelCase)
-                        : null;
-                    payload = new { result = json };
-                }
-                break;
-
-                // ── End vision commands ───────────────────────────────────────────
-
-                default:
-                    // Only names RunCommands actually handles may be queued — anything
-                    // else would sit at the head of the queue as a silent no-op.
-                    if (command.Command is null || !QueuedMotionCommandNames.Contains(command.Command))
-                    {
-                        payload = new { ok = false, error = "unknownCommand" };
-                        break;
-                    }
-                    RobotCommand NewCommand = LoadParams<RobotCommand>(command);
-                    NewCommand.CommandType = command.Command;
-                    // Stamp with the current jog epoch so a stop arriving after this
-                    // enqueue can invalidate a trailing jog (see _jogGeneration).
-                    NewCommand.JogGeneration = _jogGeneration;
-                    QueuedCommands.Enqueue(NewCommand);
-                    break;
-
-            }
+                payload = _commands.TryGet(command.Command, out var handler)
+                    ? await handler(command)
+                    : new { ok = false, error = "unknownCommand" };
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[AddCommand] '{command.Command}' failed: {ex}");
                 return new { ok = false, error = ex.Message };
             }
-            payload ??= new { };
-
-            return (object)payload;
+            return payload ?? new { };
         }
+
+        // ── Command-handler surface ───────────────────────────────────────────
+        // What the handlers in Commands/ need beyond the public API. Reads are
+        // snapshots of motion-thread state; every write to motion-owned state is
+        // posted to the motion thread.
+
+        internal RobotIdentity     Identity           => _identity;
+        internal RobotConfig       Config             => _config;
+        internal IRobotKinematics  Kinematics         => _kinematics;
+        internal Vector6           LivePosition       => CurrentPosition;
+        internal Vector6           LiveTargetPosition => TargetPosition;
+        internal bool              Homed              => homed;
+        internal string            ActiveToolName     => activeTool;
+        internal string            ActiveLocalName    => activeLocal;
+
+        /// <summary>A homing run has been requested or is in progress.</summary>
+        internal bool HomingRequestedOrActive => startHoming || _homing.IsActive;
+
+        internal (double SpeedS, double AccelS, double DecelS, double SpeedJ, double AccelJ, double DecelJ) MotionParameters
+            => (SpeedS, AccelS, DecelS, SpeedJ, AccelJ, DecelJ);
+
+        internal (bool Faulted, int Joint, int Direction, string Message, bool Bypass) FaultStatus
+            => (_faulted, _faultJoint, _faultDirection, _faultMessage, _limitBypass);
+
+        /// <summary>Queues one of <see cref="QueuedMotionCommandNames"/> for RunCommands.</summary>
+        internal object? EnqueueMotionCommand(CommandMessage command)
+        {
+            // Only names RunCommands actually handles may be queued — anything
+            // else would sit at the head of the queue as a silent no-op.
+            if (command.Command is null || !QueuedMotionCommandNames.Contains(command.Command))
+                return new { ok = false, error = "unknownCommand" };
+
+            RobotCommand NewCommand = CommandJson.LoadParams<RobotCommand>(command);
+            NewCommand.CommandType = command.Command;
+            // Stamp with the current jog epoch so a stop arriving after this
+            // enqueue can invalidate a trailing jog (see _jogGeneration).
+            NewCommand.JogGeneration = _jogGeneration;
+            QueuedCommands.Enqueue(NewCommand);
+            return null;
+        }
+
+        internal void RequestHome() => PostToMotionThread(() =>
+        {
+            ClearFaultInternal();  // re-homing re-establishes position; drop any latched fault
+            startHoming = true;
+        });
+
+        internal void RequestSetHomed() => PostToMotionThread(SetAllHomed);
+
+        internal void StopJog()
+        {
+            // Bump the epoch first so any jog already queued (but not yet
+            // processed on the loop thread) is invalidated and cannot
+            // re-enable motion after this stop.
+            // The profiler stop itself runs on the motion thread (drained
+            // before RunCommands on the next tick).
+            Interlocked.Increment(ref _jogGeneration);
+            PostToMotionThread(() =>
+            {
+                joggingMotionProfiler.StopJog();
+                jointJoggingProfiler.StopJog();
+                toolJoggingMotionProfiler.StopJog();
+            });
+        }
+
+        /// <summary>Re-applies motor directions and/or rebuilds the kinematics after a
+        /// config change — on the motion thread, which drives the STB motors.</summary>
+        internal void ReapplyConfigOnMotionThread(bool motorDirections, bool kinematics) => PostToMotionThread(() =>
+        {
+            if (motorDirections) ApplyMotorDirections();
+            if (kinematics)      InitializeKinematics();
+        });
+
+        internal void SelectTool(string? toolName) => PostToMotionThread(() =>
+        {
+            // Tool/position state is owned by the motion thread — apply there.
+            if (string.IsNullOrEmpty(toolName) || toolName == "None")
+            {
+                activeTool  = "";
+                CurrentTool = Vector6.Zero;
+            }
+            else
+            {
+                var tool = toolRepo.Get(toolName);
+                if (tool != null)
+                {
+                    activeTool  = toolName;
+                    CurrentTool = new Vector6(tool.X, tool.Y, tool.Z,
+                                              tool.RX, tool.RY, tool.RZ);
+                }
+            }
+            // Recalculate position with new tool offset
+            CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+            CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+        });
+
+        internal void RenameActiveTool(string oldName, string newName) => PostToMotionThread(() =>
+        {
+            if (activeTool == oldName) activeTool = newName;
+        });
+
+        internal void ForgetDeletedTool(string deletedTool) => PostToMotionThread(() =>
+        {
+            if (activeTool == deletedTool)
+            {
+                activeTool          = "";
+                CurrentTool         = Vector6.Zero;
+                CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+            }
+        });
+
+        internal void SelectLocal(string? localName) => PostToMotionThread(() => ApplyLocal(localName));
+
+        internal void RenameActiveLocal(string oldName, string newName) => PostToMotionThread(() =>
+        {
+            if (activeLocal == oldName) activeLocal = newName;
+        });
+
+        // Motion thread reads CurrentLocal to resolve moves/jogs, so clear it there.
+        internal void ForgetDeletedLocal(string deletedLocal) => PostToMotionThread(() =>
+        {
+            if (activeLocal == deletedLocal)
+            {
+                activeLocal  = "";
+                CurrentLocal = Vector6.Zero;
+            }
+        });
         public void RunCommands()
         {
             if (_drainQueueRequested)
@@ -2290,473 +1126,155 @@ namespace Controller.RobotControl
 
             stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
         }
+        // ── Homing ────────────────────────────────────────────────────────────
+        // Motion thread only. One sequencer phase per tick — see HomingSequencer.
         public void RunHoming()
         {
-            double m1Deg, m2Deg, m3Deg, m4Deg;
-
-            switch (homingState)
+            switch (_homing.Phase)
             {
-                case "WaitingForStart":
+                case HomingPhase.WaitingForStart:
                     if (startHoming)
-                        homingState = _kinematics is CNC4AxisKinematics ? "CNC_HomeZ" : "HomeVertical";
+                        _homing.Begin(_kinematics is CNC4AxisKinematics ? CncHomingAxes() : AstroHomingAxes());
                     break;
 
-                case "HomeVertical":
-                    if (stb.Input2)
-                    {
-                        // Sensor already triggered — skip fast approach and go straight to back-off
-                        homingState = "BackOffVertical";
-                        break;
-                    }
-                    // The last Jog() arg is the profiler's watchdog reset time. RunHoming re-issues
-                    // this jog every tick, but RunMotion (which advances the profiler) runs a full
-                    // ~4ms tick BEFORE the next RunHoming, so the watchdog MUST exceed one tick or it
-                    // expires between the Jog and the next Update and the axis never moves (flicker,
-                    // no motion). It used to be 0.001s, which only worked when Loop() was a tight
-                    // busy-spin; the 4ms gated tick requires a larger value. ExecuteHardStop handles
-                    // the precise stop at the switch, so this is only a safety net.
-                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
-                    if (stb.Input2)
-                    {
-                        ExecuteHardStop();
-                        homingState = "WaitVerticalStop1";
-                    }
-                    break;
-
-                case "WaitVerticalStop1":
-                    if (!IsMoving)
-                        homingState = "BackOffVertical";
-                    break;
-
-                case "BackOffVertical":
-                {
-                    var t = new Vector6(
-                        CurrentJointTargets.X,
-                        CurrentJointTargets.Y,
-                        CurrentJointTargets.Z - (_config.HomingBackoffMm * _config.VerticalHomingDirection),
-                        CurrentJointTargets.RX,
-                        CurrentJointTargets.RY,
-                        CurrentJointTargets.RZ
-                    );
-                    this.TargetJoints = t;
-                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
-                    homingState = "WaitVerticalBackoff";
-                    break;
-                }
-
-                case "WaitVerticalBackoff":
-                    if (!IsMoving)
-                        homingState = "HomeVerticalSlow";
-                    break;
-
-                case "HomeVerticalSlow":
-                    jointJoggingProfiler.Jog(new(0, 0, _config.VerticalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
-                    if (stb.Input2)
-                    {
-                        ExecuteHardStop();
-                        homingState = "WaitVerticalMoveComplete";
-                    }
-                    break;
-
-                case "WaitVerticalMoveComplete":
-                    if (!IsMoving)
-                        homingState = "SetVerticalHomed";
-                    break;
-
-                case "SetVerticalHomed":
-                {
-                    var astro = (ASTROKinematics)_kinematics;
-                    astro.InterpolatedJoint2.Cartesian = (astro.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
-                    astro.CurrentJoint2.Cartesian      = (astro.CurrentJoint2.Cartesian.x,      _config.VerticalHomePosition);
-
-                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-
-                    homingState = "HomeHorizontal";
-                    break;
-                }
-
-                case "HomeHorizontal":
-                    if (stb.Input3)
-                    {
-                        homingState = "BackOffHorizontal";
-                        break;
-                    }
-                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
-                    if (stb.Input3)
-                    {
-                        ExecuteHardStop();
-                        homingState = "WaitHorizontalStop1";
-                    }
-                    break;
-
-                case "WaitHorizontalStop1":
-                    if (!IsMoving)
-                        homingState = "BackOffHorizontal";
-                    break;
-
-                case "BackOffHorizontal":
-                {
-                    var t = new Vector6(
-                        CurrentJointTargets.X,
-                        CurrentJointTargets.Y - (_config.HomingBackoffMm * _config.HorizontalHomingDirection),
-                        CurrentJointTargets.Z,
-                        CurrentJointTargets.RX,
-                        CurrentJointTargets.RY,
-                        CurrentJointTargets.RZ
-                    );
-                    this.TargetJoints = t;
-                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
-                    homingState = "WaitHorizontalBackoff";
-                    break;
-                }
-
-                case "WaitHorizontalBackoff":
-                    if (!IsMoving)
-                        homingState = "HomeHorizontalSlow";
-                    break;
-
-                case "HomeHorizontalSlow":
-                    jointJoggingProfiler.Jog(new(0, _config.HorizontalHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
-                    if (stb.Input3)
-                    {
-                        ExecuteHardStop();
-                        homingState = "WaitHorizontalMoveComplete";
-                    }
-                    break;
-
-                case "WaitHorizontalMoveComplete":
-                    if (!IsMoving)
-                        homingState = "SetHorizontalHomed";
-                    break;
-
-                case "SetHorizontalHomed":
-                {
-                    var astro = (ASTROKinematics)_kinematics;
-                    astro.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, astro.InterpolatedJoint2.Cartesian.z);
-                    astro.CurrentJoint2.Cartesian      = (_config.HorizontalHomePosition, astro.CurrentJoint2.Cartesian.z);
-
-                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-
-                    homingState = "HomeJ1";
-                    break;
-                }
-
-                case "HomeJ1":
-                    if (stb.Input1)
-                    {
-                        homingState = "BackOffJ1";
-                        break;
-                    }
-                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
-                    if (stb.Input1)
-                    {
-                        ExecuteHardStop();
-                        homingState = "WaitJ1Stop1";
-                    }
-                    break;
-
-                case "WaitJ1Stop1":
-                    if (!IsMoving)
-                        homingState = "BackOffJ1";
-                    break;
-
-                case "BackOffJ1":
-                {
-                    var t = new Vector6(
-                        CurrentJointTargets.X - (_config.HomingBackoffMm * _config.J1HomingDirection),
-                        CurrentJointTargets.Y,
-                        CurrentJointTargets.Z,
-                        CurrentJointTargets.RX,
-                        CurrentJointTargets.RY,
-                        CurrentJointTargets.RZ
-                    );
-                    this.TargetJoints = t;
-                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
-                    homingState = "WaitJ1Backoff";
-                    break;
-                }
-
-                case "WaitJ1Backoff":
-                    if (!IsMoving)
-                        homingState = "HomeJ1Slow";
-                    break;
-
-                case "HomeJ1Slow":
-                    jointJoggingProfiler.Jog(new(_config.J1HomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
-                    if (stb.Input1)
-                    {
-                        ExecuteHardStop();
-                        homingState = "WaitJ1MoveComplete";
-                    }
-                    break;
-
-                case "WaitJ1MoveComplete":
-                    if (!IsMoving)
-                        homingState = "SetJ1MotorHomed";
-                    break;
-
-                case "SetJ1MotorHomed":
-                {
-                    var astro = (ASTROKinematics)_kinematics;
-                    astro.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
-                    astro.CurrentJoint1.JointAngleDeg      = _config.J1HomeOffsetDeg;
-
-                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-
-                    homingState = "HomeJ4";
-                    break;
-                }
-
-                case "HomeJ4":
-                {
-                    // Drive J4 to 0° (mechanical zero) using a joint motion profile.
-                    // J1/J2/J3 stay at their current positions; only RZ (J4) changes.
-                    var j4Target = new Vector6(
-                        CurrentJointTargets.X,
-                        CurrentJointTargets.Y,
-                        CurrentJointTargets.Z,
-                        CurrentJointTargets.RX,
-                        CurrentJointTargets.RY,
-                        0  // J4 → 0 degrees
-                    );
-                    // TargetJoints must be set before creating the profiler — RunMotion snaps
-                    // CurrentJointTargets to TargetJoints on the tick the profiler finishes.
-                    // Without this, the snap would restore stale pre-homing joint values and
-                    // corrupt the home positions already set for J1/J2.
-                    this.TargetJoints = j4Target;
-                    jointMotionProfiler = new(CurrentJointTargets, j4Target, _config.HomingSpeed, 100, 200);
-                    homingState = "WaitJ4MoveComplete";
-                    break;
-                }
-
-                case "WaitJ4MoveComplete":
-                    if (!IsMoving)
-                        homingState = "SetJ4Homed";
-                    break;
-
-                case "SetJ4Homed":
-                {
-                    var astro = (ASTROKinematics)_kinematics;
-                    astro.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
-                    astro.CurrentJoint4.JointAngleDeg      = _config.J4HomeOffsetDeg;
-
-                    CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                    CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-
-                    homingState = "HomingComplete";
-                    break;
-                }
-
-                case "HomingComplete":
+                case HomingPhase.Complete:
                     startHoming = false;
-                    homingState = "WaitingForStart";
+                    _homing.Reset();
                     homed = true;
                     break;
 
-                // ── CNC4Axis homing ─────────────────────────────────────────────────
-                // Sequence: Z (Input3) → X (Input1) → Y (Input2) → zero RZ
-
-                case "CNC_HomeZ":
-                    if (stb.Input3)
-                    {
-                        homingState = "CNC_BackOffZ";
-                        break;
-                    }
-                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
-                    if (stb.Input3)
-                    {
-                        ExecuteHardStop();
-                        homingState = "CNC_WaitZStop";
-                    }
-                    break;
-
-                case "CNC_WaitZStop":
-                    if (!IsMoving) homingState = "CNC_BackOffZ";
-                    break;
-
-                case "CNC_BackOffZ":
-                {
-                    var t = new Vector6(
-                        CurrentJointTargets.X,
-                        CurrentJointTargets.Y,
-                        CurrentJointTargets.Z - (_config.HomingBackoffMm * _config.CncZHomingDirection),
-                        CurrentJointTargets.RX,
-                        CurrentJointTargets.RY,
-                        CurrentJointTargets.RZ
-                    );
-                    TargetJoints = t;
-                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
-                    homingState = "CNC_WaitZBackoff";
-                    break;
-                }
-
-                case "CNC_WaitZBackoff":
-                    if (!IsMoving) homingState = "CNC_HomeZSlow";
-                    break;
-
-                case "CNC_HomeZSlow":
-                    jointJoggingProfiler.Jog(new(0, 0, _config.CncZHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
-                    if (stb.Input3)
-                    {
-                        ExecuteHardStop();
-                        homingState = "CNC_WaitZMoveDone";
-                    }
-                    break;
-
-                case "CNC_WaitZMoveDone":
-                    if (!IsMoving) homingState = "CNC_SetZHomed";
-                    break;
-
-                case "CNC_SetZHomed":
-                    CurrentJointTargets.Z = _config.CncZHomePosition;
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
-                    homingState = "CNC_HomeX";
-                    break;
-
-                case "CNC_HomeX":
-                    if (stb.Input1)
-                    {
-                        homingState = "CNC_BackOffX";
-                        break;
-                    }
-                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
-                    if (stb.Input1)
-                    {
-                        ExecuteHardStop();
-                        homingState = "CNC_WaitXStop";
-                    }
-                    break;
-
-                case "CNC_WaitXStop":
-                    if (!IsMoving) homingState = "CNC_BackOffX";
-                    break;
-
-                case "CNC_BackOffX":
-                {
-                    var t = new Vector6(
-                        CurrentJointTargets.X - (_config.HomingBackoffMm * _config.CncXHomingDirection),
-                        CurrentJointTargets.Y,
-                        CurrentJointTargets.Z,
-                        CurrentJointTargets.RX,
-                        CurrentJointTargets.RY,
-                        CurrentJointTargets.RZ
-                    );
-                    TargetJoints = t;
-                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
-                    homingState = "CNC_WaitXBackoff";
-                    break;
-                }
-
-                case "CNC_WaitXBackoff":
-                    if (!IsMoving) homingState = "CNC_HomeXSlow";
-                    break;
-
-                case "CNC_HomeXSlow":
-                    jointJoggingProfiler.Jog(new(_config.CncXHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
-                    if (stb.Input1)
-                    {
-                        ExecuteHardStop();
-                        homingState = "CNC_WaitXMoveDone";
-                    }
-                    break;
-
-                case "CNC_WaitXMoveDone":
-                    if (!IsMoving) homingState = "CNC_SetXHomed";
-                    break;
-
-                case "CNC_SetXHomed":
-                    CurrentJointTargets.X = _config.CncXHomePosition;
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
-                    homingState = "CNC_HomeY";
-                    break;
-
-                case "CNC_HomeY":
-                    if (stb.Input2)
-                    {
-                        homingState = "CNC_BackOffY";
-                        break;
-                    }
-                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSpeed, 100, 10000000, 0.1);
-                    if (stb.Input2)
-                    {
-                        ExecuteHardStop();
-                        homingState = "CNC_WaitYStop";
-                    }
-                    break;
-
-                case "CNC_WaitYStop":
-                    if (!IsMoving) homingState = "CNC_BackOffY";
-                    break;
-
-                case "CNC_BackOffY":
-                {
-                    var t = new Vector6(
-                        CurrentJointTargets.X,
-                        CurrentJointTargets.Y - (_config.HomingBackoffMm * _config.CncYHomingDirection),
-                        CurrentJointTargets.Z,
-                        CurrentJointTargets.RX,
-                        CurrentJointTargets.RY,
-                        CurrentJointTargets.RZ
-                    );
-                    TargetJoints = t;
-                    jointMotionProfiler = new(CurrentJointTargets, t, _config.HomingSpeed, 100, 200);
-                    homingState = "CNC_WaitYBackoff";
-                    break;
-                }
-
-                case "CNC_WaitYBackoff":
-                    if (!IsMoving) homingState = "CNC_HomeYSlow";
-                    break;
-
-                case "CNC_HomeYSlow":
-                    jointJoggingProfiler.Jog(new(0, _config.CncYHomingDirection), _config.HomingSlowSpeed, 50, 10000000, 0.1);
-                    if (stb.Input2)
-                    {
-                        ExecuteHardStop();
-                        homingState = "CNC_WaitYMoveDone";
-                    }
-                    break;
-
-                case "CNC_WaitYMoveDone":
-                    if (!IsMoving) homingState = "CNC_SetYHomed";
-                    break;
-
-                case "CNC_SetYHomed":
-                    CurrentJointTargets.Y = _config.CncYHomePosition;
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
-                    homingState = "CNC_ZeroRZ";
-                    break;
-
-                case "CNC_ZeroRZ":
-                    // RZ (threading spindle) has no limit switch — zero it at current position
-                    CurrentJointTargets.RZ = _config.CncRzHomePosition;
-                    _kinematics.UpdateMotorTargets(CurrentJointTargets, out m1Deg, out m2Deg, out m3Deg, out m4Deg);
-                    stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
-                    CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
-                    homingState = "HomingComplete";
-                    break;
-
                 default:
+                    _homing.Tick();
                     break;
             }
         }
+
+        // ASTRO: vertical (Input2) → horizontal (Input3) → J1 (Input1) → drive J4 to 0°.
+        // Speeds, directions and back-off are captured when homing starts; the
+        // home positions are read from the config when each axis is set homed.
+        private List<HomingAxis> AstroHomingAxes()
+        {
+            var c = _config;
+            return new List<HomingAxis>
+            {
+                new(Joint: 2, c.VerticalHomingDirection, () => stb.Input2,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    SetAstroVerticalHomed, HomingAxis.AstroNames("Vertical")),
+                new(Joint: 1, c.HorizontalHomingDirection, () => stb.Input3,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    SetAstroHorizontalHomed, HomingAxis.AstroNames("Horizontal")),
+                new(Joint: 0, c.J1HomingDirection, () => stb.Input1,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    SetAstroJ1Homed, HomingAxis.AstroNames("J1", setHomedName: "SetJ1MotorHomed")),
+                // J4 has no switch: drive it to 0° (mechanical zero) with a joint
+                // move — J1/J2/J3 stay put — then declare the J4 home offset there.
+                new(Joint: 5, Direction: 0, Sensor: null,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    SetAstroJ4Homed,
+                    HomingAxis.Names(driveToZero: "HomeJ4", waitMove: "WaitJ4MoveComplete", setHomed: "SetJ4Homed"),
+                    DriveToZero: true),
+            };
+        }
+
+        // CNC4Axis: Z (Input3) → X (Input1) → Y (Input2) → zero RZ.
+        private List<HomingAxis> CncHomingAxes()
+        {
+            var c = _config;
+            return new List<HomingAxis>
+            {
+                new(Joint: 2, c.CncZHomingDirection, () => stb.Input3,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    () => SetCncJointHomed(2, _config.CncZHomePosition), HomingAxis.CncNames("Z")),
+                new(Joint: 0, c.CncXHomingDirection, () => stb.Input1,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    () => SetCncJointHomed(0, _config.CncXHomePosition), HomingAxis.CncNames("X")),
+                new(Joint: 1, c.CncYHomingDirection, () => stb.Input2,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    () => SetCncJointHomed(1, _config.CncYHomePosition), HomingAxis.CncNames("Y")),
+                // RZ (threading spindle) has no limit switch — zero it at its current position.
+                new(Joint: 5, Direction: 0, Sensor: null,
+                    c.HomingSpeed, c.HomingSlowSpeed, c.HomingBackoffMm,
+                    () => SetCncJointHomed(5, _config.CncRzHomePosition),
+                    HomingAxis.Names(setHomed: "CNC_ZeroRZ")),
+            };
+        }
+
+        private ASTROKinematics Astro => (ASTROKinematics)_kinematics;
+
+        private void SetAstroVerticalHomed()
+        {
+            var astro = Astro;
+            astro.InterpolatedJoint2.Cartesian = (astro.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
+            astro.CurrentJoint2.Cartesian      = (astro.CurrentJoint2.Cartesian.x,      _config.VerticalHomePosition);
+            CommitAstroHomedJoints();
+        }
+
+        private void SetAstroHorizontalHomed()
+        {
+            var astro = Astro;
+            astro.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, astro.InterpolatedJoint2.Cartesian.z);
+            astro.CurrentJoint2.Cartesian      = (_config.HorizontalHomePosition, astro.CurrentJoint2.Cartesian.z);
+            CommitAstroHomedJoints();
+        }
+
+        private void SetAstroJ1Homed()
+        {
+            var astro = Astro;
+            astro.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
+            astro.CurrentJoint1.JointAngleDeg      = _config.J1HomeOffsetDeg;
+            CommitAstroHomedJoints();
+        }
+
+        private void SetAstroJ4Homed()
+        {
+            var astro = Astro;
+            astro.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
+            astro.CurrentJoint4.JointAngleDeg      = _config.J4HomeOffsetDeg;
+            CommitAstroHomedJoints();
+        }
+
+        // ASTRO: the joint state was written into the kinematics — derive the pose and
+        // joint targets from it and overwrite the STB's motor positions (no motion).
+        private void CommitAstroHomedJoints()
+        {
+            CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+            CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+            _kinematics.UpdateMotorTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
+            stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+        }
+
+        // CNC: declare one joint target homed, overwrite the STB's motor positions
+        // (no motion), then refresh the pose.
+        private void SetCncJointHomed(int joint, double homePosition)
+        {
+            switch (joint)
+            {
+                case 0: CurrentJointTargets.X  = homePosition; break;
+                case 1: CurrentJointTargets.Y  = homePosition; break;
+                case 2: CurrentJointTargets.Z  = homePosition; break;
+                case 5: CurrentJointTargets.RZ = homePosition; break;
+                default: throw new ArgumentOutOfRangeException(nameof(joint));
+            }
+            _kinematics.UpdateMotorTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
+            stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+            CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
+        }
+
+        // IHomingHost — called by the sequencer on the motion thread.
+        Vector6 IHomingHost.JointTargets => CurrentJointTargets;
+
+        void IHomingHost.JogJoints(Vector6 direction, double speed, double accel, double decel, double watchdogSeconds)
+            => jointJoggingProfiler.Jog(direction, speed, accel, decel, watchdogSeconds);
+
+        void IHomingHost.MoveJoints(Vector6 target, double speed, double accel, double decel)
+        {
+            // TargetJoints must be set before creating the profiler — RunMotion snaps
+            // CurrentJointTargets to it on the tick the profiler finishes.
+            this.TargetJoints   = target;
+            jointMotionProfiler = new(CurrentJointTargets, target, speed, accel, decel);
+        }
+
+        void IHomingHost.StopAtSwitch() => ExecuteHardStop();
 
         /// <summary>
         /// Thread-safe: sets a flag that is consumed at the top of the next control loop iteration.
@@ -2781,7 +1299,7 @@ namespace Controller.RobotControl
         /// resets its status to Ready so the UI returns to the Start button state.
         /// Call this before starting a new built program.
         /// </summary>
-        private void DisplaceRunningBuiltProgram(string incomingProgramName)
+        internal void DisplaceRunningBuiltProgram(string incomingProgramName)
         {
             // Stop active execution if a different built program is running
             var currentName = programExecutor?.CurrentProgramName;
@@ -2836,7 +1354,7 @@ namespace Controller.RobotControl
             toolJoggingMotionProfiler.ForceStop();
             QueuedCommands.Clear();
             startHoming = false;
-            homingState = "WaitingForStart";
+            _homing.Reset();
         }
 
         public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
@@ -2934,7 +1452,7 @@ namespace Controller.RobotControl
             double jointSpeed = Speed ??= this.SpeedJ;
             double jointAccel = Accel ??= this.AccelJ;
             double jointDecel = Decel ??= this.DecelJ;
-            if (_config.RobotType == "CNC4Axis") jointSpeed /= 3.0;
+            if (_config.RobotType == RobotTypes.Cnc4Axis) jointSpeed /= CncJogSpeedDivisor;
             jointJoggingProfiler.Jog(jogJointDirection, jointSpeed, jointAccel, jointDecel);
         }
 
@@ -2943,7 +1461,7 @@ namespace Controller.RobotControl
             double lineSpeed = Speed ??= this.SpeedS;
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
-            if (_config.RobotType == "CNC4Axis") lineSpeed /= 3.0;
+            if (_config.RobotType == RobotTypes.Cnc4Axis) lineSpeed /= CncJogSpeedDivisor;
             // Jog along the active local's axes: rotate the linear direction into
             // world space so "+X" tracks the local frame, not the world frame.
             if (ActiveLocalOffset is { } loc)
@@ -2956,7 +1474,7 @@ namespace Controller.RobotControl
             double lineSpeed = Speed ??= this.SpeedS;
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
-            if (_config.RobotType == "CNC4Axis") lineSpeed /= 3.0;
+            if (_config.RobotType == RobotTypes.Cnc4Axis) lineSpeed /= CncJogSpeedDivisor;
             toolJoggingMotionProfiler.Jog(jogDirection, lineSpeed, lineAccel, lineDecel);
         }
 
@@ -2989,15 +1507,6 @@ namespace Controller.RobotControl
                 pose.RY + offset.RY,
                 pose.RZ + offset.RZ
             );
-        }
-
-        public static T LoadParams<T>(CommandMessage msg)
-        {
-            if (msg.Params == null)
-                throw new InvalidOperationException("Command has no params");
-
-            return msg.Params.Value.Deserialize<T>(_jsonOptions)
-                ?? throw new InvalidOperationException("Command params were null");
         }
 
         private Vector6? ResolveVector(RobotCommand command)
