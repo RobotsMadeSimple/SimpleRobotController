@@ -937,7 +937,7 @@ public class CommandMessage
 /// A 2D grid of positions defined by a base point, row/column offsets, and an
 /// optional rotation about the base point's Z-axis.
 /// </summary>
-public class Grid
+public class Grid : Controller.RobotControl.Persistence.IStoredItem
 {
     [JsonPropertyName("id")]             public string Id             { get; set; } = "";
     [JsonPropertyName("name")]           public string Name           { get; set; } = "";
@@ -1565,7 +1565,7 @@ public class GridIdParams
 // ── Stack ─────────────────────────────────────────────────────────────────────
 
 /// <summary>A 1-D positional array — position = basePoint + index × offset.</summary>
-public class RobotStack
+public class RobotStack : Controller.RobotControl.Persistence.IStoredItem
 {
     [JsonPropertyName("id")]             public string Id             { get; set; } = "";
     [JsonPropertyName("name")]           public string Name           { get; set; } = "";

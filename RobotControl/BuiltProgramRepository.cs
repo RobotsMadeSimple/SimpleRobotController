@@ -54,7 +54,7 @@ public class BuiltProgramRepository
 
                     var dest = ProgramPath(p.Name);
                     if (!File.Exists(dest))
-                        File.WriteAllText(dest, JsonSerializer.Serialize(p, _opts));
+                        Controller.RobotControl.Persistence.AtomicFile.WriteAllText(dest, JsonSerializer.Serialize(p, _opts));
                 }
             }
             // Rename so migration doesn't re-run on next boot
@@ -164,7 +164,7 @@ public class BuiltProgramRepository
 
     private void WriteFile(BuiltProgram program)
     {
-        File.WriteAllText(ProgramPath(program.Name), JsonSerializer.Serialize(program, _opts));
+        Controller.RobotControl.Persistence.AtomicFile.WriteAllText(ProgramPath(program.Name), JsonSerializer.Serialize(program, _opts));
         LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 
@@ -240,7 +240,7 @@ public class BuiltProgramRepository
     public void SaveImage(string name, byte[] bytes)
     {
         Directory.CreateDirectory(_imageDir);
-        File.WriteAllBytes(ImagePath(name), bytes);
+        Controller.RobotControl.Persistence.AtomicFile.WriteAllBytes(ImagePath(name), bytes);
     }
 
     public byte[]? GetImage(string name)

@@ -60,7 +60,7 @@ namespace Controller.RobotControl
             try
             {
                 string json = JsonSerializer.Serialize(identity, JsonOptions);
-                File.WriteAllText(IdentityFilePath, json);
+                Controller.RobotControl.Persistence.AtomicFile.WriteAllText(IdentityFilePath, json);
             }
             catch (Exception ex)
             {

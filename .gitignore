@@ -430,3 +430,6 @@ RobotControl/programImages/*
 # Per-machine robot configuration and local runtime data
 robot-config.json
 local-data/
+
+# Claude Code agent worktrees
+.claude/worktrees/

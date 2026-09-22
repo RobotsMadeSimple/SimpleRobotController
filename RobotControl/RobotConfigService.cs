@@ -237,7 +237,7 @@ namespace Controller.RobotControl
             try
             {
                 string json = JsonSerializer.Serialize(config, JsonOptions);
-                File.WriteAllText(ConfigFilePath, json);
+                Controller.RobotControl.Persistence.AtomicFile.WriteAllText(ConfigFilePath, json);
             }
             catch (Exception ex)
             {
