@@ -40,6 +40,9 @@ class Program
         var robotController = new Controller.RobotControl.RobotController();
         robotController.SetIdentity(identity);
         robotController.SetConfig(config);
+        // Start devices and the motion/program threads only once the real
+        // identity and config are applied (the first ticks must not see defaults).
+        robotController.Start();
 
         // ---- Web server ----
         var builder = WebApplication.CreateBuilder(args);

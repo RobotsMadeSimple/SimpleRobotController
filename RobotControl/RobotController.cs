@@ -48,6 +48,49 @@ namespace Controller.RobotControl
             PropertyNameCaseInsensitive = true
         };
 
+        // Shared serialisation options for payloads the app receives as JSON strings.
+        private static readonly JsonSerializerOptions CamelCase = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        };
+        private static readonly JsonSerializerOptions CamelCaseWithEnums = new()
+        {
+            Converters           = { new JsonStringEnumConverter() },
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        };
+
+        // Command names AddCommand may enqueue — exactly the cases RunCommands handles.
+        // Anything else is rejected with "unknownCommand" instead of being queued as a no-op.
+        private static readonly HashSet<string> QueuedMotionCommandNames = new(StringComparer.Ordinal)
+        {
+            "MoveL", "OffsetL", "MoveJ", "StartContinuous", "SetTool",
+            "SpeedS", "AccelS", "SpeedJ", "AccelJ", "JogL", "JogJ", "JogTool",
+        };
+
+        // Work posted by WebSocket/other threads that mutates motion-owned state.
+        // Drained on the motion thread at the top of every MotionLoop tick so the
+        // motion thread remains the sole writer of that state.
+        private readonly ConcurrentQueue<Action> _controlThreadActions = new();
+        private void PostToMotionThread(Action action) => _controlThreadActions.Enqueue(action);
+
+        // Motion thread only. Runs every posted action; one failing action is logged
+        // and does not prevent the rest from running. Cheap no-op when empty.
+        private void DrainControlThreadActions()
+        {
+            while (_controlThreadActions.TryDequeue(out var action))
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[MotionLoop] Posted control action failed: {ex}");
+                }
+            }
+        }
+
+
         private static readonly string _version = GetAssemblyVersion();
         public static string Version => _version;
 
@@ -80,9 +123,9 @@ namespace Controller.RobotControl
         // WS threads for status, mutated only on the control-loop thread.
         private volatile bool _faulted;
         private volatile bool _limitBypass;
-        private int    _faultJoint = -1;     // 0..3 joint index, -1 = none
-        private int    _faultDirection;      // +1 past max, -1 past min (the unsafe direction)
-        private string _faultMessage = "";
+        private volatile int    _faultJoint = -1;     // 0..3 joint index, -1 = none
+        private volatile int    _faultDirection;      // +1 past max, -1 past min (the unsafe direction)
+        private volatile string _faultMessage = "";
         // Joint targets as they stood at the start of this control tick — the clamp
         // reference for "don't move a joint further out of range than it already is".
         private Vector6 _jointsBeforeTick = new();
@@ -172,8 +215,10 @@ namespace Controller.RobotControl
         private RobotConfig _config = new();
 
         // If the Robot was homed from startup
-        private bool homed = false;
-        private bool startHoming = false;
+        // Volatile: written on the motion thread, read on WS/program threads (and
+        // startHoming is requested from those threads).
+        private volatile bool homed = false;
+        private volatile bool startHoming = false;
         private String homingState = "WaitingForStart";
 
         private JoggingMotionProfiler joggingMotionProfiler = new();
@@ -260,22 +305,19 @@ namespace Controller.RobotControl
 
         public RobotController()
         {
+            // Construction only — no device connections or threads are started
+            // here. Call Start() once identity/config have been applied so the
+            // first motion tick and the first STB write already see the real config.
             NanoManager = new NanoManager("nano_config.json");
-            NanoManager.Start();
 
             RelayManager = new UsbRelayManager();
-            RelayManager.Start();
 
             AuxAxisManager = new AuxAxisManager("aux_config.json");
-            AuxAxisManager.Start();
 
             CameraManager = new Camera.CameraManager("camera_config.json");
-            CameraManager.Start();
 
             VisionRepo    = new Vision.VisionProgramRepository("vision_programs");
             VisionManager = new Vision.VisionManager(CameraManager, VisionRepo);
-
-            stb.Start();
 
 
             backgroundProgramManager = new BackgroundProgramManager(
@@ -285,6 +327,26 @@ namespace Controller.RobotControl
                 this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo,
                 isBackground: false, globalVars: backgroundProgramManager.GlobalVars,
                 globalImages: backgroundProgramManager.GlobalImages, backgroundManager: backgroundProgramManager);
+        }
+
+        private int _started;
+
+        /// <summary>
+        /// Starts the device managers, the STB driver and the motion/program threads.
+        /// Call once, after SetIdentity/SetConfig, so nothing runs against the default
+        /// config. Subsequent calls are no-ops.
+        /// </summary>
+        public void Start()
+        {
+            if (Interlocked.Exchange(ref _started, 1) != 0)
+                return;
+
+            NanoManager.Start();
+            RelayManager.Start();
+            AuxAxisManager.Start();
+            CameraManager.Start();
+
+            stb.Start();
 
             // Motion and program execution run on SEPARATE threads. The motion
             // thread owns all motion state and runs unthrottled; the program thread
@@ -319,6 +381,11 @@ namespace Controller.RobotControl
                     if (_hardStopRequested)
                         ExecuteHardStop();
 
+                    // Apply motion-state changes posted from other threads (tool/local
+                    // selection, StopJog, fault/bypass, SetHomed, kinematics reconfig)
+                    // so this thread stays the sole writer of motion state.
+                    DrainControlThreadActions();
+
                     // Execute pending robot commands (creates/updates profilers)
                     RunCommands();
                     double tCmds = diag ? Diag.LoopSw.Elapsed.TotalMilliseconds : 0;
@@ -352,7 +419,14 @@ namespace Controller.RobotControl
                     // Catch-all: log, hard-stop the robot, then keep looping.
                     // The process must survive any tick-level exception.
                     Console.WriteLine($"[MotionLoop] Unhandled exception on tick: {ex}");
-                    ExecuteHardStop();
+                    try
+                    {
+                        ExecuteHardStop();
+                    }
+                    catch (Exception stopEx)
+                    {
+                        Console.WriteLine($"[MotionLoop] Hard stop after exception failed: {stopEx}");
+                    }
                 }
             }
         }
@@ -636,13 +710,13 @@ namespace Controller.RobotControl
 
         /// <summary>Operator acknowledgement: clears the fault and exits bypass. If a
         /// joint is still out of range the next commanded move simply re-faults.</summary>
-        public void ClearFault() => ClearFaultInternal();
+        public void ClearFault() => PostToMotionThread(ClearFaultInternal);
 
         /// <summary>Enter/exit limit bypass. While enabled the soft limits are
         /// ignored entirely, so a joint can be jogged past its window in either
         /// direction. Jogging itself is always available during a fault; bypass only
         /// unlocks the worsening direction.</summary>
-        public void SetLimitBypass(bool enable) => _limitBypass = enable;
+        public void SetLimitBypass(bool enable) => PostToMotionThread(() => _limitBypass = enable);
 
         // ── Aux axis motion ───────────────────────────────────────────────────
 
@@ -737,6 +811,11 @@ namespace Controller.RobotControl
         {
             object? payload = null;
 
+            // Any failure while handling a command (missing/null params, bad base64,
+            // JsonException, …) is reported to the caller as { ok:false, error } rather
+            // than propagating out and tearing down the client's WebSocket.
+            try
+            {
             switch (command.Command)
             {
                 case "GetRobotInfo":
@@ -792,10 +871,11 @@ namespace Controller.RobotControl
                                 var bytes = await http.GetByteArrayAsync(downloadUrl);
                                 await File.WriteAllBytesAsync(tempPath, bytes);
 
-                                File.SetUnixFileMode(tempPath,
-                                    System.IO.UnixFileMode.UserRead   | System.IO.UnixFileMode.UserWrite  | System.IO.UnixFileMode.UserExecute |
-                                    System.IO.UnixFileMode.GroupRead  | System.IO.UnixFileMode.GroupExecute |
-                                    System.IO.UnixFileMode.OtherRead  | System.IO.UnixFileMode.OtherExecute);
+                                if (!OperatingSystem.IsWindows())
+                                    File.SetUnixFileMode(tempPath,
+                                        System.IO.UnixFileMode.UserRead   | System.IO.UnixFileMode.UserWrite  | System.IO.UnixFileMode.UserExecute |
+                                        System.IO.UnixFileMode.GroupRead  | System.IO.UnixFileMode.GroupExecute |
+                                        System.IO.UnixFileMode.OtherRead  | System.IO.UnixFileMode.OtherExecute);
 
                                 File.Move(tempPath, exePath, overwrite: true);
                                 Console.WriteLine("[Update] Binary replaced. Exiting for systemd restart…");
@@ -867,8 +947,7 @@ namespace Controller.RobotControl
 
                 case "SetRobotIdentity":
                 {
-                    var p = JsonSerializer.Deserialize<SetRobotIdentityParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<SetRobotIdentityParams>(command);
                     if (p.RobotName != null) _identity.RobotName = p.RobotName;
                     if (p.RobotType != null) _identity.RobotType = p.RobotType;
                     RobotIdentityService.Save(_identity);
@@ -930,9 +1009,22 @@ namespace Controller.RobotControl
 
                 case "SetRobotConfig":
                 {
-                    var p = JsonSerializer.Deserialize<SetRobotConfigParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
-                    if (p.HomingSpeed.HasValue)               _config.HomingSpeed               = p.HomingSpeed.Value;
+                    var p = LoadParams<SetRobotConfigParams>(command);
+
+                    // Swapping the kinematics model mid-motion or mid-homing would
+                    // reinterpret live joint targets under a different model.
+                    if (p.RobotType != null && p.RobotType != _config.RobotType
+                        && (IsMoving || MotionBusy || startHoming || homingState != "WaitingForStart"))
+                    {
+                        payload = new { ok = false, error = "Cannot change robot type while the robot is moving or homing." };
+                        break;
+                    }
+
+                    // Kinematics / motor-direction reinit runs on the motion thread (it
+                    // swaps _kinematics and reconfigures the STB motors it drives).
+                    bool motorDirectionsChanged = false;
+                    bool kinematicsChanged      = false;
+                    if (p.HomingSpeed.HasValue)              _config.HomingSpeed               = p.HomingSpeed.Value;
                     if (p.HomingSlowSpeed.HasValue)           _config.HomingSlowSpeed           = p.HomingSlowSpeed.Value;
                     if (p.HomingBackoffMm.HasValue)           _config.HomingBackoffMm           = p.HomingBackoffMm.Value;
                     if (p.J1HomeOffsetDeg.HasValue)           _config.J1HomeOffsetDeg           = p.J1HomeOffsetDeg.Value;
@@ -942,10 +1034,10 @@ namespace Controller.RobotControl
                     if (p.HorizontalHomingDirection.HasValue) _config.HorizontalHomingDirection = p.HorizontalHomingDirection.Value;
                     if (p.J1HomingDirection.HasValue)         _config.J1HomingDirection         = p.J1HomingDirection.Value;
                     if (p.J4HomeOffsetDeg.HasValue)           _config.J4HomeOffsetDeg           = p.J4HomeOffsetDeg.Value;
-                    if (p.M1Direction.HasValue)               { _config.M1Direction             = p.M1Direction.Value;   ApplyMotorDirections(); }
-                    if (p.M2Direction.HasValue)               { _config.M2Direction             = p.M2Direction.Value;   ApplyMotorDirections(); }
-                    if (p.M3Direction.HasValue)               { _config.M3Direction             = p.M3Direction.Value;   ApplyMotorDirections(); }
-                    if (p.M4Direction.HasValue)               { _config.M4Direction             = p.M4Direction.Value;   ApplyMotorDirections(); }
+                    if (p.M1Direction.HasValue)               { _config.M1Direction             = p.M1Direction.Value;   motorDirectionsChanged = true; }
+                    if (p.M2Direction.HasValue)               { _config.M2Direction             = p.M2Direction.Value;   motorDirectionsChanged = true; }
+                    if (p.M3Direction.HasValue)               { _config.M3Direction             = p.M3Direction.Value;   motorDirectionsChanged = true; }
+                    if (p.M4Direction.HasValue)               { _config.M4Direction             = p.M4Direction.Value;   motorDirectionsChanged = true; }
                     if (p.EnableNanoCards.HasValue)           _config.EnableNanoCards           = p.EnableNanoCards.Value;
                     if (p.EnableRelayCard.HasValue)           _config.EnableRelayCard           = p.EnableRelayCard.Value;
                     if (p.EnableAuxAxis.HasValue)             _config.EnableAuxAxis             = p.EnableAuxAxis.Value;
@@ -953,7 +1045,7 @@ namespace Controller.RobotControl
                     if (p.JogSlowSpeed.HasValue)              _config.JogSlowSpeed              = p.JogSlowSpeed.Value;
                     if (p.JogNormalSpeed.HasValue)            _config.JogNormalSpeed            = p.JogNormalSpeed.Value;
                     if (p.JogFastSpeed.HasValue)              _config.JogFastSpeed              = p.JogFastSpeed.Value;
-                    if (p.RobotType != null)                  { _config.RobotType               = p.RobotType;             InitializeKinematics(); }
+                    if (p.RobotType != null)                  { _config.RobotType               = p.RobotType;             kinematicsChanged = true; }
                     bool cncMotorConfigChanged = false;
                     if (p.CncStepsPerRevX.HasValue)  { _config.CncStepsPerRevX  = p.CncStepsPerRevX.Value;  cncMotorConfigChanged = true; }
                     if (p.CncStepsPerRevY.HasValue)  { _config.CncStepsPerRevY  = p.CncStepsPerRevY.Value;  cncMotorConfigChanged = true; }
@@ -963,7 +1055,7 @@ namespace Controller.RobotControl
                     if (p.CncMmPerRevY.HasValue)     { _config.CncMmPerRevY     = p.CncMmPerRevY.Value;     cncMotorConfigChanged = true; }
                     if (p.CncMmPerRevZ.HasValue)     { _config.CncMmPerRevZ     = p.CncMmPerRevZ.Value;     cncMotorConfigChanged = true; }
                     if (p.CncDegPerRevRZ.HasValue)   { _config.CncDegPerRevRZ   = p.CncDegPerRevRZ.Value;   cncMotorConfigChanged = true; }
-                    if (cncMotorConfigChanged)        InitializeKinematics();
+                    if (cncMotorConfigChanged)        kinematicsChanged = true;
                     if (p.CncXHomePosition.HasValue)          _config.CncXHomePosition          = p.CncXHomePosition.Value;
                     if (p.CncYHomePosition.HasValue)          _config.CncYHomePosition          = p.CncYHomePosition.Value;
                     if (p.CncZHomePosition.HasValue)          _config.CncZHomePosition          = p.CncZHomePosition.Value;
@@ -993,6 +1085,14 @@ namespace Controller.RobotControl
                         ApplyLimit("joint4Min", v => _config.Joint4Min = v);
                         ApplyLimit("joint4Max", v => _config.Joint4Max = v);
                     }
+                    if (motorDirectionsChanged || kinematicsChanged)
+                    {
+                        PostToMotionThread(() =>
+                        {
+                            if (motorDirectionsChanged) ApplyMotorDirections();
+                            if (kinematicsChanged)      InitializeKinematics();
+                        });
+                    }
                     RobotConfigService.Save(_config);
                     break;
                 }
@@ -1005,12 +1105,15 @@ namespace Controller.RobotControl
                 }
 
                 case "Home":
-                    ClearFaultInternal();  // re-homing re-establishes position; drop any latched fault
-                    startHoming = true;
+                    PostToMotionThread(() =>
+                    {
+                        ClearFaultInternal();  // re-homing re-establishes position; drop any latched fault
+                        startHoming = true;
+                    });
                     break;
 
                 case "SetHomed":
-                    SetAllHomed();
+                    PostToMotionThread(SetAllHomed);
                     break;
 
                 case "Reset":
@@ -1023,7 +1126,7 @@ namespace Controller.RobotControl
 
                 // ── Joint-limit fault recovery ─────────────────────────────────────
                 case "ClearFault":
-                    ClearFaultInternal();
+                    ClearFault();
                     break;
 
                 case "SetLimitBypass":
@@ -1038,10 +1141,7 @@ namespace Controller.RobotControl
                 case "GetAuxState":
                 {
                     var auxStates = AuxAxisManager.GetState();
-                    var auxJson   = JsonSerializer.Serialize(auxStates, new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    });
+                    var auxJson   = JsonSerializer.Serialize(auxStates, CamelCase);
                     payload = new { state = auxJson };
                 }
                 break;
@@ -1049,10 +1149,7 @@ namespace Controller.RobotControl
                 case "GetAuxConfig":
                 {
                     var auxCfg    = AuxAxisManager.GetConfig();
-                    var auxCfgJson = JsonSerializer.Serialize(auxCfg, new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    });
+                    var auxCfgJson = JsonSerializer.Serialize(auxCfg, CamelCase);
                     payload = new { config = auxCfgJson };
                 }
                 break;
@@ -1062,18 +1159,14 @@ namespace Controller.RobotControl
                 case "GetCameras":
                 {
                     var states    = CameraManager.GetState();
-                    var statesJson = JsonSerializer.Serialize(states, new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    });
+                    var statesJson = JsonSerializer.Serialize(states, CamelCase);
                     payload = new { cameras = statesJson };
                 }
                 break;
 
                 case "AddCamera":
                 {
-                    var p = JsonSerializer.Deserialize<AddCameraParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<AddCameraParams>(command);
                     CameraManager.AddCamera(new Camera.CameraConfig
                     {
                         Name        = p.Name,
@@ -1088,16 +1181,14 @@ namespace Controller.RobotControl
 
                 case "RemoveCamera":
                 {
-                    var p = JsonSerializer.Deserialize<RemoveCameraParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<RemoveCameraParams>(command);
                     CameraManager.RemoveCamera(p.Id);
                     break;
                 }
 
                 case "SetCameraConfig":
                 {
-                    var p = JsonSerializer.Deserialize<SetCameraConfigParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<SetCameraConfigParams>(command);
                     CameraManager.UpdateCamera(p.Id, new Camera.CameraConfig
                     {
                         Id          = p.Id,
@@ -1113,14 +1204,10 @@ namespace Controller.RobotControl
 
                 case "GetCameraResolutions":
                 {
-                    var p = JsonSerializer.Deserialize<GetCameraResolutionsParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<GetCameraResolutionsParams>(command);
                     var deviceIndex = p.DeviceIndex;
                     var resolutions = await Task.Run(() => CameraManager.ProbeResolutionsForIndex(deviceIndex));
-                    var json = JsonSerializer.Serialize(resolutions, new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    });
+                    var json = JsonSerializer.Serialize(resolutions, CamelCase);
                     payload = new { resolutions = json };
                 }
                 break;
@@ -1129,16 +1216,14 @@ namespace Controller.RobotControl
 
                 case "MoveAux":
                 {
-                    var p = JsonSerializer.Deserialize<MoveAuxParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<MoveAuxParams>(command);
                     StartAuxMove(p.DeviceId, p.Axis, p.Steps, p.Velocity, p.Accel, p.Decel);
                     break;
                 }
 
                 case "JogAux":
                 {
-                    var p = JsonSerializer.Deserialize<JogAuxParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<JogAuxParams>(command);
                     if (p.Velocity == 0)
                         StopAux(p.Decel);
                     else
@@ -1148,16 +1233,14 @@ namespace Controller.RobotControl
 
                 case "StopAux":
                 {
-                    var p = JsonSerializer.Deserialize<StopAuxParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<StopAuxParams>(command);
                     StopAux(p.Decel, p.Immediate);
                     break;
                 }
 
                 case "SetAuxAxisConfig":
                 {
-                    var p = JsonSerializer.Deserialize<SetAuxAxisConfigParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<SetAuxAxisConfigParams>(command);
                     AuxAxisManager.UpdateAxisConfig(p.DeviceId, p.AxisIndex, new AuxAxis.AuxAxisChannelConfig
                     {
                         AxisIndex       = p.AxisIndex,
@@ -1173,8 +1256,7 @@ namespace Controller.RobotControl
 
                 case "EnableAux":
                 {
-                    var p = JsonSerializer.Deserialize<EnableAuxParams>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var p = LoadParams<EnableAuxParams>(command);
                     AuxAxisManager.Enable(p.DeviceId, p.Enable);
                     break;
                 }
@@ -1185,10 +1267,15 @@ namespace Controller.RobotControl
                     // Bump the epoch first so any jog already queued (but not yet
                     // processed on the loop thread) is invalidated and cannot
                     // re-enable motion after this stop.
+                    // The profiler stop itself runs on the motion thread (drained
+                    // before RunCommands on the next tick).
                     System.Threading.Interlocked.Increment(ref _jogGeneration);
-                    joggingMotionProfiler.StopJog();
-                    jointJoggingProfiler.StopJog();
-                    toolJoggingMotionProfiler.StopJog();
+                    PostToMotionThread(() =>
+                    {
+                        joggingMotionProfiler.StopJog();
+                        jointJoggingProfiler.StopJog();
+                        toolJoggingMotionProfiler.StopJog();
+                    });
                     break;
 
                 case "GetPoints":
@@ -1514,9 +1601,15 @@ namespace Controller.RobotControl
                         if (ep.RZ.HasValue)          values["RZ"]          = ep.RZ.Value;
                         toolRepo.EditTool(ep.Name, values);
 
-                        // Keep activeTool name in sync after a rename
-                        if (ep.NewName != null && activeTool == ep.Name)
-                            activeTool = ep.NewName;
+                        // Keep activeTool name in sync after a rename (motion thread owns it)
+                        if (ep.NewName != null)
+                        {
+                            string oldName = ep.Name, newName = ep.NewName;
+                            PostToMotionThread(() =>
+                            {
+                                if (activeTool == oldName) activeTool = newName;
+                            });
+                        }
                     }
                     break;
 
@@ -1524,14 +1617,19 @@ namespace Controller.RobotControl
                     {
                         var tp = LoadParams<ToolNameParams>(command);
                         toolRepo.DeleteTool(tp.Name);
-                        // Clear active tool if the deleted one was active
-                        if (activeTool == tp.Name)
+                        // Clear active tool if the deleted one was active — on the
+                        // motion thread, which owns the tool/position state.
+                        string deletedTool = tp.Name;
+                        PostToMotionThread(() =>
                         {
-                            activeTool          = "";
-                            CurrentTool         = Vector6.Zero;
-                            CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                            CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
-                        }
+                            if (activeTool == deletedTool)
+                            {
+                                activeTool          = "";
+                                CurrentTool         = Vector6.Zero;
+                                CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                                CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                            }
+                        });
                     }
                     break;
 
@@ -1571,9 +1669,15 @@ namespace Controller.RobotControl
                         if (ep.RZ.HasValue)          values["RZ"]          = ep.RZ.Value;
                         localRepo.EditLocal(ep.Name, values);
 
-                        // Keep activeLocal name in sync after a rename
-                        if (ep.NewName != null && activeLocal == ep.Name)
-                            activeLocal = ep.NewName;
+                        // Keep activeLocal name in sync after a rename (motion thread owns it)
+                        if (ep.NewName != null)
+                        {
+                            string oldName = ep.Name, newName = ep.NewName;
+                            PostToMotionThread(() =>
+                            {
+                                if (activeLocal == oldName) activeLocal = newName;
+                            });
+                        }
                     }
                     break;
 
@@ -1581,19 +1685,25 @@ namespace Controller.RobotControl
                     {
                         var lp = LoadParams<LocalNameParams>(command);
                         localRepo.DeleteLocal(lp.Name);
-                        // Clear active local if the deleted one was active
-                        if (activeLocal == lp.Name)
+                        // Clear active local if the deleted one was active — on the
+                        // motion thread, which reads CurrentLocal to resolve moves/jogs.
+                        string deletedLocal = lp.Name;
+                        PostToMotionThread(() =>
                         {
-                            activeLocal  = "";
-                            CurrentLocal = Vector6.Zero;
-                        }
+                            if (activeLocal == deletedLocal)
+                            {
+                                activeLocal  = "";
+                                CurrentLocal = Vector6.Zero;
+                            }
+                        });
                     }
                     break;
 
                 case "SetActiveLocal":
                     {
                         var lp = LoadParams<LocalNameParams>(command);
-                        ApplyLocal(lp.Name);
+                        string? localName = lp.Name;
+                        PostToMotionThread(() => ApplyLocal(localName));
                     }
                     break;
 
@@ -1689,11 +1799,7 @@ namespace Controller.RobotControl
                 case "GetBuiltPrograms":
                     {
                         var list = builtProgramRepo.GetAll();
-                        var json = System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions
-                        {
-                            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
-                            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-                        });
+                        var json = System.Text.Json.JsonSerializer.Serialize(list, CamelCaseWithEnums);
                         payload = new { programs = json };
                     }
                     break;
@@ -1793,24 +1899,29 @@ namespace Controller.RobotControl
                 case "SetActiveTool":
                     {
                         var tp = LoadParams<ToolNameParams>(command);
-                        if (string.IsNullOrEmpty(tp.Name) || tp.Name == "None")
+                        string? toolName = tp.Name;
+                        // Tool/position state is owned by the motion thread — apply there.
+                        PostToMotionThread(() =>
                         {
-                            activeTool  = "";
-                            CurrentTool = Vector6.Zero;
-                        }
-                        else
-                        {
-                            var tool = toolRepo.Get(tp.Name);
-                            if (tool != null)
+                            if (string.IsNullOrEmpty(toolName) || toolName == "None")
                             {
-                                activeTool  = tp.Name;
-                                CurrentTool = new Vector6(tool.X, tool.Y, tool.Z,
-                                                          tool.RX, tool.RY, tool.RZ);
+                                activeTool  = "";
+                                CurrentTool = Vector6.Zero;
                             }
-                        }
-                        // Recalculate position with new tool offset
-                        CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
-                        CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                            else
+                            {
+                                var tool = toolRepo.Get(toolName);
+                                if (tool != null)
+                                {
+                                    activeTool  = toolName;
+                                    CurrentTool = new Vector6(tool.X, tool.Y, tool.Z,
+                                                              tool.RX, tool.RY, tool.RZ);
+                                }
+                            }
+                            // Recalculate position with new tool offset
+                            CurrentPosition     = _kinematics.ForwardKinematics(CurrentTool);
+                            CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
+                        });
                     }
                     break;
 
@@ -1828,11 +1939,7 @@ namespace Controller.RobotControl
                 case "GetIO":
                     {
                         var states = NanoManager.GetAllStates();
-                        var nanoJson = JsonSerializer.Serialize(states, new JsonSerializerOptions
-                        {
-                            Converters           = { new JsonStringEnumConverter() },
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                        });
+                        var nanoJson = JsonSerializer.Serialize(states, CamelCaseWithEnums);
 
                         var relayStates = RelayManager.GetRelayStates();
                         var relayState  = new UsbRelayState
@@ -1842,10 +1949,7 @@ namespace Controller.RobotControl
                             Relays    = relayStates,
                             Names     = RelayManager.GetRelayNames(),
                         };
-                        var relayJson = JsonSerializer.Serialize(relayState, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                        });
+                        var relayJson = JsonSerializer.Serialize(relayState, CamelCase);
 
                         payload = new { nanos = nanoJson, relay = relayJson };
                     }
@@ -1921,18 +2025,14 @@ namespace Controller.RobotControl
                 case "GetVisionPrograms":
                 {
                     var programs = VisionRepo.GetAll();
-                    var json = JsonSerializer.Serialize(programs, new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    });
+                    var json = JsonSerializer.Serialize(programs, CamelCase);
                     payload = new { programs = json, runningIds = VisionManager.GetRunningIds() };
                 }
                 break;
 
                 case "SaveVisionProgram":
                 {
-                    var prog = JsonSerializer.Deserialize<Vision.VisionProgram>(
-                        command.Params!.Value.GetRawText(), _jsonOptions)!;
+                    var prog = LoadParams<Vision.VisionProgram>(command);
                     if (string.IsNullOrEmpty(prog.Id))
                         prog.Id = Guid.NewGuid().ToString("N")[..8];
                     VisionRepo.Save(prog);
@@ -1988,7 +2088,7 @@ namespace Controller.RobotControl
                     // of the most recent RunVision step for this program.
                     var result = proc?.GetLatestResult() ?? GetProgramVisionResult(p.Id);
                     var json   = result != null
-                        ? JsonSerializer.Serialize(result, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+                        ? JsonSerializer.Serialize(result, CamelCase)
                         : null;
                     payload = new { result = json };
                 }
@@ -1997,6 +2097,13 @@ namespace Controller.RobotControl
                 // ── End vision commands ───────────────────────────────────────────
 
                 default:
+                    // Only names RunCommands actually handles may be queued — anything
+                    // else would sit at the head of the queue as a silent no-op.
+                    if (command.Command is null || !QueuedMotionCommandNames.Contains(command.Command))
+                    {
+                        payload = new { ok = false, error = "unknownCommand" };
+                        break;
+                    }
                     RobotCommand NewCommand = LoadParams<RobotCommand>(command);
                     NewCommand.CommandType = command.Command;
                     // Stamp with the current jog epoch so a stop arriving after this
@@ -2005,6 +2112,12 @@ namespace Controller.RobotControl
                     QueuedCommands.Enqueue(NewCommand);
                     break;
 
+            }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AddCommand] '{command.Command}' failed: {ex}");
+                return new { ok = false, error = ex.Message };
             }
             payload ??= new { };
 
@@ -2028,7 +2141,7 @@ namespace Controller.RobotControl
 
             string CommandType = Command.CommandType ?? "";
 
-            if (IsMoving && !CommandType.Contains("Jog"))
+            if (IsMoving && CommandType is not ("JogL" or "JogJ" or "JogTool"))
                 return;
 
             // Apply any status update that was attached to this command at send-time
@@ -2047,7 +2160,13 @@ namespace Controller.RobotControl
                 case "MoveL":
                     {
                         target = ResolveVector(Command);
-                        if (target == null) break;  // named point not found — log already emitted; drop command
+                        if (target == null)
+                        {
+                            // Named point not found — log already emitted; drop the command and
+                            // latch the error so the program executor fails the step.
+                            LatchMotionError($"Point '{Command.Name}' not found");
+                            break;
+                        }
                         MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     }
                     break;
@@ -2060,7 +2179,13 @@ namespace Controller.RobotControl
                 case "MoveJ":
                     {
                         target = ResolveVector(Command);
-                        if (target == null) break;  // named point not found — log already emitted; drop command
+                        if (target == null)
+                        {
+                            // Named point not found — log already emitted; drop the command and
+                            // latch the error so the program executor fails the step.
+                            LatchMotionError($"Point '{Command.Name}' not found");
+                            break;
+                        }
                         MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
                     }
                     break;
@@ -2674,6 +2799,27 @@ namespace Controller.RobotControl
         /// </summary>
         private void ExecuteHardStop()
         {
+            // In-memory state first — this cannot fail, so the arm is always stopped
+            // even if the device I/O below throws.
+            ClearMotionStateForHardStop();
+
+            // Device I/O (serial) can throw; never let it escape the motion thread.
+            try
+            {
+                AuxAxisManager.StopAllDevices();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[HardStop] Aux device stop failed: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Must only be called from the control loop thread. Clears profilers,
+        /// jogs, the command queue and homing state — no device I/O.
+        /// </summary>
+        private void ClearMotionStateForHardStop()
+        {
             _hardStopRequested = false;
             linearMotionProfiler = null;
             jointMotionProfiler = null;
@@ -2684,7 +2830,6 @@ namespace Controller.RobotControl
             QueuedCommands.Clear();
             startHoming = false;
             homingState = "WaitingForStart";
-            AuxAxisManager.StopAllDevices();
         }
 
         public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
@@ -2844,7 +2989,8 @@ namespace Controller.RobotControl
             if (msg.Params == null)
                 throw new InvalidOperationException("Command has no params");
 
-            return msg.Params.Value.Deserialize<T>(_jsonOptions)!;
+            return msg.Params.Value.Deserialize<T>(_jsonOptions)
+                ?? throw new InvalidOperationException("Command params were null");
         }
 
         private Vector6? ResolveVector(RobotCommand command)
