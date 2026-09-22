@@ -694,7 +694,11 @@ namespace Controller.RobotControl
             joggingMotionProfiler.ForceStop();
             jointJoggingProfiler.ForceStop();
             toolJoggingMotionProfiler.ForceStop();
-            programExecutor?.Stop();
+            QueuedCommands.Clear();
+            // Executor.Stop() takes the executor lock and may wait on a step doing
+            // file I/O; never block the motion thread on it. Motion is already halted.
+            var exec = programExecutor;
+            if (exec != null) _ = Task.Run(() => exec.Stop());
         }
 
         // Clears fault state without touching motion — used when limits get disabled

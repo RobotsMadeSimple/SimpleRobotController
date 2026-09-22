@@ -30,11 +30,51 @@ namespace Controller.RobotControl
         private readonly StackRepository          _stackRepo;
 
         // ── Execution state ──────────────────────────────────────────────────
+        // Every piece of per-run state below is reset in one place, ResetRunState().
+        // Variable dictionaries are the exception: they outlive Finish() so the monitor
+        // keeps showing final values, and are cleared by ClearVariables() on Start/Reset.
+        //
+        // Threading: Update() runs on the ProgramLoop thread; Start/Stop/Resume/Reset
+        // and the GetDisplay* readers are called from WebSocket (and occasionally the
+        // motion) threads. All of them hold _controlLock for their whole body, so a
+        // control call always observes — and leaves — a consistent executor state.
+        private readonly object _controlLock = new();
         private BuiltProgram?   _program;
-        private bool            _running;
-        // volatile so the control-loop thread always sees writes from the WebSocket thread
-        private volatile bool   _stopRequested;
+        // volatile: IsRunning/IsPaused are read lock-free by other threads
+        private volatile bool   _running;
         private volatile bool   _isPaused;
+
+        // Bumped by ResetRunState() so async completions from a previous run
+        // (fire-and-continue HttpRequest) are discarded instead of applied.
+        private int _runGeneration;
+
+        // Step counting / loop nesting
+        private int _globalStepIndex = 0;
+        private int _loopDepth       = 0;
+
+        // RunHoming
+        private bool _homingTriggered     = false;
+        private bool _homingStartedMoving = false;
+
+        // ThreadMove sub-step state
+        private int                  _threadSubStep   = 0;
+        private Queue<RobotCommand>? _threadMoveQueue = null;
+
+        // Jump sub-step state
+        private int     _jumpSubStep  = 0;  // 0=idle, 1=lift dispatched, 2=transit dispatched, 3=lower dispatched
+        private Vector6 _jumpTarget   = new();
+        private Vector6 _jumpStartPos = new();
+        private double  _jumpZStart   = 0;
+        private double  _jumpZEnd     = 0;
+        private string  _jumpCmdType  = "MoveL";
+        private double? _jumpSpeed, _jumpAccel, _jumpDecel;
+
+        // Non-blocking SetOutput pulses: the reverting flip, due at DueMs. Processed at the
+        // top of Update() on the loop thread, so Stop/Reset/e-stop can cancel them.
+        private readonly List<(long DueMs, Action Flip)> _outputFlips = new();
+
+        // RunVision default timeout when the step sets no WaitTimeoutMs
+        private const int DefaultVisionTimeoutMs = 30_000;
 
         // Stack for nested step lists (supports Loop)
         private readonly Stack<StepListFrame> _frameStack = new();
@@ -89,12 +129,12 @@ namespace Controller.RobotControl
         private Vector6? _activeLocal;
 
         // Program variables — initialised from BuiltProgram.Variables on Start(), mutated by SetVariable steps
-        private readonly Dictionary<string, double>            _variables        = new();
+        private readonly Dictionary<string, double>            _variables        = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>
         /// Every list variable, whatever its elements are. One dictionary rather than three
         /// because a number and a point are both records of named doubles — see ListVar.
         /// </summary>
-        private readonly Dictionary<string, ListVar> _listVariables = new();
+        private readonly Dictionary<string, ListVar> _listVariables = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// A list usable as a move target. Point elements only — a record list may happen to
@@ -137,8 +177,10 @@ namespace Controller.RobotControl
         // WaitForBackground: set to a program name while blocking on it
         private string? _waitingForBackground;
 
-        // Persistent variables — names saved here; values written to disk on Finish()
-        private readonly HashSet<string> _persistentVarNames = new(StringComparer.OrdinalIgnoreCase);
+        // Persistent variables — name → id of the program (main or routine) that declared
+        // it, which is the key prefix it was loaded under and must be saved under.
+        // Values are written to disk on Stop()/Finish().
+        private readonly Dictionary<string, string> _persistentVarOwners = new(StringComparer.OrdinalIgnoreCase);
         private static readonly string   _persistPath        = "persistent_vars.json";
         private static readonly object   _persistLock        = new();
 
@@ -164,6 +206,12 @@ namespace Controller.RobotControl
 
         /// <summary>Returns current values for all scalar variables flagged DisplayOnMonitor.</summary>
         public IReadOnlyList<(string Name, double Value, bool IsBoolean)> GetDisplayVariables()
+        {
+            // Called from WebSocket threads; the loop thread mutates _variables under this lock.
+            lock (_controlLock) return GetDisplayVariablesLocked();
+        }
+
+        private IReadOnlyList<(string Name, double Value, bool IsBoolean)> GetDisplayVariablesLocked()
         {
             if (_program?.Variables == null) return [];
             var merged = MergedVars();
@@ -195,14 +243,17 @@ namespace Controller.RobotControl
         /// </remarks>
         public IReadOnlyList<(string Name, long Revision)> GetDisplayImages()
         {
-            if (_program?.Variables == null) return [];
-            var result = new List<(string, long)>();
-            foreach (var v in _program.Variables)
+            lock (_controlLock)
             {
-                if (v.DisplayOnMonitor != true || v.IsImage != true) continue;
-                result.Add((v.Name, ImageRevision(v.Name)));
+                if (_program?.Variables == null) return [];
+                var result = new List<(string, long)>();
+                foreach (var v in _program.Variables)
+                {
+                    if (v.DisplayOnMonitor != true || v.IsImage != true) continue;
+                    result.Add((v.Name, ImageRevision(v.Name)));
+                }
+                return result;
             }
-            return result;
         }
 
         /// <summary>
@@ -216,11 +267,14 @@ namespace Controller.RobotControl
         /// </remarks>
         public string GetDisplayImage(string name)
         {
-            if (_program?.Variables == null) return "";
-            bool listed = _program.Variables.Any(v =>
-                v.DisplayOnMonitor == true && v.IsImage == true
-                && string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase));
-            return listed ? GetImageVariable(name) : "";
+            lock (_controlLock)
+            {
+                if (_program?.Variables == null) return "";
+                bool listed = _program.Variables.Any(v =>
+                    v.DisplayOnMonitor == true && v.IsImage == true
+                    && string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase));
+                return listed ? GetImageVariable(name) : "";
+            }
         }
 
         /// <summary>Write-count for one image, preferring the shared store for globals.</summary>
@@ -256,7 +310,9 @@ namespace Controller.RobotControl
         }
 
         /// <summary>Returns a merged snapshot of local + global variables for expression evaluation.
-        /// Always injects the built-in <c>time_ms</c> variable (current Unix timestamp in milliseconds).</summary>
+        /// Always injects the built-in <c>time_ms</c> variable (current Unix timestamp in milliseconds).
+        /// Caller must hold _controlLock (true for everything reached from Update() and the
+        /// public GetDisplay* readers).</summary>
         private Dictionary<string, double> MergedVars()
         {
             var merged = new Dictionary<string, double>(_variables, StringComparer.OrdinalIgnoreCase);
@@ -298,11 +354,13 @@ namespace Controller.RobotControl
 
         private void SavePersistentVars()
         {
-            if (_persistentVarNames.Count == 0) return;
+            if (_persistentVarOwners.Count == 0) return;
             var existing = LoadPersistentVars();
-            var prefix = string.IsNullOrEmpty(_program?.Id) ? "" : _program.Id + ":";
-            foreach (var name in _persistentVarNames)
+            foreach (var (name, ownerId) in _persistentVarOwners)
             {
+                // Saved under the id of the program that declared it (a routine's own id for
+                // routine variables) — the same key InitializeVariables loads it from.
+                var prefix = string.IsNullOrEmpty(ownerId) ? "" : ownerId + ":";
                 var val = _globalVarNames.Contains(name) && _globalVars != null && _globalVars.TryGet(name, out var gv)
                     ? gv
                     : _variables.TryGetValue(name, out var v) ? v : 0;
@@ -313,6 +371,8 @@ namespace Controller.RobotControl
 
         // ── Variable write helper — respects global store ─────────────────────
 
+        // The only writer of scalar values into _variables — every step, vision output,
+        // stopwatch refresh and initialiser goes through here so globals are honoured.
         private void SetVariable(string name, double value)
         {
             if (_globalVarNames.Contains(name) && _globalVars != null)
@@ -387,8 +447,49 @@ namespace Controller.RobotControl
 
         // ── Public control ───────────────────────────────────────────────────
 
+        // Start/Stop/Resume/Reset are called from WebSocket threads (and Stop from the
+        // motion thread on a joint-limit fault) while Update() runs on the ProgramLoop
+        // thread. Each public entry point holds _controlLock for its whole body — the
+        // same lock Update() holds — so callers get synchronous semantics: when Stop()
+        // or Reset() returns, the next tick sees the stopped state, and IsRunning is
+        // already true when Start() returns (BackgroundProgramManager and
+        // WaitForBackground rely on that).
         public void Start(BuiltProgram program, string? imageBase64 = null)
         {
+            lock (_controlLock) StartCore(program, imageBase64);
+        }
+
+        public void Resume()
+        {
+            lock (_controlLock) ResumeCore();
+        }
+
+        public void Stop()
+        {
+            lock (_controlLock) StopCore();
+        }
+
+        /// <summary>
+        /// Immediately halts execution and clears all state — no status update is emitted.
+        /// The caller is responsible for pushing a final status (e.g. Ready) to programManager.
+        /// </summary>
+        public void Reset()
+        {
+            lock (_controlLock) ResetCore();
+        }
+
+        private void StartCore(BuiltProgram program, string? imageBase64)
+        {
+            // Pulses left over from a run that completed normally finish now rather than
+            // being dropped (which would leave the output stuck in its pulsed state).
+            if (!_isPaused) FireAllOutputFlips();
+
+            // Tear down whatever the previous run left behind (vision processor,
+            // webhook subscription, pending async work) before anything else.
+            ResetRunState();
+            // Discard any motion error latched before this run started.
+            _controller.ConsumeMotionError();
+
             // Register program in the cycle manager so the monitor tab can see it
             _programManager.SetAvailablePrograms(new()
             {
@@ -407,20 +508,10 @@ namespace Controller.RobotControl
                 StepDescription   = "Starting…",
             });
 
-            _frameStack.Clear();
             _frameStack.Push(new StepListFrame(program.Steps, 0));
 
             // Initialise variables from the program definition
-            _variables.Clear();
-            _listVariables.Clear();
-            _booleanVariables.Clear();
-            _stringVariables.Clear();
-            _imageVariables.Clear();
-            _globalVarNames.Clear();
-            _globalImageNames.Clear();
-            _persistentVarNames.Clear();
-            _stopwatches.Clear();
-            _waitingForBackground = null;
+            ClearVariables();
 
             // Set before initialising, because a variable whose initial value is an
             // expression can now fail here — and reporting that failure needs the program.
@@ -436,40 +527,24 @@ namespace Controller.RobotControl
                 return;
             }
 
-            _stopRequested = false;
-            _isPaused      = false;
-            _awaitingMove    = false;
-            _awaitingAuxMove = false;
-            _pendingAuxStep  = null;
-            _awaitingVision  = false;
-            _visionProgramId = null;
             // Programs start in the robot's active local (set from the jog page);
             // SetLocal / ClearLocal steps override it during the run.
             _activeLocal     = _controller.ActiveLocalOffset;
-            _lastMotionCommand  = null;
-            _lastRunWaypoints   = null;
-            _lastRunRadii       = null;
-            _lastRunStart       = null;
-            _resumeCommand      = null;
-            _resumeRunWaypoints = null;
-            _resumeRunRadii     = null;
-            _resumePendingStep  = null;
-            _resumePendingSteps = null;
-            _resumeDispatchPending = false;
-            _controller.ActiveCncToolpath = null;
             _running         = true;
         }
 
-        public void Resume()
+        private void ResumeCore()
         {
             if (!_isPaused) return;
             _isPaused      = false;
-            _stopRequested = false;
             // Any interrupted motion is re-dispatched by Update() on the control
             // loop thread — Resume() runs on the WebSocket thread, where calling
-            // StartContinuousMove would race the loop. The flag is set before
-            // _running so the first tick sees it ahead of any step execution.
+            // StartContinuousMove would race the motion thread. The flag is set
+            // before _running so the first tick sees it ahead of any step execution.
             _resumeDispatchPending = _resumeRunWaypoints != null || _resumeCommand != null;
+            // A vision wait spanning the pause needs a result from after the resume
+            // (the part may have moved), and its timeout restarts from here.
+            if (_awaitingVision) _visionStartMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             _running       = true;
 
             // The status guard blocks Running over a terminal Stopped, so the
@@ -484,22 +559,15 @@ namespace Controller.RobotControl
             });
         }
 
-        public void Stop()
+        private void StopCore()
         {
             if (!_running) return;
 
             // Background executors stop dead — a paused background program would
             // never signal OnExecutorFinished and WaitForBackground would hang.
+            // Finish() tears down every wait (move, aux, vision, background, webhook).
             if (_isBackground)
             {
-                _awaitingMove    = false;
-                _pendingStep     = null;
-                _pendingSteps    = null;
-                _awaitingAuxMove = false;
-                _pendingAuxStep  = null;
-                _awaitingVision  = false;
-                _visionProgramId = null;
-                _waitingForBackground = null;
                 Finish(global::ProgramStatus.Stopped, "Stopped by user");
                 return;
             }
@@ -558,63 +626,140 @@ namespace Controller.RobotControl
             });
         }
 
-        /// <summary>
-        /// Immediately halts execution and clears all state — no status update is emitted.
-        /// The caller is responsible for pushing a final status (e.g. Ready) to programManager.
-        /// </summary>
-        public void Reset()
+        private void ResetCore()
         {
-            _running              = false;
-            _stopRequested        = false;
-            _isPaused             = false;
-            _awaitingMove         = false;
-            _pendingStep          = null;
-            _awaitingAuxMove      = false;
-            _pendingAuxStep       = null;
-            _awaitingVision       = false;
-            _visionProgramId      = null;
-            _activeLocal          = null;
-            _globalStepIndex      = 0;
-            _loopDepth            = 0;
-            _jumpSubStep          = 0;
-            _threadSubStep        = 0;
-            _threadMoveQueue      = null;
-            _waitingForBackground = null;
-            _lastMotionCommand    = null;
-            _lastRunWaypoints     = null;
-            _lastRunRadii         = null;
-            _lastRunStart         = null;
-            _resumeCommand        = null;
-            _resumeRunWaypoints   = null;
-            _resumeRunRadii       = null;
-            _resumePendingStep    = null;
-            _resumePendingSteps   = null;
-            _resumeDispatchPending = false;
-            _controller.ActiveCncToolpath = null;
+            ResetRunState();
+            ClearVariables();
+        }
+
+        /// <summary>
+        /// Resets every per-run field to its idle value and releases anything a run may
+        /// still hold (vision processor, webhook subscription, pending async work, output
+        /// pulses). Called from Start(), Reset() and Finish(). Variables are not touched —
+        /// see <see cref="ClearVariables"/>.
+        /// </summary>
+        private void ResetRunState()
+        {
+            _running               = false;
+            _isPaused              = false;
+            _runGeneration++;
+
+            // Frames / counters
             _frameStack.Clear();
+            _globalStepIndex       = 0;
+            _loopDepth             = 0;
+            _waitStartMs           = 0;
+            _activeLocal           = null;
+            _defaultBlendRadius    = 0;
+            _waitingForBackground  = null;
+            CurrentStepDescription = "";
+
+            // Motion waits
+            _awaitingMove          = false;
+            _pendingStep           = null;
+            _pendingSteps          = null;
+            _awaitingAuxMove       = false;
+            _pendingAuxStep        = null;
+
+            // Multi-tick step state
+            _homingTriggered       = false;
+            _homingStartedMoving   = false;
+            _jumpSubStep           = 0;
+            _jumpTarget            = new();
+            _jumpStartPos          = new();
+            _jumpZStart            = 0;
+            _jumpZEnd              = 0;
+            _jumpCmdType           = "MoveL";
+            _jumpSpeed = _jumpAccel = _jumpDecel = null;
+            _threadSubStep         = 0;
+            _threadMoveQueue       = null;
+
+            // Pause/resume snapshot
+            _lastMotionCommand     = null;
+            _lastRunWaypoints      = null;
+            _lastRunRadii          = null;
+            _lastRunStart          = null;
+            _lastRunSpeed = _lastRunAccel = _lastRunDecel = null;
+            _resumeCommand         = null;
+            _resumeRunWaypoints    = null;
+            _resumeRunRadii        = null;
+            _resumePendingStep     = null;
+            _resumePendingSteps    = null;
+            _resumeDispatchPending = false;
+
+            // Vision — a processor left running would keep grabbing and analysing frames
+            if (_awaitingVision && !string.IsNullOrEmpty(_visionProgramId))
+                _controller.VisionManager.StopProgram(_visionProgramId);
+            _awaitingVision        = false;
+            _visionStartMs         = 0;
+            _visionProgramId       = null;
+
+            // Async I/O
+            _pendingJsonTask       = null;
+            while (_pendingActions.TryDequeue(out _)) { }
             _webhookCts?.Cancel();
             _webhookCts?.Dispose();
-            _webhookCts         = null;
-            _pendingWebhookTask = null;
+            _webhookCts            = null;
+            _pendingWebhookTask    = null;
             if (_pendingWebhookSub.HasValue)
             {
                 _controller.WebhookManager.Unsubscribe(_pendingWebhookSub.Value.Name, _pendingWebhookSub.Value.Id);
                 _pendingWebhookSub = null;
             }
+
+            // Output pulses not yet reverted are cancelled, not fired
+            _outputFlips.Clear();
+
+            _controller.ActiveCncToolpath = null;
+        }
+
+        /// <summary>Clears all program variables (and their registrations). Start/Reset only —
+        /// Finish() keeps them so the monitor still shows the final values.</summary>
+        private void ClearVariables()
+        {
             _variables.Clear();
             _listVariables.Clear();
-            _stopwatches.Clear();
             _booleanVariables.Clear();
             _stringVariables.Clear();
+            _imageVariables.Clear();
             _globalVarNames.Clear();
             _globalImageNames.Clear();
-            _persistentVarNames.Clear();
+            _persistentVarOwners.Clear();
+            _stopwatches.Clear();
         }
+
+        /// <summary>Fires the reverting flip of every output pulse that is due (all of them
+        /// when <paramref name="all"/>), in the order they were scheduled.</summary>
+        private void ProcessOutputFlips(bool all = false)
+        {
+            if (_outputFlips.Count == 0) return;
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            for (int i = 0; i < _outputFlips.Count;)
+            {
+                var (due, flip) = _outputFlips[i];
+                if (!all && due > now) { i++; continue; }
+                _outputFlips.RemoveAt(i);
+                try { flip(); }
+                catch (Exception ex) { Console.WriteLine($"[ProgramExecutor] Output pulse revert failed: {ex}"); }
+            }
+        }
+
+        private void FireAllOutputFlips() => ProcessOutputFlips(all: true);
 
         // ── Main update — called every control loop tick ──────────────────────
 
         public void Update()
         {
+            lock (_controlLock) UpdateCore();
+        }
+
+        private void UpdateCore()
+        {
+            // Revert due output pulses. Runs even after a normal completion (Finish keeps
+            // a Complete run's pending pulses) but not while paused: a Stop/e-stop holds
+            // the pulsed state rather than flipping outputs behind the operator's back.
+            if (!_isPaused) ProcessOutputFlips();
+
             if (!_running || _program is null) return;
 
             // Drain variable writes queued by fire-and-continue JsonExchange completions.
@@ -660,11 +805,8 @@ namespace Controller.RobotControl
             if (_stopwatches.Count > 0)
             {
                 var nowTick = System.Environment.TickCount64;
-                foreach (var name in _stopwatches.Keys)
-                {
-                    var sw = _stopwatches[name];
-                    _variables[name] = sw.Running ? sw.AccumMs + (nowTick - sw.StartTick) : sw.AccumMs;
-                }
+                foreach (var (name, sw) in _stopwatches)
+                    SetVariable(name, sw.Running ? sw.AccumMs + (nowTick - sw.StartTick) : sw.AccumMs);
             }
 
             // If we dispatched a robot move, wait until the queue is clear and the robot is idle
@@ -675,6 +817,14 @@ namespace Controller.RobotControl
                 if (_controller.QueuedCommands.IsEmpty && !_controller.MotionBusy)
                 {
                     _awaitingMove = false;
+                    // A move the motion thread could not execute also leaves the queue
+                    // empty and the robot idle — never mistake it for a completed one.
+                    var motionError = _controller.ConsumeMotionError();
+                    if (motionError != null)
+                    {
+                        Finish(global::ProgramStatus.Error, motionError);
+                        return;
+                    }
                     // Report the step as completed now that the move has finished
                     if (_pendingStep is not null)
                     {
@@ -735,7 +885,7 @@ namespace Controller.RobotControl
                         if (EvalWhileCondition(frame.WhileCondition))
                             _frameStack.Push(new StepListFrame(frame.Steps, 0, isLoop: true,
                                 loopRemaining: int.MaxValue, whileCondition: frame.WhileCondition));
-                        else
+                        else if (_running) // a condition error already Finish()ed and zeroed the depth
                             _loopDepth--;
                     }
                     else if (frame.IsForEach)
@@ -803,6 +953,14 @@ namespace Controller.RobotControl
                 // A typo'd variable in any step field or condition stops the program with
                 // a clear error instead of silently evaluating to 0 and moving the robot.
                 Finish(global::ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in step: {StepDescription(step)}");
+            }
+            catch (Exception ex)
+            {
+                // Anything else a step throws (device I/O, a bad repository entry, a bug)
+                // errors the program cleanly instead of escaping to the ProgramLoop, which
+                // would log it and re-run the same step on every tick.
+                Console.WriteLine($"[ProgramExecutor] Step '{StepDescription(step)}' threw: {ex}");
+                Finish(global::ProgramStatus.Error, $"{StepDescription(step)}: {ex.Message}");
             }
         }
 
@@ -963,6 +1121,10 @@ namespace Controller.RobotControl
                     break;
                 case StepType.Unknown:
                     ReportStepCompleted(step);
+                    frame.Index++;
+                    break;
+                default:
+                    Finish(global::ProgramStatus.Error, $"Unsupported step type {step.Type}");
                     break;
             }
         }
@@ -999,9 +1161,9 @@ namespace Controller.RobotControl
                 TRY = hasToolOffset ? EvalField(step, "toolOffsetRY", step.ToolOffsetRY ?? 0) : null,
                 TRZ = hasToolOffset ? EvalField(step, "toolOffsetRZ", step.ToolOffsetRZ ?? 0) : null,
                 // Raw speed — the global override is applied centrally in MoveL/MoveJ.
-                Speed = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null,
-                Accel = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
-                Decel = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null,
+                Speed = OptionalField(step, "speed", step.Speed),
+                Accel = OptionalField(step, "accel", step.Accel),
+                Decel = OptionalField(step, "decel", step.Decel),
                 ApplySpeedOverride = true,   // program move — subject to the speed override
             };
 
@@ -1092,8 +1254,8 @@ namespace Controller.RobotControl
 
         // Effective blend radius for a move: its own override if set, else the program default.
         private double EffectiveBlendRadius(ProgramStep step) =>
-            (step.BlendRadius.HasValue || step.Expressions?.ContainsKey("blendRadius") == true)
-                ? Math.Max(0, EvalField(step, "blendRadius", step.BlendRadius ?? 0))
+            OptionalField(step, "blendRadius", step.BlendRadius) is double r
+                ? Math.Max(0, r)
                 : _defaultBlendRadius;
 
         // A move only actually blends when blending is on AND it has a non-zero radius.
@@ -1136,9 +1298,9 @@ namespace Controller.RobotControl
             for (int k = 0; k < run.Count; k++)
                 radii.Add(k < run.Count - 1 ? EffectiveBlendRadius(run[k]) : 0);
 
-            double? speed = (first.Speed.HasValue || first.Expressions?.ContainsKey("speed") == true) ? EvalField(first, "speed", first.Speed ?? 0) : (double?)null;
-            double? accel = (first.Accel.HasValue || first.Expressions?.ContainsKey("accel") == true) ? EvalField(first, "accel", first.Accel ?? 0) : (double?)null;
-            double? decel = (first.Decel.HasValue || first.Expressions?.ContainsKey("decel") == true) ? EvalField(first, "decel", first.Decel ?? 0) : (double?)null;
+            double? speed = OptionalField(first, "speed", first.Speed);
+            double? accel = OptionalField(first, "accel", first.Accel);
+            double? decel = OptionalField(first, "decel", first.Decel);
 
             StartTrackedContinuousMove(waypoints, radii, speed, accel, decel);
             _awaitingMove = true;
@@ -1322,18 +1484,19 @@ namespace Controller.RobotControl
             double finalRZ = point.RZ + EvalField(step, "offsetRZ", step.OffsetRZ ?? 0);
 
             // Per-axis absolute overrides — replace calculated value when set
-            bool ovX  = step.OverrideX.HasValue  || step.Expressions?.ContainsKey("overrideX")  == true;
-            bool ovY  = step.OverrideY.HasValue  || step.Expressions?.ContainsKey("overrideY")  == true;
-            bool ovZ  = step.OverrideZ.HasValue  || step.Expressions?.ContainsKey("overrideZ")  == true;
-            bool ovRX = step.OverrideRX.HasValue || step.Expressions?.ContainsKey("overrideRX") == true;
-            bool ovRY = step.OverrideRY.HasValue || step.Expressions?.ContainsKey("overrideRY") == true;
-            bool ovRZ = step.OverrideRZ.HasValue || step.Expressions?.ContainsKey("overrideRZ") == true;
-            if (ovX)  finalX  = EvalField(step, "overrideX",  step.OverrideX  ?? 0);
-            if (ovY)  finalY  = EvalField(step, "overrideY",  step.OverrideY  ?? 0);
-            if (ovZ)  finalZ  = EvalField(step, "overrideZ",  step.OverrideZ  ?? 0);
-            if (ovRX) finalRX = EvalField(step, "overrideRX", step.OverrideRX ?? 0);
-            if (ovRY) finalRY = EvalField(step, "overrideRY", step.OverrideRY ?? 0);
-            if (ovRZ) finalRZ = EvalField(step, "overrideRZ", step.OverrideRZ ?? 0);
+            double? oX  = OptionalField(step, "overrideX",  step.OverrideX);
+            double? oY  = OptionalField(step, "overrideY",  step.OverrideY);
+            double? oZ  = OptionalField(step, "overrideZ",  step.OverrideZ);
+            double? oRX = OptionalField(step, "overrideRX", step.OverrideRX);
+            double? oRY = OptionalField(step, "overrideRY", step.OverrideRY);
+            double? oRZ = OptionalField(step, "overrideRZ", step.OverrideRZ);
+            bool ovX = oX.HasValue, ovY = oY.HasValue, ovZ = oZ.HasValue, ovRZ = oRZ.HasValue;
+            finalX  = oX  ?? finalX;
+            finalY  = oY  ?? finalY;
+            finalZ  = oZ  ?? finalZ;
+            finalRX = oRX ?? finalRX;
+            finalRY = oRY ?? finalRY;
+            finalRZ = oRZ ?? finalRZ;
 
             // Apply active local offset — per-step localName overrides the program-level active local
             Vector6? effectiveLocal;
@@ -1396,9 +1559,7 @@ namespace Controller.RobotControl
                 double dist  = EvalField(step, "threadDistance",  step.ThreadDistance  ?? 0);
                 double pitch = EvalField(step, "threadPitch",     step.ThreadPitch     ?? 1);
                 bool   peck  = step.ThreadPeck ?? false;
-                double peckD = (step.ThreadPeckDepth.HasValue || step.Expressions?.ContainsKey("threadPeckDepth") == true)
-                    ? EvalField(step, "threadPeckDepth", step.ThreadPeckDepth ?? 0)
-                    : Math.Abs(dist);
+                double peckD = OptionalField(step, "threadPeckDepth", step.ThreadPeckDepth) ?? Math.Abs(dist);
                 bool   rev   = step.ThreadReverseOut ?? true;
 
                 if (Math.Abs(pitch) < 0.0001) pitch = 1.0;
@@ -1472,11 +1633,12 @@ namespace Controller.RobotControl
                 // per-axis overrides, and the active local. Finish(Error) on failure.
                 if (!ResolveMoveTarget(step, out Vector6 resolvedTarget)) return;
 
-                bool hasJumpZ      = step.JumpZ.HasValue      || step.Expressions?.ContainsKey("jumpZ")      == true;
-                bool hasJumpZStart = step.JumpZStart.HasValue || step.Expressions?.ContainsKey("jumpZStart") == true;
-                bool hasJumpZEnd   = step.JumpZEnd.HasValue   || step.Expressions?.ContainsKey("jumpZEnd")   == true;
+                double? jumpZStart = OptionalField(step, "jumpZStart", step.JumpZStart);
+                double? jumpZEnd   = OptionalField(step, "jumpZEnd",   step.JumpZEnd);
+                // The shared JumpZ is only a fallback — evaluated when a side needs it.
+                double? jumpZ      = jumpZStart.HasValue && jumpZEnd.HasValue ? null : OptionalField(step, "jumpZ", step.JumpZ);
 
-                if (!hasJumpZ && !hasJumpZStart)
+                if (!jumpZ.HasValue && !jumpZStart.HasValue)
                 {
                     Finish(global::ProgramStatus.Error, "Jump step: JumpZ must be set");
                     return;
@@ -1485,12 +1647,12 @@ namespace Controller.RobotControl
                 var cur = _controller.GetCurrentPosition();
                 _jumpStartPos = cur;
                 _jumpTarget   = resolvedTarget;
-                _jumpZStart   = hasJumpZStart ? EvalField(step, "jumpZStart", step.JumpZStart ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
-                _jumpZEnd     = hasJumpZEnd   ? EvalField(step, "jumpZEnd",   step.JumpZEnd   ?? 0) : EvalField(step, "jumpZ", step.JumpZ ?? 0);
+                _jumpZStart   = jumpZStart ?? jumpZ ?? 0;
+                _jumpZEnd     = jumpZEnd   ?? jumpZ ?? 0;
                 _jumpCmdType  = step.Type == StepType.JumpJ ? "MoveJ" : "MoveL";
-                _jumpSpeed    = (step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true) ? EvalField(step, "speed", step.Speed ?? 0) : (double?)null; // override applied in MoveL/MoveJ
-                _jumpAccel    = (step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true) ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null;
-                _jumpDecel    = (step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true) ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null;
+                _jumpSpeed    = OptionalField(step, "speed", step.Speed); // override applied in MoveL/MoveJ
+                _jumpAccel    = OptionalField(step, "accel", step.Accel);
+                _jumpDecel    = OptionalField(step, "decel", step.Decel);
 
                 // Blended JumpL: run lift → traverse → lower as one continuous path,
                 // rounding the two apex corners instead of stopping at each leg. (JumpJ's
@@ -1702,13 +1864,13 @@ namespace Controller.RobotControl
 
                 if (pulse > 0)
                 {
+                    // Scheduled on the loop thread (see ProcessOutputFlips) rather than a
+                    // Task.Delay, so Stop/Reset/e-stop cancel the revert instead of it
+                    // flipping the output some time after the program was halted.
                     var ctrl   = _controller;
                     var nanoId = step.OutputNanoId;
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(pulse);
-                        ApplyOutput(ctrl, card, number, !value, nanoId);
-                    });
+                    _outputFlips.Add((DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + pulse,
+                        () => ApplyOutput(ctrl, card, number, !value, nanoId)));
                 }
 
                 ReportStepCompleted(step);
@@ -1821,8 +1983,7 @@ namespace Controller.RobotControl
             if (!_awaitingVision)
             {
                 // First entry: start the processor (applying any zone override so the
-                // analysis and debug frame run in the selected zone) and record the trigger.
-                _controller.VisionManager.StartProgram(programId, ResolveVisionZoneOverride(step));
+                // analysis and debug frame run in the selected zone) and record the trigger.                _controller.VisionManager.StartProgram(programId, ResolveVisionZoneOverride(step));
                 _visionProgramId = programId;
                 _visionStartMs   = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _awaitingVision  = true;
@@ -1850,21 +2011,27 @@ namespace Controller.RobotControl
 
             var result = proc.GetLatestResult();
             if (result == null || result.TimestampMs <= _visionStartMs)
-                return; // no fresh result yet — keep waiting
+            {
+                // No fresh result yet — keep waiting, up to the step's timeout (same
+                // WaitTimeoutMs field as a Wait step; a default applies when unset,
+                // 0 or less waits forever).
+                int timeout = step.WaitTimeoutMs ?? DefaultVisionTimeoutMs;
+                if (timeout > 0 && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _visionStartMs >= timeout)
+                    Finish(global::ProgramStatus.Error,
+                        $"Vision → {step.VisionProgramName ?? programId}: no result within {timeout} ms");
+                return;
+            }
 
             // Got a fresh result — write output variables, stop processor, advance.
             // The zone override (if any) was applied to the processor at start, so every
             // inspection ran in the selected zone and all of its outputs are relevant.
-            HashSet<string>? zoneInspIds = null;
-
             foreach (var output in step.VisionOutputs ?? [])
             {
-                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var ir = result.Inspections.Find(i => i.InspectionId == output.InspectionId);
                 if (ir == null) continue;
 
                 if (!string.IsNullOrEmpty(output.CountVar))
-                    _variables[output.CountVar] = ir.Blobs.Count;
+                    SetVariable(output.CountVar, ir.Blobs.Count);
 
                 if (!string.IsNullOrEmpty(output.PointsVar))
                 {
@@ -1873,20 +2040,19 @@ namespace Controller.RobotControl
                 }
 
                 if (!string.IsNullOrEmpty(output.DetectedVar))
-                    _variables[output.DetectedVar] = ir.Blobs.Count > 0 ? 1 : 0;
+                    SetVariable(output.DetectedVar, ir.Blobs.Count > 0 ? 1 : 0);
             }
 
             foreach (var output in step.ColorOutputs ?? [])
             {
-                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var cr = result.ColorResults.Find(r => r.InspectionId == output.InspectionId);
                 if (cr == null) continue;
 
                 if (!string.IsNullOrEmpty(output.CoverageVar))
-                    _variables[output.CoverageVar] = cr.Coverage;
+                    SetVariable(output.CoverageVar, cr.Coverage);
 
                 if (!string.IsNullOrEmpty(output.PassedVar))
-                    _variables[output.PassedVar] = cr.Passed ? 1 : 0;
+                    SetVariable(output.PassedVar, cr.Passed ? 1 : 0);
 
                 // Grid cells. An ungridded zone has no cells, so the variable is emptied
                 // rather than left holding the previous run's grid.
@@ -1904,54 +2070,52 @@ namespace Controller.RobotControl
                 }
 
                 if (!string.IsNullOrEmpty(output.CellsPassedVar))
-                    _variables[output.CellsPassedVar] = cr.CellsPassed ?? 0;
+                    SetVariable(output.CellsPassedVar, cr.CellsPassed ?? 0);
             }
 
             foreach (var output in step.PolygonOutputs ?? [])
             {
-                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var pr = result.PolygonResults.Find(r => r.InspectionId == output.InspectionId);
                 if (pr == null) continue;
 
                 if (!string.IsNullOrEmpty(output.CountVar))
-                    _variables[output.CountVar] = pr.Count;
+                    SetVariable(output.CountVar, pr.Count);
 
                 if (!string.IsNullOrEmpty(output.FoundVar))
-                    _variables[output.FoundVar] = pr.Found ? 1 : 0;
+                    SetVariable(output.FoundVar, pr.Found ? 1 : 0);
 
                 if (!string.IsNullOrEmpty(output.AngleVar))
-                    _variables[output.AngleVar] = pr.Angle;
+                    SetVariable(output.AngleVar, pr.Angle);
 
                 if (!string.IsNullOrEmpty(output.CenterXVar))
-                    _variables[output.CenterXVar] = pr.CenterX;
+                    SetVariable(output.CenterXVar, pr.CenterX);
 
                 if (!string.IsNullOrEmpty(output.CenterYVar))
-                    _variables[output.CenterYVar] = pr.CenterY;
+                    SetVariable(output.CenterYVar, pr.CenterY);
             }
 
             foreach (var output in step.ArucoOutputs ?? [])
             {
-                if (zoneInspIds != null && !zoneInspIds.Contains(output.InspectionId)) continue;
                 var ar = result.ArucoResults.Find(r => r.InspectionId == output.InspectionId);
                 if (ar == null) continue;
 
                 if (!string.IsNullOrEmpty(output.CountVar))
-                    _variables[output.CountVar] = ar.Count;
+                    SetVariable(output.CountVar, ar.Count);
 
                 if (!string.IsNullOrEmpty(output.FoundVar))
-                    _variables[output.FoundVar] = ar.Found ? 1 : 0;
+                    SetVariable(output.FoundVar, ar.Found ? 1 : 0);
 
                 var first = ar.Markers.FirstOrDefault();
                 if (first != null)
                 {
                     if (!string.IsNullOrEmpty(output.FirstIdVar))
-                        _variables[output.FirstIdVar] = first.MarkerId;
+                        SetVariable(output.FirstIdVar, first.MarkerId);
 
                     if (!string.IsNullOrEmpty(output.FirstCenterXVar))
-                        _variables[output.FirstCenterXVar] = first.CenterX;
+                        SetVariable(output.FirstCenterXVar, first.CenterX);
 
                     if (!string.IsNullOrEmpty(output.FirstCenterYVar))
-                        _variables[output.FirstCenterYVar] = first.CenterY;
+                        SetVariable(output.FirstCenterYVar, first.CenterY);
                 }
             }
 
@@ -2009,7 +2173,7 @@ namespace Controller.RobotControl
                 else if (v.IsStopwatch == true)
                 {
                     _stopwatches[v.Name] = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
-                    _variables[v.Name] = 0; // elapsed ms, updated each tick
+                    SetVariable(v.Name, 0); // elapsed ms, updated each tick
                 }
                 else if (v.IsString == true)
                 {
@@ -2040,9 +2204,11 @@ namespace Controller.RobotControl
                         _globalVars!.InitIfAbsent(v.Name, initialValue);
                     }
                     else
-                        _variables[v.Name] = initialValue;
+                        SetVariable(v.Name, initialValue);
 
-                    if (isPersistent) _persistentVarNames.Add(v.Name);
+                    // Remember which program declared it: that is the key it was loaded
+                    // under above, so SavePersistentVars must write it back there too.
+                    if (isPersistent) _persistentVarOwners[v.Name] = program.Id ?? "";
                     if (v.IsBoolean == true) _booleanVariables.Add(v.Name);
                 }
             }
@@ -2335,10 +2501,7 @@ namespace Controller.RobotControl
             {
                 // Pre-check: if condition is already false, skip the body entirely
                 if (!EvalWhileCondition(step.LoopWhileCondition))
-                {
-                    _loopDepth++; _loopDepth--;
                     return;
-                }
                 _frameStack.Push(new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: int.MaxValue,
                     whileCondition: step.LoopWhileCondition));
             }
@@ -2348,7 +2511,7 @@ namespace Controller.RobotControl
                 int count = _listVariables.TryGetValue(step.ForEachVariableName, out var lst)
                     ? lst.Count : 0;
 
-                if (count == 0) { _loopDepth++; _loopDepth--; return; } // empty — skip body
+                if (count == 0) return; // empty — skip body
 
                 var bodyFrame = new StepListFrame(innerSteps, 0, isLoop: true, loopRemaining: 1,
                     isForEach: true, forEachCount: count, forEachCurrentIndex: 0,
@@ -2377,30 +2540,26 @@ namespace Controller.RobotControl
 
         private void ExecuteSetSpeedL(ProgramStep step, StepListFrame frame)
         {
-            bool hasSpeed = step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true;
-            bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
-            bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
-            if (hasSpeed)
-                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "SpeedS", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveL
-            if (hasAccel || hasDecel)
-                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "AccelS",
-                    Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
-                    Decel = hasDecel ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null });
+            double? speed = OptionalField(step, "speed", step.Speed);
+            double? accel = OptionalField(step, "accel", step.Accel);
+            double? decel = OptionalField(step, "decel", step.Decel);
+            if (speed.HasValue)
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "SpeedS", Speed = speed }); // raw; override applied in MoveL
+            if (accel.HasValue || decel.HasValue)
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "AccelS", Accel = accel, Decel = decel });
             ReportStepCompleted(step);
             frame.Index++;
         }
 
         private void ExecuteSetSpeedJ(ProgramStep step, StepListFrame frame)
         {
-            bool hasSpeed = step.Speed.HasValue || step.Expressions?.ContainsKey("speed") == true;
-            bool hasAccel = step.Accel.HasValue || step.Expressions?.ContainsKey("accel") == true;
-            bool hasDecel = step.Decel.HasValue || step.Expressions?.ContainsKey("decel") == true;
-            if (hasSpeed)
-                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "SpeedJ", Speed = EvalField(step, "speed", step.Speed ?? 0) }); // raw; override applied in MoveJ
-            if (hasAccel || hasDecel)
-                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "AccelJ",
-                    Accel = hasAccel ? EvalField(step, "accel", step.Accel ?? 0) : (double?)null,
-                    Decel = hasDecel ? EvalField(step, "decel", step.Decel ?? 0) : (double?)null });
+            double? speed = OptionalField(step, "speed", step.Speed);
+            double? accel = OptionalField(step, "accel", step.Accel);
+            double? decel = OptionalField(step, "decel", step.Decel);
+            if (speed.HasValue)
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "SpeedJ", Speed = speed }); // raw; override applied in MoveJ
+            if (accel.HasValue || decel.HasValue)
+                _controller.QueuedCommands.Enqueue(new RobotCommand { CommandType = "AccelJ", Accel = accel, Decel = decel });
             ReportStepCompleted(step);
             frame.Index++;
         }
@@ -2616,7 +2775,6 @@ namespace Controller.RobotControl
             frame.Index++;
         }
 
-        private bool _homingTriggered = false;
         private void ExecuteRunHoming(ProgramStep step, StepListFrame frame)
         {
             if (!_homingTriggered)
@@ -2645,7 +2803,6 @@ namespace Controller.RobotControl
                 _homingStartedMoving = true;
             }
         }
-        private bool _homingStartedMoving = false;
 
         // ── Aux axis steps ────────────────────────────────────────────────────
 
@@ -2772,19 +2929,6 @@ namespace Controller.RobotControl
             frame.Index++;
         }
 
-        // ── Thread move sub-step state ────────────────────────────────────────
-        private int                  _threadSubStep   = 0;
-        private Queue<RobotCommand>? _threadMoveQueue = null;
-
-        // ── Jump sub-step state ───────────────────────────────────────────────
-        private int     _jumpSubStep  = 0;  // 0=idle, 1=lift dispatched, 2=transit dispatched, 3=lower dispatched
-        private Vector6 _jumpTarget   = new();
-        private Vector6 _jumpStartPos = new();
-        private double  _jumpZStart   = 0;
-        private double  _jumpZEnd     = 0;
-        private string  _jumpCmdType  = "MoveL";
-        private double? _jumpSpeed, _jumpAccel, _jumpDecel;
-
         private void ExecuteSetVariable(ProgramStep step, StepListFrame frame)
         {
             if (!string.IsNullOrEmpty(step.VariableName) && !string.IsNullOrEmpty(step.VariableExpr))
@@ -2799,10 +2943,7 @@ namespace Controller.RobotControl
                     try
                     {
                         double value = ExpressionEvaluator.Evaluate(step.VariableExpr, EvalVars(), _listVariables);
-                        if (_globalVars != null && _globalVarNames.Contains(step.VariableName))
-                            _globalVars.Set(step.VariableName, value);
-                        else
-                            _variables[step.VariableName] = value;
+                        SetVariable(step.VariableName, value);
                     }
                     catch (UnknownVariableException)
                     {
@@ -2887,7 +3028,7 @@ namespace Controller.RobotControl
                     _                        => sw, // Start when already running / Stop when already stopped — no-op
                 };
                 _stopwatches[varName] = sw;
-                _variables[varName]   = sw.Running ? sw.AccumMs + (now - sw.StartTick) : sw.AccumMs;
+                SetVariable(varName, sw.Running ? sw.AccumMs + (now - sw.StartTick) : sw.AccumMs);
             }
 
             ReportStepStarted(step);
@@ -2973,11 +3114,17 @@ namespace Controller.RobotControl
                 // HTTP request finish in the background and queue variable writes back here.
                 var snapshot = BuildJsonBody(step);
                 var inbound  = step.JsonInbound?.ToList();
+                int runGen   = _runGeneration;
                 FireJsonRequest(step.JsonUrl, snapshot, step.JsonTimeoutMs ?? 10_000)
                     .ContinueWith(t =>
                     {
+                        // Checked again on the loop thread: a response that lands after the
+                        // run ended (or a new one started) must not write into the next run.
                         if (t.IsCompletedSuccessfully && t.Result != null && inbound != null)
-                            _pendingActions.Enqueue(() => ApplyJsonInbound(inbound, t.Result));
+                            _pendingActions.Enqueue(() =>
+                            {
+                                if (runGen == _runGeneration) ApplyJsonInbound(inbound, t.Result);
+                            });
                     });
                 ReportStepCompleted(step);
                 frame.Index++;
@@ -3255,8 +3402,15 @@ namespace Controller.RobotControl
             return fallback;
         }
 
-        private int _globalStepIndex = 0;
-        private int _loopDepth       = 0;
+        /// <summary>
+        /// An optional numeric field: null when the step sets neither a literal nor an
+        /// expression for <paramref name="key"/>, otherwise its evaluated value (expression
+        /// first, then the literal — see <see cref="EvalField"/>).
+        /// </summary>
+        private double? OptionalField(ProgramStep step, string key, double? literal) =>
+            literal.HasValue || step.Expressions?.ContainsKey(key) == true
+                ? EvalField(step, key, literal ?? 0)
+                : null;
 
         /// <summary>Emits a "step in progress" update — description shown but count not yet incremented.</summary>
         private void ReportStepStarted(ProgramStep step)
@@ -3264,10 +3418,7 @@ namespace Controller.RobotControl
             var isMove = step.Type == StepType.MoveL || step.Type == StepType.MoveJ
                       || step.Type == StepType.JumpL || step.Type == StepType.JumpJ;
 
-            double? Off(string key, double? raw) =>
-                isMove && (raw.HasValue || (step.Expressions?.ContainsKey(key) == true))
-                    ? EvalField(step, key, raw ?? 0)
-                    : (double?)null;
+            double? Off(string key, double? raw) => isMove ? OptionalField(step, key, raw) : null;
 
             var desc = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step);
             CurrentStepDescription = desc;
@@ -3316,26 +3467,21 @@ namespace Controller.RobotControl
         private void Finish(global::ProgramStatus status, string description)
         {
             SavePersistentVars();
-            _controller.ActiveCncToolpath = null;
-            _running              = false;
-            _stopRequested        = false;
-            _awaitingMove         = false;
-            _pendingStep          = null;
-            _awaitingAuxMove      = false;
-            _pendingAuxStep       = null;
-            _awaitingVision       = false;
-            _visionProgramId      = null;
-            _waitingForBackground = null;
-            _webhookCts?.Cancel();
-            _webhookCts?.Dispose();
-            _webhookCts         = null;
-            _pendingWebhookTask = null;
-            if (_pendingWebhookSub.HasValue)
+            int finalStepIndex = _globalStepIndex;
+
+            // A pulse still pending when the program completes normally is part of its
+            // last step, so it is kept (the main executor keeps ticking and reverts it on
+            // time; a background executor stops ticking, so it reverts now). Any other
+            // ending cancels it along with the rest of the run state.
+            List<(long DueMs, Action Flip)>? keptFlips = null;
+            if (status == global::ProgramStatus.Complete && _outputFlips.Count > 0)
             {
-                _controller.WebhookManager.Unsubscribe(_pendingWebhookSub.Value.Name, _pendingWebhookSub.Value.Id);
-                _pendingWebhookSub = null;
+                if (_isBackground) FireAllOutputFlips();
+                else keptFlips = new(_outputFlips);
             }
-            _frameStack.Clear();
+
+            ResetRunState();
+            if (keptFlips != null) _outputFlips.AddRange(keptFlips);
 
             // Main program finishing: optionally kill all background programs
             if (!_isBackground && (_program?.KillBackgroundOnStop ?? true))
@@ -3348,7 +3494,7 @@ namespace Controller.RobotControl
             {
                 ProgramName          = _program!.Name,
                 ProgramStatus        = status,
-                CurrentStepNumber    = _globalStepIndex,
+                CurrentStepNumber    = finalStepIndex,
                 StepDescription      = description,
                 ErrorDescription     = status == global::ProgramStatus.Error ? description : null,
                 CurrentPointName  = "",
@@ -3357,9 +3503,6 @@ namespace Controller.RobotControl
                 CurrentToolOffsetX  = null, CurrentToolOffsetY  = null, CurrentToolOffsetZ  = null,
                 CurrentToolOffsetRX = null, CurrentToolOffsetRY = null, CurrentToolOffsetRZ = null,
             });
-
-            _globalStepIndex = 0;
-            _loopDepth       = 0;
         }
 
         /// <summary>
