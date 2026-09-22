@@ -16,7 +16,10 @@ namespace Controller.RobotControl.Vision
     /// </summary>
     public class VisionProcessor
     {
-        private VisionProgram        _program;
+        // Written by UpdateProgram (any thread) and read once per iteration by ProcessLoop
+        // (the processing thread) — volatile so a write is guaranteed visible to the reader
+        // without both sides needing Interlocked.
+        private volatile VisionProgram _program;
         private readonly Camera.CameraDevice _camera;
 
         private byte[]?       _latestAnnotated;
@@ -27,6 +30,18 @@ namespace Controller.RobotControl.Vision
         private volatile bool _running;
 
         private byte[]?       _latestRaw;
+        private byte[]?       _lastProcessedJpeg;
+
+        // Rate-limits per-inspection error logging: only re-logs when the message for a
+        // given inspection id actually changes, so a persistently failing inspection does
+        // not spam the console once per frame.
+        private readonly Dictionary<string, string> _lastLoggedError = new();
+        private readonly object _errorLogLock = new();
+
+        // ArUco detectors are expensive native objects — one per dictionary id, built lazily
+        // and reused across frames instead of allocating (and leaking) a new one every pass.
+        private readonly Dictionary<int, (OpenCvSharp.Aruco.Dictionary Dict, ArucoDetector Detector)> _arucoDetectors = new();
+        private readonly object _arucoLock = new();
 
         private static readonly int[] JpegParams = { (int)ImwriteFlags.JpegQuality, 80 };
 
@@ -40,6 +55,7 @@ namespace Controller.RobotControl.Vision
 
         public void Start()
         {
+            if (_thread is { IsAlive: true }) return;
             _running = true;
             _thread  = new Thread(ProcessLoop) { IsBackground = true, Name = $"Vision-{_program.Id}" };
             _thread.Start();
@@ -48,12 +64,45 @@ namespace Controller.RobotControl.Vision
         public void Stop()
         {
             _running = false;
-            _thread?.Join(2000);
+            if (_thread != null && !_thread.Join(2000))
+                Console.WriteLine($"[Vision] {_program.Id} processing thread did not stop within timeout");
+            ClearArucoDetectors();
         }
 
         public void UpdateProgram(VisionProgram updated)
         {
-            Interlocked.Exchange(ref _program, updated);
+            _program = updated;
+            // Dictionary ids referenced by the new program may differ — rebuild lazily
+            // rather than keep detectors for inspections that no longer exist.
+            ClearArucoDetectors();
+        }
+
+        /// <summary>Returns the cached ArUco detector for a dictionary id, creating it on first use.</summary>
+        private ArucoDetector GetArucoDetector(int dictId)
+        {
+            lock (_arucoLock)
+            {
+                if (_arucoDetectors.TryGetValue(dictId, out var cached))
+                    return cached.Detector;
+
+                var dict     = CvAruco.GetPredefinedDictionary((PredefinedDictionaryType)dictId);
+                var detector = new ArucoDetector(dict, new DetectorParameters(), new RefineParameters());
+                _arucoDetectors[dictId] = (dict, detector);
+                return detector;
+            }
+        }
+
+        private void ClearArucoDetectors()
+        {
+            lock (_arucoLock)
+            {
+                foreach (var entry in _arucoDetectors.Values)
+                {
+                    entry.Detector.Dispose();
+                    entry.Dict.Dispose();
+                }
+                _arucoDetectors.Clear();
+            }
         }
 
         public byte[]? GetLatestAnnotated()
@@ -71,6 +120,27 @@ namespace Controller.RobotControl.Vision
             lock (_lock) return _latestResult;
         }
 
+        /// <summary>
+        /// Records a per-inspection failure on the result and logs it — but only when the
+        /// message differs from the last one logged for that inspection id, so a steadily
+        /// failing inspection logs once instead of once per frame.
+        /// </summary>
+        private void LogInspectionError(VisionResult result, string inspectionId, Exception ex)
+        {
+            var message = $"{inspectionId}: {ex.Message}";
+            result.Errors.Add(message);
+
+            bool changed;
+            lock (_errorLogLock)
+            {
+                changed = !_lastLoggedError.TryGetValue(inspectionId, out var last) || last != message;
+                _lastLoggedError[inspectionId] = message;
+            }
+
+            if (changed)
+                Console.WriteLine($"[Vision] {result.ProgramId} inspection {message}");
+        }
+
         // ── Processing loop ───────────────────────────────────────────────────────
 
         private void ProcessLoop()
@@ -81,6 +151,11 @@ namespace Controller.RobotControl.Vision
                 {
                     var jpeg = _camera.GetLatestFrame();
                     if (jpeg == null) { Thread.Sleep(50); continue; }
+
+                    // The camera thread publishes a new byte[] only when it actually encodes a
+                    // new frame, so a reference match means we've already processed this exact
+                    // frame — reprocessing it would just burn CPU for an identical result.
+                    if (ReferenceEquals(jpeg, _lastProcessedJpeg)) { Thread.Sleep(10); continue; }
 
                     using var src = Cv2.ImDecode(jpeg, ImreadModes.Color);
                     if (src.Empty()) { Thread.Sleep(50); continue; }
@@ -152,7 +227,7 @@ namespace Controller.RobotControl.Vision
                                 ir.Blobs.Add(new BlobResult { X = bx, Y = by, Size = kp.Size });
                             }
                         }
-                        catch { /* blob detection on this inspection failed — skip */ }
+                        catch (Exception ex) { LogInspectionError(result, insp.Id, ex); }
 
                         result.Inspections.Add(ir);
                         result.Timings[insp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
@@ -169,7 +244,7 @@ namespace Controller.RobotControl.Vision
                             var cr = RunColorInspection(src, annotated, colorInsp, prog.Zones, ref colorLabelY);
                             result.ColorResults.Add(cr);
                         }
-                        catch { /* skip failed color inspection */ }
+                        catch (Exception ex) { LogInspectionError(result, colorInsp.Id, ex); }
                         result.Timings[colorInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
@@ -183,7 +258,7 @@ namespace Controller.RobotControl.Vision
                             var pr = RunPolygonInspection(src, annotated, polyInsp, prog.Zones, ref colorLabelY);
                             result.PolygonResults.Add(pr);
                         }
-                        catch { /* skip failed polygon inspection */ }
+                        catch (Exception ex) { LogInspectionError(result, polyInsp.Id, ex); }
                         result.Timings[polyInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
@@ -197,7 +272,7 @@ namespace Controller.RobotControl.Vision
                             var ar = RunArucoInspection(src, annotated, arucoInsp, prog.Zones, ref colorLabelY);
                             result.ArucoResults.Add(ar);
                         }
-                        catch { /* skip failed ArUco inspection */ }
+                        catch (Exception ex) { LogInspectionError(result, arucoInsp.Id, ex); }
                         result.Timings[arucoInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
@@ -211,7 +286,7 @@ namespace Controller.RobotControl.Vision
                             var lr = RunLineInspection(src, annotated, lineInsp, prog.Zones, ref colorLabelY);
                             result.LineResults.Add(lr);
                         }
-                        catch { /* skip failed line inspection */ }
+                        catch (Exception ex) { LogInspectionError(result, lineInsp.Id, ex); }
                         result.Timings[lineInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
@@ -225,7 +300,7 @@ namespace Controller.RobotControl.Vision
                             var br = RunBarcodeInspection(src, annotated, barcodeInsp, prog.Zones, ref colorLabelY);
                             result.BarcodeResults.Add(br);
                         }
-                        catch { /* skip failed barcode inspection */ }
+                        catch (Exception ex) { LogInspectionError(result, barcodeInsp.Id, ex); }
                         result.Timings[barcodeInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
@@ -237,6 +312,8 @@ namespace Controller.RobotControl.Vision
                         _latestAnnotated = buf;
                         _latestResult    = result;
                     }
+
+                    _lastProcessedJpeg = jpeg;
                 }
                 catch (Exception ex)
                 {
@@ -297,9 +374,19 @@ namespace Controller.RobotControl.Vision
                     return inside;
                 }
                 default:
-                    return true;
+                {
+                    bool firstTime;
+                    lock (_loggedUnknownShapes) firstTime = _loggedUnknownShapes.Add(geom.Shape);
+                    if (firstTime)
+                        Console.WriteLine($"[Vision] IsInsideZone: unrecognized zone shape {geom.Shape} — treating point as outside zone");
+                    return false;
+                }
             }
         }
+
+        // Shapes we've already warned about for IsInsideZone's fail-closed default — logged
+        // once per shape value rather than once per frame.
+        private static readonly HashSet<VisionZoneShape> _loggedUnknownShapes = new();
 
         // ── Drawing helpers ───────────────────────────────────────────────────────
 
@@ -679,7 +766,8 @@ namespace Controller.RobotControl.Vision
                     int ry = Math.Clamp((int)(geom.Y * h), 0, h - 1);
                     int rw = Math.Clamp((int)(geom.Width  * w), 1, w - rx);
                     int rh = Math.Clamp((int)(geom.Height * h), 1, h - ry);
-                    mask[new Rect(rx, ry, rw, rh)].SetTo(Scalar.White);
+                    using (var roi = mask[new Rect(rx, ry, rw, rh)])
+                        roi.SetTo(Scalar.White);
                     break;
                 }
                 case VisionZoneShape.Circle:
@@ -805,7 +893,6 @@ namespace Controller.RobotControl.Vision
                 ? null
                 : zones.FirstOrDefault(z => z.Id == insp.ZoneId);
 
-            var parameters = new DetectorParameters();
             var markers    = new List<ArucoMarkerResult>();
             var drawColor  = new Scalar(0, 255, 127); // spring green (BGR)
 
@@ -817,8 +904,7 @@ namespace Controller.RobotControl.Vision
 
             foreach (var dictId in dictIds)
             {
-                var dict     = CvAruco.GetPredefinedDictionary((PredefinedDictionaryType)dictId);
-                var detector = new ArucoDetector(dict, parameters, new RefineParameters());
+                var detector = GetArucoDetector(dictId);
 
                 detector.DetectMarkers(src, out var corners, out var ids, out _);
 
@@ -883,44 +969,14 @@ namespace Controller.RobotControl.Vision
                 ? null
                 : zones.FirstOrDefault(z => z.Id == insp.ZoneId);
 
-            // Compute ROI bounding rect from zone geometry
+            // Compute ROI bounding rect from zone geometry — ZoneBounds already handles every
+            // shape (including a tilted rectangle's axis-aligned bounding box) and clamps the
+            // result to the frame, so it can't hand back a negative or out-of-bounds crop.
             int roiX = 0, roiY = 0, roiW = w, roiH = h;
             if (zone != null)
             {
-                var g = zone.Geometry;
-                if (IsRotatedRect(g))
-                {
-                    // The crop stays axis-aligned, so a tilted zone gets its bounding box —
-                    // wider than the zone, but the decoder only needs the barcode inside it.
-                    var b = ZoneBounds(g, w, h);
-                    roiX = b.X; roiY = b.Y; roiW = b.Width; roiH = b.Height;
-                }
-                else if (g.Shape == VisionZoneShape.Rectangle)
-                {
-                    roiX = (int)(g.X * w);
-                    roiY = (int)(g.Y * h);
-                    roiW = (int)(g.Width  * w);
-                    roiH = (int)(g.Height * h);
-                }
-                else if (g.Shape == VisionZoneShape.Circle)
-                {
-                    var rad = g.Radius * Math.Min(w, h);
-                    roiX = (int)Math.Max(0, g.Cx * w - rad);
-                    roiY = (int)Math.Max(0, g.Cy * h - rad);
-                    roiW = (int)(rad * 2);
-                    roiH = (int)(rad * 2);
-                }
-                else if (g.Shape == VisionZoneShape.Polygon && g.Points.Count >= 3)
-                {
-                    var xs = g.Points.Select(p => p[0] * w).ToList();
-                    var ys = g.Points.Select(p => p[1] * h).ToList();
-                    roiX = (int)xs.Min();
-                    roiY = (int)ys.Min();
-                    roiW = (int)(xs.Max() - roiX);
-                    roiH = (int)(ys.Max() - roiY);
-                }
-                roiW = Math.Max(1, Math.Min(roiW, w - roiX));
-                roiH = Math.Max(1, Math.Min(roiH, h - roiY));
+                var b = ZoneBounds(zone.Geometry, w, h);
+                roiX = b.X; roiY = b.Y; roiW = b.Width; roiH = b.Height;
             }
 
             using var roi = (roiX == 0 && roiY == 0 && roiW == w && roiH == h)
@@ -1081,7 +1137,8 @@ namespace Controller.RobotControl.Vision
             };
             int stripH = lines.Length * 22 + 8;
             int stripY = Math.Max(0, h - stripH);
-            debug[new Rect(0, stripY, w, h - stripY)].SetTo(new Scalar(18, 18, 18));
+            using (var stripRoi = debug[new Rect(0, stripY, w, h - stripY)])
+                stripRoi.SetTo(new Scalar(18, 18, 18));
             int ly = stripY + 18;
             foreach (var line in lines)
             {
@@ -1241,7 +1298,8 @@ namespace Controller.RobotControl.Vision
             };
             int stripH = lines.Length * 22 + 8;
             int stripY = Math.Max(0, h - stripH);
-            debug[new Rect(0, stripY, w, h - stripY)].SetTo(new Scalar(18, 18, 18));
+            using (var stripRoi = debug[new Rect(0, stripY, w, h - stripY)])
+                stripRoi.SetTo(new Scalar(18, 18, 18));
             int ly = stripY + 18;
             foreach (var line in lines)
             {

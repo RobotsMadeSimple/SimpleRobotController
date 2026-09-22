@@ -14,6 +14,9 @@ namespace Controller.RobotControl.Camera
         private readonly string              _configPath;
         private CameraManagerConfig          _config;
         private readonly List<CameraDevice>  _devices = new();
+        // Guards _devices: Add/Remove/Update run from the API/config thread while GetState()
+        // and lookups can be called concurrently from status-broadcast threads.
+        private readonly object              _devicesLock = new();
 
         private static readonly JsonSerializerOptions _json = new()
         {
@@ -35,7 +38,7 @@ namespace Controller.RobotControl.Camera
             {
                 var device = new CameraDevice(cfg);
                 WireDevice(device);
-                _devices.Add(device);
+                lock (_devicesLock) _devices.Add(device);
                 device.Start();
             }
         }
@@ -56,21 +59,29 @@ namespace Controller.RobotControl.Camera
 
         public void Stop()
         {
-            foreach (var d in _devices) d.Stop();
+            List<CameraDevice> snapshot;
+            lock (_devicesLock) snapshot = new List<CameraDevice>(_devices);
+            foreach (var d in snapshot) d.Stop();
         }
 
         // ── Device lookup ─────────────────────────────────────────────────────
 
-        public CameraDevice? GetCamera(string id) =>
-            _devices.FirstOrDefault(d => d.Id == id);
+        public CameraDevice? GetCamera(string id)
+        {
+            lock (_devicesLock) return _devices.FirstOrDefault(d => d.Id == id);
+        }
 
-        public CameraDevice? GetFirstCamera() =>
-            _devices.FirstOrDefault();
+        public CameraDevice? GetFirstCamera()
+        {
+            lock (_devicesLock) return _devices.FirstOrDefault();
+        }
 
         // ── State query ───────────────────────────────────────────────────────
 
-        public List<CameraState> GetState() =>
-            _devices.Select(d => d.GetState()).ToList();
+        public List<CameraState> GetState()
+        {
+            lock (_devicesLock) return _devices.Select(d => d.GetState()).ToList();
+        }
 
         // ── Config mutations ──────────────────────────────────────────────────
 
@@ -84,18 +95,19 @@ namespace Controller.RobotControl.Camera
 
             var device = new CameraDevice(cfg);
             WireDevice(device);
-            _devices.Add(device);
+            lock (_devicesLock) _devices.Add(device);
             device.Start();
         }
 
         public void RemoveCamera(string id)
         {
-            var device = _devices.FirstOrDefault(d => d.Id == id);
-            if (device != null)
+            CameraDevice? device;
+            lock (_devicesLock)
             {
-                device.Stop();
-                _devices.Remove(device);
+                device = _devices.FirstOrDefault(d => d.Id == id);
+                if (device != null) _devices.Remove(device);
             }
+            device?.Stop();
 
             _config.Cameras.RemoveAll(c => c.Id == id);
             Save();
@@ -112,7 +124,8 @@ namespace Controller.RobotControl.Camera
                 _config.Cameras[idx] = patch;
             }
 
-            var device = _devices.FirstOrDefault(d => d.Id == id);
+            CameraDevice? device;
+            lock (_devicesLock) device = _devices.FirstOrDefault(d => d.Id == id);
             if (device != null)
             {
                 bool wasEnabled = device.Enabled;
@@ -138,7 +151,8 @@ namespace Controller.RobotControl.Camera
         /// </summary>
         public List<CameraResolution> ProbeResolutionsForIndex(int deviceIndex)
         {
-            var device = _devices.FirstOrDefault(d => d.DeviceIndex == deviceIndex);
+            CameraDevice? device;
+            lock (_devicesLock) device = _devices.FirstOrDefault(d => d.DeviceIndex == deviceIndex);
             List<CameraResolution> resolutions;
 
             if (device != null)

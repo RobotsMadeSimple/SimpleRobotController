@@ -14,7 +14,7 @@ public class STB4100
     private HidDevice? _device;
     private HidStream? _stream;
 
-    public readonly List<StepperMotor> _motors = new();
+    public List<StepperMotor> _motors { get; } = new();
     private readonly Dictionary<string, int> _commands = new()
     {
         { "Jog", 5 },
@@ -32,18 +32,19 @@ public class STB4100
         { 7, "Stopping" }
     };
 
-    public bool connected;
-    public int status;
+    public bool connected { get; private set; }
+    public int status { get; private set; }
     private int _commandCount;
     private bool _ready;
     private bool _jogging;
     private bool _stopJog;
-    public int _jogState;
+    public int _jogState { get; private set; }
     private bool _jog;
     private bool _flip;
     private bool _resetBit;
 
-    public bool moving;
+    // Written externally by RobotController — needs a public setter.
+    public bool moving { get; set; }
 
     public bool Input1  { get; private set; }
     public bool Input2  { get; private set; }
@@ -91,11 +92,6 @@ public class STB4100
         // Check if already connected
         if (_device != null && _stream != null && _stream.CanRead && _stream.CanWrite)
             return true;
-
-        foreach (var d in DeviceList.Local.GetHidDevices())
-        {
-            Console.WriteLine($"{d.ProductID} {d.VendorID:X4}:{d.ProductID:X4}");
-        }
 
         // Get the first available device that matches vendor and product identifications
         _device = DeviceList.Local.GetHidDeviceOrNull(VendorId, ProductId);

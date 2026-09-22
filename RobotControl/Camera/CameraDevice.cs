@@ -61,7 +61,6 @@ namespace Controller.RobotControl.Camera
         {
             try   { CaptureLoop(); }
             catch (Exception ex) { Console.WriteLine($"[Camera] {Id} thread died: {ex.Message}"); }
-            catch                { Console.WriteLine($"[Camera] {Id} thread died (native exception)"); }
             Connected = false;
         }
 
@@ -141,7 +140,6 @@ namespace Controller.RobotControl.Camera
                 }
             }
             catch (Exception ex) { Console.WriteLine($"[Camera] {Id} probe error: {ex.Message}"); }
-            catch                { Console.WriteLine($"[Camera] {Id} probe native error"); }
 
             if (wasRunning)
             {
@@ -186,7 +184,6 @@ namespace Controller.RobotControl.Camera
                 cap = null;
             }
             catch (Exception) { if (cap != null) { GC.SuppressFinalize(cap); cap = null; } }
-            catch              { if (cap != null) { GC.SuppressFinalize(cap); cap = null; } }
             return null;
         }
 
@@ -260,14 +257,6 @@ namespace Controller.RobotControl.Camera
                     Connected = false;
                     AbandonCapture(ref _capture);
                     Thread.Sleep(3000);
-                    continue;
-                }
-                catch
-                {
-                    Console.WriteLine($"[Camera] {Id} native exception caught — retrying in 5s");
-                    Connected = false;
-                    AbandonCapture(ref _capture);
-                    Thread.Sleep(5000);
                     continue;
                 }
 

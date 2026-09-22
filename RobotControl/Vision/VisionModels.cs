@@ -316,5 +316,7 @@ namespace Controller.RobotControl.Vision
         // How long each inspection took to run this frame, in milliseconds, keyed by
         // inspection id. Shown on the editor's inspection cards.
         [JsonPropertyName("timings")]         public Dictionary<string, double> Timings { get; set; } = new();
+        /// <summary>Per-inspection error messages from this pass, formatted "{inspectionId}: {message}".</summary>
+        [JsonPropertyName("errors")]         public List<string>        Errors          { get; set; } = new();
     }
 }

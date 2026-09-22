@@ -228,7 +228,7 @@ namespace Controller.RobotControl.Nano
             SafeWrite("GET");
 
             // ── Read / write loop ─────────────────────────────────────────────
-            string readBuf = "";
+            var readBuf = new System.Text.StringBuilder();
 
             while (_running && _port.IsOpen)
             {
@@ -245,12 +245,12 @@ namespace Controller.RobotControl.Nano
                     int b = _port.ReadByte();
                     if (b == '\n')
                     {
-                        ProcessLine(readBuf.Trim());
-                        readBuf = "";
+                        ProcessLine(readBuf.ToString().Trim());
+                        readBuf.Clear();
                     }
                     else if (b != '\r' && b >= 0)
                     {
-                        readBuf += (char)b;
+                        readBuf.Append((char)b);
                     }
                 }
                 catch (TimeoutException) { /* normal — no data this tick */ }
@@ -283,7 +283,9 @@ namespace Controller.RobotControl.Nano
                     string[] parts = entry.Split(',');
                     if (parts.Length >= 3 && int.TryParse(parts[0], out int pin))
                     {
-                        if (_pinStates.TryGetValue(pin, out var state))
+                        NanoPinState? state;
+                        lock (_lock) _pinStates.TryGetValue(pin, out state);
+                        if (state != null)
                             state.Value = parts[2] != "0";
                     }
                 }
@@ -296,7 +298,9 @@ namespace Controller.RobotControl.Nano
                 string[] parts = line.Substring(4).Split(',');
                 if (parts.Length >= 2 && int.TryParse(parts[0], out int pin))
                 {
-                    if (_pinStates.TryGetValue(pin, out var state))
+                    NanoPinState? state;
+                    lock (_lock) _pinStates.TryGetValue(pin, out state);
+                    if (state != null)
                     {
                         state.Value = parts[1] != "0";
                         if (state.Type == PinType.Input)
@@ -314,12 +318,14 @@ namespace Controller.RobotControl.Nano
         /// <summary>Queues a digital output change. Thread-safe.</summary>
         public void SetOutput(int pin, bool value)
         {
+            NanoPinState? state;
             lock (_lock)
             {
                 _commandQueue.Enqueue($"SET:{pin},{(value ? 1 : 0)}");
+                _pinStates.TryGetValue(pin, out state);
             }
             // Optimistically update tracked state
-            if (_pinStates.TryGetValue(pin, out var state))
+            if (state != null)
                 state.Value = value;
         }
 
@@ -358,11 +364,15 @@ namespace Controller.RobotControl.Nano
 
         // ── State accessors ────────────────────────────────────────────────────
 
-        public List<NanoPinState> GetPinStates() =>
-            _pinStates.Values.ToList();
+        public List<NanoPinState> GetPinStates()
+        {
+            lock (_lock) return _pinStates.Values.ToList();
+        }
 
-        public NanoPinState? GetPinState(int pin) =>
-            _pinStates.TryGetValue(pin, out var s) ? s : null;
+        public NanoPinState? GetPinState(int pin)
+        {
+            lock (_lock) return _pinStates.TryGetValue(pin, out var s) ? s : null;
+        }
 
         /// <summary>
         /// Adds or updates the tracked state for a pin without sending a firmware
@@ -370,28 +380,34 @@ namespace Controller.RobotControl.Nano
         /// </summary>
         public void UpsertPinState(int pin, PinType type, string name, int pixelCount)
         {
-            if (_pinStates.TryGetValue(pin, out var existing))
+            lock (_lock)
             {
-                existing.Type       = type;
-                existing.Name       = name;
-                existing.PixelCount = pixelCount;
-            }
-            else
-            {
-                _pinStates[pin] = new NanoPinState
+                if (_pinStates.TryGetValue(pin, out var existing))
                 {
-                    Pin        = pin,
-                    Type       = type,
-                    Name       = name,
-                    NanoId     = _config.Id,
-                    NanoName   = _config.Name,
-                    PixelCount = pixelCount,
-                    Value      = false,
-                };
+                    existing.Type       = type;
+                    existing.Name       = name;
+                    existing.PixelCount = pixelCount;
+                }
+                else
+                {
+                    _pinStates[pin] = new NanoPinState
+                    {
+                        Pin        = pin,
+                        Type       = type,
+                        Name       = name,
+                        NanoId     = _config.Id,
+                        NanoName   = _config.Name,
+                        PixelCount = pixelCount,
+                        Value      = false,
+                    };
+                }
             }
         }
 
         /// <summary>Removes a pin from live state tracking.</summary>
-        public void RemovePinState(int pin) => _pinStates.Remove(pin);
+        public void RemovePinState(int pin)
+        {
+            lock (_lock) _pinStates.Remove(pin);
+        }
     }
 }

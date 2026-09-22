@@ -226,7 +226,7 @@ namespace Controller.RobotControl.AuxAxis
             _motorEnabled = _desiredEnabled;
             SafeWrite(_desiredEnabled ? "E:1" : "E:0");
 
-            string readBuf = "";
+            var readBuf = new System.Text.StringBuilder();
             while (_running && port.IsOpen)
             {
                 lock (_lock)
@@ -244,11 +244,11 @@ namespace Controller.RobotControl.AuxAxis
                     int b = port.ReadByte();
                     if (b == '\n')
                     {
-                        ProcessLine(readBuf.Trim());
-                        readBuf = "";
+                        ProcessLine(readBuf.ToString().Trim());
+                        readBuf.Clear();
                     }
                     else if (b != '\r' && b >= 0)
-                        readBuf += (char)b;
+                        readBuf.Append((char)b);
                 }
                 catch (TimeoutException) { }
                 catch (InvalidOperationException) { break; } // port closed
