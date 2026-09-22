@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Controller.RobotControl.AuxAxis
 {
@@ -19,13 +16,6 @@ namespace Controller.RobotControl.AuxAxis
         // Guards _devices: populated on Start() while GetState() and device lookups can be
         // called concurrently from status-broadcast / motion-command threads.
         private readonly object              _devicesLock = new();
-
-        private static readonly JsonSerializerOptions _json = new()
-        {
-            Converters               = { new JsonStringEnumConverter() },
-            PropertyNameCaseInsensitive = true,
-            WriteIndented            = true,
-        };
 
         public AuxAxisManager(string configPath)
         {
@@ -162,19 +152,8 @@ namespace Controller.RobotControl.AuxAxis
 
         private AuxAxisManagerConfig Load()
         {
-            try
-            {
-                if (File.Exists(_configPath))
-                {
-                    var text = File.ReadAllText(_configPath);
-                    return JsonSerializer.Deserialize<AuxAxisManagerConfig>(text, _json)
-                           ?? DefaultConfig();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[AuxAxisManager] Failed to load config: {ex.Message}");
-            }
+            var loaded = Persistence.JsonFiles.Load<AuxAxisManagerConfig>(_configPath, logTag: "AuxAxisManager");
+            if (loaded != null) return loaded;
 
             var def = DefaultConfig();
             Save(def);
@@ -183,7 +162,7 @@ namespace Controller.RobotControl.AuxAxis
 
         private void Save(AuxAxisManagerConfig config)
         {
-            try { File.WriteAllText(_configPath, JsonSerializer.Serialize(config, _json)); }
+            try { Persistence.JsonFiles.Save(_configPath, config); }
             catch (Exception ex) { Console.WriteLine($"[AuxAxisManager] Failed to save config: {ex.Message}"); }
         }
 

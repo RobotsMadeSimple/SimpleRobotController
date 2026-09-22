@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Controller.RobotControl
@@ -201,29 +199,13 @@ namespace Controller.RobotControl
     {
         private static readonly string ConfigFilePath = "robot-config.json";
 
-        private static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            WriteIndented = true
-        };
-
         public static RobotConfig Load()
         {
-            if (File.Exists(ConfigFilePath))
+            var config = Persistence.JsonFiles.Load<RobotConfig>(ConfigFilePath, logTag: "Config");
+            if (config != null)
             {
-                try
-                {
-                    string json = File.ReadAllText(ConfigFilePath);
-                    var config = JsonSerializer.Deserialize<RobotConfig>(json, JsonOptions);
-                    if (config != null)
-                    {
-                        Console.WriteLine("[Config] Loaded robot-config.json");
-                        return config;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Config] Failed to read robot-config.json: {ex.Message}. Using defaults.");
-                }
+                Console.WriteLine("[Config] Loaded robot-config.json");
+                return config;
             }
 
             var defaults = new RobotConfig();
@@ -236,8 +218,7 @@ namespace Controller.RobotControl
         {
             try
             {
-                string json = JsonSerializer.Serialize(config, JsonOptions);
-                Controller.RobotControl.Persistence.AtomicFile.WriteAllText(ConfigFilePath, json);
+                Persistence.JsonFiles.Save(ConfigFilePath, config);
             }
             catch (Exception ex)
             {

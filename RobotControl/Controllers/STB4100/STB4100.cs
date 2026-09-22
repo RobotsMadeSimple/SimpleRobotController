@@ -18,10 +18,10 @@ public class STB4100
     public List<StepperMotor> _motors { get; } = new();
     private readonly Dictionary<string, int> _commands = new()
     {
-        { "Jog", 5 },
-        { "ClearSteps", 9 },
-        { "Reset", 15 },
-        { "Move", 4 }
+        { "Jog", Stb4100Packets.CommandJog },
+        { "ClearSteps", Stb4100Packets.CommandClearSteps },
+        { "Reset", Stb4100Packets.CommandReset },
+        { "Move", Stb4100Packets.CommandMove }
     };
 
     private readonly Dictionary<int, string> _statusEnum = new()
@@ -227,7 +227,7 @@ public class STB4100
             switch (_jogState)
             {
                 case 0:
-                    SendStatus(10);
+                    SendStatus(Stb4100Packets.StatusJogStart);
                     _jogging = true;
                     _jogState++;
                     break;
@@ -238,7 +238,7 @@ public class STB4100
                     break;
 
                 case 2:
-                    SendStatus(6);
+                    SendStatus(Stb4100Packets.StatusJogPoll);
                     if (status == 1)
                     {
                         _jogState = 0;
@@ -253,12 +253,12 @@ public class STB4100
         {
             if (!_ready && _flip)
             {
-                SendStatus(14);
+                SendStatus(Stb4100Packets.StatusAwaitReady);
                 _flip = false;
             }
             else
             {
-                SendStatus(3);
+                SendStatus(Stb4100Packets.StatusHeartbeat);
                 _flip = true;
             }
         }
@@ -275,8 +275,8 @@ public class STB4100
 
     private void ResetInternal()
     {
-        SendStatus(7);
-        SendStatus(2);
+        SendStatus(Stb4100Packets.StatusResetPhase1);
+        SendStatus(Stb4100Packets.StatusResetPhase2);
         SendCommand("ClearSteps");
         SendCommand("Reset");
     }
@@ -330,19 +330,12 @@ public class STB4100
 
     private void SendCommand(string command)
     {
-        var send = new List<byte>
-        {
-            3,
-            (byte)_commands[command],
-            0
-        };
-
-        send.AddRange(BitTools.NumberToBytes(_commandCount++, 2));
+        int commandCount = _commandCount++;
+        byte[] send;
 
         if (command == "Jog" || command == "Move")
         {
-            send.AddRange(BitTools.NumberToBytes(0, 4));
-
+            var steps = new int[4];
             for (int pin = 0; pin < 4; pin++)
             {
                 int step = 0;
@@ -358,28 +351,29 @@ public class STB4100
                         }
                     }
                 }
-                send.AddRange(BitTools.NumberToSignedBytes(step));
+                steps[pin] = step;
             }
 
-            send.AddRange(BitTools.NumberToBytes(0, 2));
+            send = Stb4100Packets.BuildMoveCommandPacket((byte)_commands[command], commandCount, steps);
         }
         else if (command == "ClearSteps")
         {
-            send.AddRange(BitTools.NumberToBytes(0, 16));
-            send.AddRange(BitTools.NumberToBytes(15, 1));
-            send.AddRange(BitTools.NumberToBytes(0, 5));
+            send = Stb4100Packets.BuildClearStepsPacket(commandCount);
         }
         else if (command == "Reset")
         {
-            send.AddRange([0, 0, 0, 0, 0, 0, 0, 0]);   // Bytes 5�12
-            send.AddRange([0, 0, 0, 100, 5]);         // Bytes 13�17
-            send.AddRange(BitTools.NumberToBytes(0, 9));              // Bytes 18�26
+            send = Stb4100Packets.BuildResetPacket(commandCount);
         }
+        else
+        {
+            send = [3, (byte)_commands[command], 0, .. BitTools.NumberToBytes(commandCount, 2)];
+        }
+
         if (_stream is null)
             return;
 
         //Console.WriteLine("Command: " + string.Join(", ", send.Select(b => (int)b)));
-        try { _stream.Write([.. send]); }
+        try { _stream.Write(send); }
         catch (Exception ex)
         {
             Console.WriteLine($"[STB4100] Write error: {ex.Message} — disconnected");
@@ -389,33 +383,13 @@ public class STB4100
 
     private void SendStatus(int command)
     {
-        var send = new List<byte>
-        {
-            2,
-            (byte)command,
-            0
-        };
-
-        send.AddRange(BitTools.NumberToBytes(_commandCount++, 2));
-        send.Add(_outputsByte); // Outputs Byte (bits 0-3 = Output1-4)
-        send.Add(0); // Padding?
-        if (command == 14)
-        {
-            send.Add(5);
-            send.Add(0);
-        }
-        else
-        {
-            send.Add(0);
-            send.Add(0);
-        }
-            
+        var send = Stb4100Packets.BuildStatusPacket((byte)command, _commandCount++, _outputsByte);
 
         if (_stream is null)
             return;
 
         //Console.WriteLine("Status: " + string.Join(", ", send.Select(b => (int)b)));
-        try { _stream.Write([.. send]); }
+        try { _stream.Write(send); }
         catch (Exception ex)
         {
             Console.WriteLine($"[STB4100] Write error: {ex.Message} — disconnected");

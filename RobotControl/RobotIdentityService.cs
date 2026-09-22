@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Controller.RobotControl
@@ -21,27 +19,11 @@ namespace Controller.RobotControl
     {
         private static readonly string IdentityFilePath = "identity.json";
 
-        private static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            WriteIndented = true
-        };
-
         public static RobotIdentity Load()
         {
-            if (File.Exists(IdentityFilePath))
-            {
-                try
-                {
-                    string json = File.ReadAllText(IdentityFilePath);
-                    var identity = JsonSerializer.Deserialize<RobotIdentity>(json, JsonOptions);
-                    if (identity != null)
-                        return identity;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Identity] Failed to read identity.json: {ex.Message}. Regenerating.");
-                }
-            }
+            var identity = Persistence.JsonFiles.Load<RobotIdentity>(IdentityFilePath, logTag: "Identity");
+            if (identity != null)
+                return identity;
 
             var newIdentity = new RobotIdentity
             {
@@ -59,8 +41,7 @@ namespace Controller.RobotControl
         {
             try
             {
-                string json = JsonSerializer.Serialize(identity, JsonOptions);
-                Controller.RobotControl.Persistence.AtomicFile.WriteAllText(IdentityFilePath, json);
+                Persistence.JsonFiles.Save(IdentityFilePath, identity);
             }
             catch (Exception ex)
             {
