@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using OpenCvSharp;
 
 namespace Controller.RobotControl.Camera
@@ -17,12 +15,6 @@ namespace Controller.RobotControl.Camera
         // Guards _devices: Add/Remove/Update run from the API/config thread while GetState()
         // and lookups can be called concurrently from status-broadcast threads.
         private readonly object              _devicesLock = new();
-
-        private static readonly JsonSerializerOptions _json = new()
-        {
-            PropertyNameCaseInsensitive = true,
-            WriteIndented               = true,
-        };
 
         public CameraManager(string configPath)
         {
@@ -282,25 +274,13 @@ namespace Controller.RobotControl.Camera
 
         private CameraManagerConfig Load()
         {
-            try
-            {
-                if (File.Exists(_configPath))
-                {
-                    var text = File.ReadAllText(_configPath);
-                    return JsonSerializer.Deserialize<CameraManagerConfig>(text, _json)
-                           ?? new CameraManagerConfig();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[CameraManager] Failed to load config: {ex.Message}");
-            }
-            return new CameraManagerConfig();
+            return Persistence.JsonFiles.Load<CameraManagerConfig>(_configPath, logTag: "CameraManager")
+                   ?? new CameraManagerConfig();
         }
 
         private void Save()
         {
-            try { File.WriteAllText(_configPath, JsonSerializer.Serialize(_config, _json)); }
+            try { Persistence.JsonFiles.Save(_configPath, _config); }
             catch (Exception ex) { Console.WriteLine($"[CameraManager] Failed to save config: {ex.Message}"); }
         }
     }
