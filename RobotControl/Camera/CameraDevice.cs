@@ -85,8 +85,12 @@ namespace Controller.RobotControl.Camera
             if (_thread is { IsAlive: true } && _running) return;   // idempotent
 
             int gen  = Interlocked.Increment(ref _generation);
+            var prev = _thread;
             _running = true;
-            _thread  = new Thread(() => CaptureLoopGuarded(gen)) { IsBackground = true, Name = $"Camera-{Id}" };
+            // If the previous thread is still inside a blocking MSMF/V4L2 call, wait for it
+            // to finish and release the device before this one opens it. Two threads holding
+            // the same camera is exactly what made opens slow and connection state flap.
+            _thread  = new Thread(() => { prev?.Join(); CaptureLoopGuarded(gen); }) { IsBackground = true, Name = $"Camera-{Id}" };
             _thread.Start();
         }
 
@@ -96,7 +100,7 @@ namespace Controller.RobotControl.Camera
             Interlocked.Increment(ref _generation);   // invalidate the current thread even if Join times out
             var t = _thread;
             if (t != null && t != Thread.CurrentThread && !t.Join(StopJoinMs))
-                Console.WriteLine($"[Camera] {Id} capture thread is blocked in a device read; it will release the camera when the read returns");
+                Console.WriteLine($"[Camera] {Id} capture thread is still inside a device call (open/read); it will release the camera when that returns");
             FailPendingProbe();
             Connected = false;
         }
@@ -225,21 +229,17 @@ namespace Controller.RobotControl.Camera
 
         // ── Capture ────────────────────────────────────────────────────────────
 
-        // On Windows, calling Release() on a partially-initialised DSHOW VideoCapture can
-        // terminate the process — suppress the finalizer instead and let GC clean up.
-        // On Linux, V4L2 file descriptors must be explicitly released or the device stays
-        // locked and can't be reopened.
-        private static void AbandonCapture(ref VideoCapture? cap)
+        // Releases a capture that was fully opened (we read frames from it). The device must
+        // be released on every platform: a V4L2 descriptor or an MSMF source that is merely
+        // abandoned keeps the camera busy, so the next open of the same device blocks or
+        // fails. (Partially-initialised captures are handled in OpenCapture, where the
+        // finalizer is suppressed instead — releasing those can crash on Windows.)
+        private void ReleaseCapture(ref VideoCapture? cap)
         {
             if (cap == null) return;
-            if (OperatingSystem.IsWindows())
-            {
-                GC.SuppressFinalize(cap);
-            }
-            else
-            {
-                try { cap.Release(); cap.Dispose(); } catch { }
-            }
+            try { cap.Release(); }
+            catch (Exception ex) { Console.WriteLine($"[Camera] {Id} release failed: {ex.Message}"); }
+            try { cap.Dispose(); } catch { }
             cap = null;
         }
 
@@ -250,9 +250,13 @@ namespace Controller.RobotControl.Camera
             {
                 // Open by device path on Linux — more reliable than index with V4L2 and avoids
                 // "can't open camera by index" after a reconnect.
+                // On Windows use DirectShow: measured on a dev box, Media Foundation took ~7 s
+                // to open camera 0 and ~13 s more for the resolution Set calls (every open),
+                // so an added camera stayed "not connected" for ~20 s; DirectShow does the
+                // same in ~1.2 s. The static resolution probe in CameraManager uses DSHOW too.
                 cap = OperatingSystem.IsLinux()
                     ? new VideoCapture($"/dev/video{index}", VideoCaptureAPIs.V4L2)
-                    : new VideoCapture(index, VideoCaptureAPIs.MSMF);
+                    : new VideoCapture(index, VideoCaptureAPIs.DSHOW);
                 if (cap.IsOpened()) return cap;
                 GC.SuppressFinalize(cap);
                 cap = null;
@@ -265,16 +269,23 @@ namespace Controller.RobotControl.Camera
         {
             try   { CaptureLoop(generation); }
             catch (Exception ex) { Console.WriteLine($"[Camera] {Id} thread died: {ex}"); }
-            Connected = false;
-            FailPendingProbe();
+            SetConnected(generation, false);
+            if (generation == _generation) FailPendingProbe();
         }
 
         private bool ShouldRun(int generation) => _running && generation == _generation;
+
+        /// <summary>A retired thread (superseded by a later Start) must not clobber the live thread's state.</summary>
+        private void SetConnected(int generation, bool value)
+        {
+            if (generation == _generation) Connected = value;
+        }
 
         private void CaptureLoop(int generation)
         {
             var intervalMs = Math.Max(1, 1000 / Math.Max(1, TargetFps));
             VideoCapture? cap = null;   // owned by this thread; never shared
+            bool openFailureLogged = false;
 
             try
             {
@@ -284,15 +295,21 @@ namespace Controller.RobotControl.Camera
                     {
                         if (cap == null || !cap.IsOpened())
                         {
-                            Connected = false;
-                            AbandonCapture(ref cap);
+                            SetConnected(generation, false);
+                            ReleaseCapture(ref cap);
                             cap = OpenCapture(DeviceIndex);
 
                             if (cap == null)
                             {
+                                if (!openFailureLogged)
+                                {
+                                    Console.WriteLine($"[Camera] {Id} could not open device {DeviceIndex}; retrying every {ReopenDelayMs / 1000}s");
+                                    openFailureLogged = true;
+                                }
                                 Thread.Sleep(ReopenDelayMs);
                                 continue;
                             }
+                            openFailureLogged = false;
 
                             if (Width > 0 && Height > 0)
                             {
@@ -303,28 +320,31 @@ namespace Controller.RobotControl.Camera
                             Console.WriteLine($"[Camera] {Id} opened on device {DeviceIndex}");
                         }
 
+                        // A Stop/Start may have happened during the (possibly long) open above.
+                        if (!ShouldRun(generation)) break;
+
                         using var frame = new Mat();
                         if (!cap.Read(frame) || frame.Empty())
                         {
-                            Connected = false;
-                            AbandonCapture(ref cap);
+                            SetConnected(generation, false);
+                            ReleaseCapture(ref cap);
                             Thread.Sleep(ReadFailDelayMs);
                             continue;
                         }
 
-                        Connected = true;
+                        SetConnected(generation, true);
 
                         Cv2.ImEncode(".jpg", frame, out var buf, JpegParams);
                         lock (_frameLock) _latestFrame = buf;
 
                         // Probe only after a good frame, so the driver has settled after the open.
-                        ServiceProbes(cap);
+                        if (ShouldRun(generation)) ServiceProbes(cap);
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[Camera] {Id} error: {ex}");
-                        Connected = false;
-                        AbandonCapture(ref cap);
+                        SetConnected(generation, false);
+                        ReleaseCapture(ref cap);
                         Thread.Sleep(ReopenDelayMs);
                         continue;
                     }
@@ -334,8 +354,8 @@ namespace Controller.RobotControl.Camera
             }
             finally
             {
-                Connected = false;
-                AbandonCapture(ref cap);
+                SetConnected(generation, false);
+                ReleaseCapture(ref cap);
             }
         }
     }

@@ -120,12 +120,20 @@ namespace Controller.RobotControl.Camera
             lock (_devicesLock) device = _devices.FirstOrDefault(d => d.Id == id);
             if (device != null)
             {
-                bool wasEnabled = device.Enabled;
+                // Only a change that affects capture needs the device reopened; a rename
+                // must not drop the stream (and on some drivers a reopen takes seconds).
+                bool needsRestart = device.DeviceIndex != patch.DeviceIndex
+                                 || device.Width       != patch.Width
+                                 || device.Height      != patch.Height
+                                 || device.TargetFps   != patch.TargetFps
+                                 || device.Enabled     != patch.Enabled;
                 device.ApplyConfig(patch);
 
-                // Restart capture thread to pick up resolution / device index changes
-                device.Stop();
-                device.Start();
+                if (needsRestart)
+                {
+                    device.Stop();
+                    device.Start();
+                }
             }
 
             Save();
