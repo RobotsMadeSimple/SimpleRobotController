@@ -7,6 +7,19 @@ using System.Threading.Tasks;
 
 namespace Controller.RobotControl.Camera
 {
+    /// <summary>
+    /// One USB camera. A single capture thread owns the OpenCV <see cref="VideoCapture"/>
+    /// for its whole life: it opens the device, reads frames, services resolution probes
+    /// between frames, and releases the device when it exits. No other thread ever
+    /// touches the capture handle, which is what makes the lifecycle race-free.
+    ///
+    /// <para>Resolution probing used to pause the capture thread, poke the shared handle
+    /// from the caller's thread and start a replacement thread. Two overlapping probes
+    /// (the auto-probe on first connect and the app's GetCameraResolutions) could leave
+    /// two capture threads sharing one handle; the first failed read nulled it and the
+    /// other thread crashed on a null reference. Probes are now requests that the
+    /// capture thread fulfils in place.</para>
+    /// </summary>
     public class CameraDevice
     {
         public string Id          { get; }
@@ -21,12 +34,27 @@ namespace Controller.RobotControl.Camera
         public List<CameraResolution>           SupportedResolutions  { get; set; } = new();
         public Action<List<CameraResolution>>?  OnResolutionsDetected;
 
-        private volatile bool   _autoProbeScheduled;
-        private VideoCapture?   _capture;
         private byte[]?         _latestFrame;
         private readonly object _frameLock = new();
-        private Thread?         _thread;
-        private volatile bool   _running;
+
+        // Capture thread lifecycle. _generation is bumped on every Start(); a thread whose
+        // generation is stale exits at its next check, so a Stop() whose Join timed out
+        // (the thread was blocked inside a device read) can never end up sharing the
+        // device with the thread a later Start() created.
+        private Thread?       _thread;
+        private volatile bool _running;
+        private int           _generation;
+
+        // Pending resolution probe, fulfilled by the capture thread between two frames.
+        // Concurrent callers share one request.
+        private readonly object _probeLock = new();
+        private TaskCompletionSource<List<CameraResolution>>? _probeRequest;
+        private volatile bool _autoProbeDone;
+
+        private const int StopJoinMs        = 2000;
+        private const int ProbeTimeoutMs    = 15000;  // MSMF can take seconds per resolution
+        private const int ReopenDelayMs     = 3000;
+        private const int ReadFailDelayMs   = 1000;
 
         private static readonly int[] JpegParams = { (int)ImwriteFlags.JpegQuality, 75 };
 
@@ -49,26 +77,27 @@ namespace Controller.RobotControl.Camera
             SupportedResolutions = new List<CameraResolution>(cfg.SupportedResolutions);
         }
 
+        // ── Lifecycle ──────────────────────────────────────────────────────────
+
         public void Start()
         {
             if (!Enabled) return;
-            _running = true;
-            _thread  = new Thread(CaptureLoopGuarded) { IsBackground = true, Name = $"Camera-{Id}" };
-            _thread.Start();
-        }
+            if (_thread is { IsAlive: true } && _running) return;   // idempotent
 
-        private void CaptureLoopGuarded()
-        {
-            try   { CaptureLoop(); }
-            catch (Exception ex) { Console.WriteLine($"[Camera] {Id} thread died: {ex.Message}"); }
-            Connected = false;
+            int gen  = Interlocked.Increment(ref _generation);
+            _running = true;
+            _thread  = new Thread(() => CaptureLoopGuarded(gen)) { IsBackground = true, Name = $"Camera-{Id}" };
+            _thread.Start();
         }
 
         public void Stop()
         {
             _running = false;
-            _thread?.Join(2000);
-            AbandonCapture(ref _capture);
+            Interlocked.Increment(ref _generation);   // invalidate the current thread even if Join times out
+            var t = _thread;
+            if (t != null && t != Thread.CurrentThread && !t.Join(StopJoinMs))
+                Console.WriteLine($"[Camera] {Id} capture thread is blocked in a device read; it will release the camera when the read returns");
+            FailPendingProbe();
             Connected = false;
         }
 
@@ -101,55 +130,100 @@ namespace Controller.RobotControl.Camera
             SupportedResolutions = SupportedResolutions,
         };
 
+        // ── Resolution probing ─────────────────────────────────────────────────
+
         /// <summary>
-        /// Pauses the capture thread, probes supported resolutions using the already-open
-        /// capture, then restarts the thread. Returns [] if not currently connected.
+        /// Asks the capture thread to probe the supported resolutions on its open capture
+        /// and waits for the answer. Returns [] if the camera is not connected, the probe
+        /// times out, or the device is stopped while the probe is pending.
         /// </summary>
         public List<CameraResolution> ProbeResolutions()
         {
-            if (_capture == null || !_capture.IsOpened())
-                return new List<CameraResolution>();
+            if (!Connected || !_running) return new List<CameraResolution>();
 
-            bool wasRunning = _running;
-            _running = false;
-            _thread?.Join(3000);
+            TaskCompletionSource<List<CameraResolution>> request;
+            lock (_probeLock)
+            {
+                _probeRequest ??= new TaskCompletionSource<List<CameraResolution>>(TaskCreationOptions.RunContinuationsAsynchronously);
+                request = _probeRequest;
+            }
 
+            try
+            {
+                return request.Task.Wait(ProbeTimeoutMs) ? request.Task.Result : new List<CameraResolution>();
+            }
+            catch (AggregateException) { return new List<CameraResolution>(); }
+        }
+
+        private TaskCompletionSource<List<CameraResolution>>? TakePendingProbe()
+        {
+            lock (_probeLock)
+            {
+                var r = _probeRequest;
+                _probeRequest = null;
+                return r;
+            }
+        }
+
+        private void FailPendingProbe() => TakePendingProbe()?.TrySetResult(new List<CameraResolution>());
+
+        /// <summary>Runs on the capture thread only. Tries each candidate size and records what the driver accepts.</summary>
+        private List<CameraResolution> ProbeOnCaptureThread(VideoCapture cap)
+        {
             var results = new List<CameraResolution>();
             try
             {
-                var cap = _capture;
-                if (cap != null && cap.IsOpened())
+                foreach (var (w, h) in _probeResolutions)
                 {
-                    foreach (var (w, h) in _probeResolutions)
+                    cap.Set(VideoCaptureProperties.FrameWidth,  w);
+                    cap.Set(VideoCaptureProperties.FrameHeight, h);
+                    var actualW = (int)cap.Get(VideoCaptureProperties.FrameWidth);
+                    var actualH = (int)cap.Get(VideoCaptureProperties.FrameHeight);
+                    if (actualW > 0 && actualH > 0
+                        && !results.Any(r => r.Width == actualW && r.Height == actualH))
                     {
-                        cap.Set(VideoCaptureProperties.FrameWidth,  w);
-                        cap.Set(VideoCaptureProperties.FrameHeight, h);
-                        var actualW = (int)cap.Get(VideoCaptureProperties.FrameWidth);
-                        var actualH = (int)cap.Get(VideoCaptureProperties.FrameHeight);
-                        if (actualW > 0 && actualH > 0
-                            && !results.Any(r => r.Width == actualW && r.Height == actualH))
-                        {
-                            results.Add(new CameraResolution { Width = actualW, Height = actualH });
-                        }
+                        results.Add(new CameraResolution { Width = actualW, Height = actualH });
                     }
-                    if (Width > 0 && Height > 0)
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"[Camera] {Id} probe error: {ex}"); }
+            finally
+            {
+                // Always restore the configured size, even if the probe threw part-way.
+                if (Width > 0 && Height > 0)
+                {
+                    try
                     {
                         cap.Set(VideoCaptureProperties.FrameWidth,  Width);
                         cap.Set(VideoCaptureProperties.FrameHeight, Height);
                     }
+                    catch (Exception ex) { Console.WriteLine($"[Camera] {Id} could not restore resolution after probe: {ex.Message}"); }
                 }
             }
-            catch (Exception ex) { Console.WriteLine($"[Camera] {Id} probe error: {ex.Message}"); }
-
-            if (wasRunning)
-            {
-                _running = true;
-                _thread  = new Thread(CaptureLoopGuarded) { IsBackground = true, Name = $"Camera-{Id}" };
-                _thread.Start();
-            }
-
             return results.OrderBy(r => r.Width).ThenBy(r => r.Height).ToList();
         }
+
+        /// <summary>Capture thread: services a pending probe (or the first-connect auto-probe) between frames.</summary>
+        private void ServiceProbes(VideoCapture cap)
+        {
+            var request = TakePendingProbe();
+            bool auto   = !_autoProbeDone && SupportedResolutions.Count == 0;
+            if (request == null && !auto) return;
+
+            var results = ProbeOnCaptureThread(cap);
+            request?.TrySetResult(results);
+
+            if (results.Count > 0)
+            {
+                _autoProbeDone       = true;
+                SupportedResolutions = results;
+                try { OnResolutionsDetected?.Invoke(results); }
+                catch (Exception ex) { Console.WriteLine($"[Camera] {Id} OnResolutionsDetected failed: {ex}"); }
+            }
+            // An empty auto-probe result is retried on the next frame that follows a reconnect.
+        }
+
+        // ── Capture ────────────────────────────────────────────────────────────
 
         // On Windows, calling Release() on a partially-initialised DSHOW VideoCapture can
         // terminate the process — suppress the finalizer instead and let GC clean up.
@@ -187,83 +261,82 @@ namespace Controller.RobotControl.Camera
             return null;
         }
 
-        private void CaptureLoop()
+        private void CaptureLoopGuarded(int generation)
+        {
+            try   { CaptureLoop(generation); }
+            catch (Exception ex) { Console.WriteLine($"[Camera] {Id} thread died: {ex}"); }
+            Connected = false;
+            FailPendingProbe();
+        }
+
+        private bool ShouldRun(int generation) => _running && generation == _generation;
+
+        private void CaptureLoop(int generation)
         {
             var intervalMs = Math.Max(1, 1000 / Math.Max(1, TargetFps));
+            VideoCapture? cap = null;   // owned by this thread; never shared
 
-            while (_running)
+            try
             {
-                try
+                while (ShouldRun(generation))
                 {
-                    if (_capture == null || !_capture.IsOpened())
+                    try
                     {
-                        Connected = false;
-                        AbandonCapture(ref _capture);
-                        _capture = OpenCapture(DeviceIndex);
-
-                        if (_capture == null)
+                        if (cap == null || !cap.IsOpened())
                         {
-                            Thread.Sleep(3000);
+                            Connected = false;
+                            AbandonCapture(ref cap);
+                            cap = OpenCapture(DeviceIndex);
+
+                            if (cap == null)
+                            {
+                                Thread.Sleep(ReopenDelayMs);
+                                continue;
+                            }
+
+                            if (Width > 0 && Height > 0)
+                            {
+                                cap.Set(VideoCaptureProperties.FrameWidth,  Width);
+                                cap.Set(VideoCaptureProperties.FrameHeight, Height);
+                            }
+
+                            Console.WriteLine($"[Camera] {Id} opened on device {DeviceIndex}");
+                        }
+
+                        using var frame = new Mat();
+                        if (!cap.Read(frame) || frame.Empty())
+                        {
+                            Connected = false;
+                            AbandonCapture(ref cap);
+                            Thread.Sleep(ReadFailDelayMs);
                             continue;
                         }
 
-                        if (Width > 0 && Height > 0)
-                        {
-                            _capture.Set(VideoCaptureProperties.FrameWidth,  Width);
-                            _capture.Set(VideoCaptureProperties.FrameHeight, Height);
-                        }
+                        Connected = true;
 
-                        Console.WriteLine($"[Camera] {Id} opened on device {DeviceIndex}");
+                        Cv2.ImEncode(".jpg", frame, out var buf, JpegParams);
+                        lock (_frameLock) _latestFrame = buf;
 
-                        // Auto-probe resolutions on first connect
-                        if (!_autoProbeScheduled && SupportedResolutions.Count == 0)
-                        {
-                            _autoProbeScheduled = true;
-                            _ = Task.Run(() =>
-                            {
-                                Thread.Sleep(500); // let first frames stabilise
-                                var res = ProbeResolutions();
-                                if (res.Count > 0)
-                                {
-                                    SupportedResolutions = res;
-                                    OnResolutionsDetected?.Invoke(res);
-                                }
-                                else
-                                {
-                                    _autoProbeScheduled = false; // allow retry on next connect
-                                }
-                            });
-                        }
+                        // Probe only after a good frame, so the driver has settled after the open.
+                        ServiceProbes(cap);
                     }
-
-                    // Ensure Connected reflects that capture is open (covers thread restarts after probe)
-                    if (!Connected) Connected = true;
-
-                    using var frame = new Mat();
-                    if (!_capture.Read(frame) || frame.Empty())
+                    catch (Exception ex)
                     {
+                        Console.WriteLine($"[Camera] {Id} error: {ex}");
                         Connected = false;
-                        AbandonCapture(ref _capture);
-                        Thread.Sleep(1000);
+                        AbandonCapture(ref cap);
+                        Thread.Sleep(ReopenDelayMs);
                         continue;
                     }
 
-                    Cv2.ImEncode(".jpg", frame, out var buf, JpegParams);
-                    lock (_frameLock) _latestFrame = buf;
+                    Thread.Sleep(intervalMs);
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Camera] {Id} error: {ex.Message}");
-                    Connected = false;
-                    AbandonCapture(ref _capture);
-                    Thread.Sleep(3000);
-                    continue;
-                }
-
-                Thread.Sleep(intervalMs);
             }
-
-            Connected = false;
+            finally
+            {
+                Connected = false;
+                AbandonCapture(ref cap);
+            }
         }
     }
 }
