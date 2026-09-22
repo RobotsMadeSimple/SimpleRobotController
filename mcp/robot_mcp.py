@@ -663,11 +663,24 @@ def tool_robot_run_program(args):
 
 
 def tool_robot_set_output(args):
-    params = {"outputNumber": args["number"], "outputValue": bool(args["value"])}
-    if args.get("card"):
-        params["outputCard"] = args["card"]
-    ROBOT.send("SetOutput", params)
-    return _ok({"sent": "SetOutput", "params": params})
+    # "SetOutput" is a program *step* type, not a WebSocket command. Each IO card
+    # has its own command (see docs/websocket-api.md, "IO" section).
+    card   = (args.get("card") or "stb").lower()
+    number = int(args["number"])
+    value  = bool(args["value"])
+    if card == "stb":
+        cmd, params = "SetSTBOutput", {"pin": number, "value": value}
+    elif card == "nano":
+        nano_id = args.get("nanoId")
+        if not nano_id:
+            return _ok({"error": "nanoId is required when card is 'nano' (see robot_status.io.nanos)."})
+        cmd, params = "SetNanoOutput", {"nanoId": nano_id, "pin": number, "value": value}
+    elif card == "relay":
+        cmd, params = "SetRelay", {"relay": number, "value": value}
+    else:
+        return _ok({"error": f"Unknown card '{card}'. Use 'stb', 'nano' or 'relay'."})
+    ROBOT.send(cmd, params)
+    return _ok({"sent": cmd, "params": params})
 
 
 def tool_robot_raw_command(args):
@@ -790,9 +803,10 @@ TOOLS = [
 
     _t("robot_set_output",
        "DRIVES HARDWARE. Sets a digital output - grippers, valves, actuators.",
-       {"number": {"type": "integer", "description": "Output index."},
+       {"number": {"type": "integer", "description": "Output index: STB pin 1-4, Nano pin number, or relay 1-4."},
         "value":  {"type": "boolean", "description": "Target state."},
-        "card":   {"type": "string", "description": 'IO device, e.g. "STB". Omit for the default.'}},
+        "card":   {"type": "string", "description": 'IO device: "stb" (default), "nano" or "relay".'},
+        "nanoId": {"type": "string", "description": 'Nano device id, required when card is "nano".'}},
        required=["number", "value"], handler=tool_robot_set_output, gated=True),
 
     _t("robot_raw_command",
