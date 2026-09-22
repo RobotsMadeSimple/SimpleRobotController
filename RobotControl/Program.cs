@@ -54,76 +54,86 @@ class Program
             }
         );
 
-        ServiceProfile BuildProfile(RobotIdentity id)
-        {
-            var p = new ServiceProfile(id.SerialNumber, "_robot._tcp", (ushort)port);
-            p.AddProperty("ControlEndpoint", "/control");
-            p.AddProperty("SerialNumber",    id.SerialNumber);
-            p.AddProperty("RobotType",       id.RobotType);
-            p.AddProperty("RobotName",       id.RobotName);
-            return p;
-        }
-
-        var sd = new ServiceDiscovery();
-        var currentIdentity = identity;
-        var service = BuildProfile(identity);
-        sd.Advertise(service);
-
-        Console.WriteLine($"[mDNS] Advertising as '{identity.SerialNumber}._robot._tcp' " +
-                          $"(Type: '{identity.RobotType}', Name: '{identity.RobotName}')");
-
-        robotController.OnIdentityChanged = updated =>
-        {
-            _ = Task.Run(async () =>
-            {
-                currentIdentity = updated;
-                sd.Unadvertise(service);
-                await Task.Delay(250);
-                service = BuildProfile(updated);
-                sd.Advertise(service);
-                Console.WriteLine($"[mDNS] Re-advertising with Type: '{updated.RobotType}', Name: '{updated.RobotName}'");
-            });
-        };
-
-        System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, _) =>
-        {
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(2000); // wait for DHCP to assign the new IP
-                sd.Unadvertise(service);
-                await Task.Delay(250);
-                service = BuildProfile(currentIdentity);
-                sd.Advertise(service);
-                Console.WriteLine("[mDNS] Network address changed — re-advertising");
-            });
-        };
-
         var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 
         // Wire shutdown token so active WebSocket receive loops unblock immediately
         wsServer.SetShutdownToken(lifetime.ApplicationStopping);
 
-        // On shutdown: unadvertise mDNS so peers stop seeing this robot instantly
-        lifetime.ApplicationStopping.Register(() =>
+        // ── mDNS advertising ───────────────────────────────────────────────────
+        // Optional: set "enableMdns": false in robot-config.json to run without
+        // network discovery (the robot is then only reachable by direct address).
+        if (config.EnableMdns)
         {
-            Console.WriteLine("[mDNS] Unadvertising on shutdown…");
-            try { sd.Unadvertise(service); } catch { }
-            try { sd.Dispose(); } catch { }
-        });
-
-        // Periodic re-announce — exits cleanly when ApplicationStopping fires
-        _ = Task.Run(async () =>
-        {
-            try
+            ServiceProfile BuildProfile(RobotIdentity id)
             {
-                while (true)
-                {
-                    await Task.Delay(3000, lifetime.ApplicationStopping);
-                    try { sd.Announce(service); } catch { }
-                }
+                var p = new ServiceProfile(id.SerialNumber, "_robot._tcp", (ushort)port);
+                p.AddProperty("ControlEndpoint", "/control");
+                p.AddProperty("SerialNumber",    id.SerialNumber);
+                p.AddProperty("RobotType",       id.RobotType);
+                p.AddProperty("RobotName",       id.RobotName);
+                return p;
             }
-            catch (OperationCanceledException) { }
-        });
+
+            var sd = new ServiceDiscovery();
+            var currentIdentity = identity;
+            var service = BuildProfile(identity);
+            sd.Advertise(service);
+
+            Console.WriteLine($"[mDNS] Advertising as '{identity.SerialNumber}._robot._tcp' " +
+                              $"(Type: '{identity.RobotType}', Name: '{identity.RobotName}')");
+
+            robotController.OnIdentityChanged = updated =>
+            {
+                _ = Task.Run(async () =>
+                {
+                    currentIdentity = updated;
+                    sd.Unadvertise(service);
+                    await Task.Delay(250);
+                    service = BuildProfile(updated);
+                    sd.Advertise(service);
+                    Console.WriteLine($"[mDNS] Re-advertising with Type: '{updated.RobotType}', Name: '{updated.RobotName}'");
+                });
+            };
+
+            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, _) =>
+            {
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(2000); // wait for DHCP to assign the new IP
+                    sd.Unadvertise(service);
+                    await Task.Delay(250);
+                    service = BuildProfile(currentIdentity);
+                    sd.Advertise(service);
+                    Console.WriteLine("[mDNS] Network address changed — re-advertising");
+                });
+            };
+
+            // On shutdown: unadvertise mDNS so peers stop seeing this robot instantly
+            lifetime.ApplicationStopping.Register(() =>
+            {
+                Console.WriteLine("[mDNS] Unadvertising on shutdown…");
+                try { sd.Unadvertise(service); } catch { }
+                try { sd.Dispose(); } catch { }
+            });
+
+            // Periodic re-announce — exits cleanly when ApplicationStopping fires
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        await Task.Delay(3000, lifetime.ApplicationStopping);
+                        try { sd.Announce(service); } catch { }
+                    }
+                }
+                catch (OperationCanceledException) { }
+            });
+        }
+        else
+        {
+            Console.WriteLine("[mDNS] Disabled via robot-config.json (enableMdns=false) — not advertising");
+        }
 
         wsServer.Map(app);
 

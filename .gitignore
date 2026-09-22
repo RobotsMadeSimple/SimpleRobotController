@@ -427,3 +427,6 @@ RobotControl/builtPrograms.json.migrated
 RobotControl/builtPrograms/
 RobotControl/identity.json
 RobotControl/programImages/*
+# Per-machine robot configuration and local runtime data
+robot-config.json
+local-data/

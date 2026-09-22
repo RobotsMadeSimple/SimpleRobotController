@@ -69,6 +69,12 @@ namespace Controller.RobotControl
         [JsonPropertyName("m4Direction")]
         public int M4Direction { get; set; } = -1;
 
+        // ── Network discovery ─────────────────────────────────────────────────
+
+        /// <summary>Advertise this robot on the network via mDNS. Requires a restart to take effect.</summary>
+        [JsonPropertyName("enableMdns")]
+        public bool EnableMdns { get; set; } = true;
+
         // ── IO card visibility ────────────────────────────────────────────────
 
         /// <summary>Show Arduino Nano IO cards in the app.</summary>
