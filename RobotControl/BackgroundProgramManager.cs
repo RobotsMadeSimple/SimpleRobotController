@@ -35,6 +35,14 @@ namespace Controller.RobotControl
             lock (_lock) return new Dictionary<string, double>(_vars, System.StringComparer.OrdinalIgnoreCase);
         }
 
+        /// <summary>Writes every global into <paramref name="target"/> (overwriting same-named keys)
+        /// without allocating a snapshot — the per-tick evaluation path uses this.</summary>
+        public void CopyInto(Dictionary<string, double> target)
+        {
+            lock (_lock)
+                foreach (var kv in _vars) target[kv.Key] = kv.Value;
+        }
+
         public void Clear()
         {
             lock (_lock) _vars.Clear();
