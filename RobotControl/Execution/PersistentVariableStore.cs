@@ -35,7 +35,7 @@ namespace Controller.RobotControl.Execution
             {
                 try
                 {
-                    File.WriteAllText(FilePath, JsonSerializer.Serialize(values));
+                    Persistence.AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(values));
                 }
                 catch { /* best-effort */ }
             }
