@@ -77,8 +77,22 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("grid")]     public VisionZoneGrid?    Grid     { get; set; }
     }
 
+    /// <summary>
+    /// What every inspection type has in common. Lets code that only cares about identity,
+    /// enablement and zone (ordering, zone overrides, used-zone outlines) treat the six typed
+    /// lists on <see cref="VisionProgram"/> as one sequence. Not serialized — each type still
+    /// persists through its own list.
+    /// </summary>
+    public interface IVisionInspection
+    {
+        string  Id      { get; }
+        string  Name    { get; }
+        bool    Enabled { get; }
+        string? ZoneId  { get; set; }
+    }
+
     /// <summary>Blob detection run; optionally restricted to a zone by center-point containment.</summary>
-    public class BlobInspection
+    public class BlobInspection : IVisionInspection
     {
         [JsonPropertyName("id")]         public string              Id         { get; set; } = "";
         [JsonPropertyName("name")]       public string              Name       { get; set; } = "";
@@ -97,7 +111,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("tolerance")] public int    Tolerance { get; set; } = 20;
     }
 
-    public class ColorCoverageInspection
+    public class ColorCoverageInspection : IVisionInspection
     {
         [JsonPropertyName("id")]          public string           Id          { get; set; } = "";
         [JsonPropertyName("name")]        public string           Name        { get; set; } = "";
@@ -137,7 +151,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("cellsPassed")]  public int?   CellsPassed  { get; set; }
     }
 
-    public class PolygonInspection
+    public class PolygonInspection : IVisionInspection
     {
         [JsonPropertyName("id")]           public string  Id           { get; set; } = "";
         [JsonPropertyName("name")]         public string  Name         { get; set; } = "";
@@ -168,7 +182,7 @@ namespace Controller.RobotControl.Vision
     }
 
     /// <summary>Line detection inspection using Canny + HoughLinesP.</summary>
-    public class LineInspection
+    public class LineInspection : IVisionInspection
     {
         [JsonPropertyName("id")]              public string  Id              { get; set; } = "";
         [JsonPropertyName("name")]            public string  Name            { get; set; } = "";
@@ -210,7 +224,7 @@ namespace Controller.RobotControl.Vision
     }
 
     /// <summary>ArUco marker detection inspection.</summary>
-    public class ArucoInspection
+    public class ArucoInspection : IVisionInspection
     {
         [JsonPropertyName("id")]            public string  Id            { get; set; } = "";
         [JsonPropertyName("name")]          public string  Name          { get; set; } = "";
@@ -240,7 +254,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("markers")]      public List<ArucoMarkerResult> Markers      { get; set; } = new();
     }
 
-    public class BarcodeInspection
+    public class BarcodeInspection : IVisionInspection
     {
         [JsonPropertyName("id")]      public string       Id      { get; set; } = "";
         [JsonPropertyName("name")]    public string       Name    { get; set; } = "";
@@ -280,11 +294,27 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("arucoInspections")]    public List<ArucoInspection>         ArucoInspections    { get; set; } = new();
         [JsonPropertyName("lineInspections")]     public List<LineInspection>          LineInspections     { get; set; } = new();
         [JsonPropertyName("barcodeInspections")] public List<BarcodeInspection>       BarcodeInspections  { get; set; } = new();
-        // Display order of inspections as a flat list of ids across all the typed lists
-        // above. The editor lets the user drag inspections into any order; the controller
-        // only needs to preserve it round-trip (it runs each type independently).
+        // Order of inspections as a flat list of ids across all the typed lists above. The
+        // editor lets the user drag inspections into any order; the processor runs (and
+        // stacks labels) in this order. Ids missing from the list run after the listed ones,
+        // in type order (see AllInspections).
         [JsonPropertyName("inspectionOrder")]     public List<string>                 InspectionOrder     { get; set; } = new();
         [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs   { get; set; }
+
+        /// <summary>
+        /// Every inspection across the six typed lists, in type order: blob, color, polygon,
+        /// ArUco, line, barcode — each list in its stored order. Ignores InspectionOrder.
+        /// A list sent as JSON null is treated as empty.
+        /// </summary>
+        public IEnumerable<IVisionInspection> AllInspections()
+        {
+            foreach (var i in Inspections ?? [])        yield return i;
+            foreach (var i in ColorInspections ?? [])   yield return i;
+            foreach (var i in PolygonInspections ?? []) yield return i;
+            foreach (var i in ArucoInspections ?? [])   yield return i;
+            foreach (var i in LineInspections ?? [])    yield return i;
+            foreach (var i in BarcodeInspections ?? []) yield return i;
+        }
     }
 
     // ── Runtime results ───────────────────────────────────────────────────────────

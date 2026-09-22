@@ -48,12 +48,7 @@ namespace Controller.RobotControl.Vision
         {
             var clone = System.Text.Json.JsonSerializer.Deserialize<VisionProgram>(
                 System.Text.Json.JsonSerializer.Serialize(prog))!;
-            foreach (var i in clone.Inspections)        i.ZoneId = zoneId;
-            foreach (var i in clone.ColorInspections)   i.ZoneId = zoneId;
-            foreach (var i in clone.PolygonInspections) i.ZoneId = zoneId;
-            foreach (var i in clone.ArucoInspections)   i.ZoneId = zoneId;
-            foreach (var i in clone.LineInspections)    i.ZoneId = zoneId;
-            foreach (var i in clone.BarcodeInspections) i.ZoneId = zoneId;
+            foreach (var i in clone.AllInspections()) i.ZoneId = zoneId;
             return clone;
         }
 

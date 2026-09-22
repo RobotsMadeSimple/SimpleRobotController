@@ -18,7 +18,7 @@ public class VisionZoneGridTests
     [Fact]
     public void RectangleBoundsAreTheRectangle()
     {
-        var b = VisionProcessor.ZoneBounds(new VisionZoneGeometry
+        var b = ZoneGeometry.ZoneBounds(new VisionZoneGeometry
         {
             Shape = VisionZoneShape.Rectangle, X = 0.25, Y = 0.5, Width = 0.5, Height = 0.25,
         }, W, H);
@@ -30,7 +30,7 @@ public class VisionZoneGridTests
     public void CircleBoundsAreTheSquareAroundIt()
     {
         // Radius is a fraction of min(w, h) = 480, so 0.25 -> 120px.
-        var b = VisionProcessor.ZoneBounds(new VisionZoneGeometry
+        var b = ZoneGeometry.ZoneBounds(new VisionZoneGeometry
         {
             Shape = VisionZoneShape.Circle, Cx = 0.5, Cy = 0.5, Radius = 0.25,
         }, W, H);
@@ -41,7 +41,7 @@ public class VisionZoneGridTests
     [Fact]
     public void PolygonBoundsAreTheExtremes()
     {
-        var b = VisionProcessor.ZoneBounds(new VisionZoneGeometry
+        var b = ZoneGeometry.ZoneBounds(new VisionZoneGeometry
         {
             Shape  = VisionZoneShape.Polygon,
             Points = [[0.2, 0.1], [0.6, 0.3], [0.4, 0.5]],
@@ -54,7 +54,7 @@ public class VisionZoneGridTests
     public void BoundsAreClampedToTheFrame()
     {
         // A circle hanging off the top-left corner must not produce negative origins.
-        var b = VisionProcessor.ZoneBounds(new VisionZoneGeometry
+        var b = ZoneGeometry.ZoneBounds(new VisionZoneGeometry
         {
             Shape = VisionZoneShape.Circle, Cx = 0.0, Cy = 0.0, Radius = 0.25,
         }, W, H);
@@ -76,13 +76,13 @@ public class VisionZoneGridTests
         int covered = 0;
         for (int r = 0; r < rows; r++)
         for (int c = 0; c < cols; c++)
-            covered += VisionProcessor.CellRect(bounds, rows, cols, r, c).Width
-                     * VisionProcessor.CellRect(bounds, rows, cols, r, c).Height;
+            covered += ZoneGeometry.CellRect(bounds, rows, cols, r, c).Width
+                     * ZoneGeometry.CellRect(bounds, rows, cols, r, c).Height;
 
         Assert.Equal(bounds.Width * bounds.Height, covered);
 
-        var first = VisionProcessor.CellRect(bounds, rows, cols, 0, 0);
-        var last  = VisionProcessor.CellRect(bounds, rows, cols, rows - 1, cols - 1);
+        var first = ZoneGeometry.CellRect(bounds, rows, cols, 0, 0);
+        var last  = ZoneGeometry.CellRect(bounds, rows, cols, rows - 1, cols - 1);
         Assert.Equal(bounds.X, first.X);
         Assert.Equal(bounds.Y, first.Y);
         Assert.Equal(bounds.Right,  last.Right);
@@ -93,9 +93,9 @@ public class VisionZoneGridTests
     public void AdjacentCellsMeetExactly()
     {
         var bounds = new Rect(0, 0, 101, 77);
-        var a = VisionProcessor.CellRect(bounds, 4, 7, 1, 2);
-        var b = VisionProcessor.CellRect(bounds, 4, 7, 1, 3);
-        var below = VisionProcessor.CellRect(bounds, 4, 7, 2, 2);
+        var a = ZoneGeometry.CellRect(bounds, 4, 7, 1, 2);
+        var b = ZoneGeometry.CellRect(bounds, 4, 7, 1, 3);
+        var below = ZoneGeometry.CellRect(bounds, 4, 7, 2, 2);
 
         Assert.Equal(a.Right,  b.X);       // no horizontal seam
         Assert.Equal(a.Bottom, below.Y);   // no vertical seam
@@ -105,7 +105,7 @@ public class VisionZoneGridTests
     public void OneByOneGridIsTheWholeBounds()
     {
         var bounds = new Rect(5, 6, 70, 90);
-        Assert.Equal(bounds, VisionProcessor.CellRect(bounds, 1, 1, 0, 0));
+        Assert.Equal(bounds, ZoneGeometry.CellRect(bounds, 1, 1, 0, 0));
     }
 
     [Fact]
@@ -114,8 +114,8 @@ public class VisionZoneGridTests
         // The Index field of a ColorCellResult is row * cols + col, and grid editors lay
         // cells out left-to-right then top-to-bottom. Pin that the geometry agrees.
         var bounds = new Rect(0, 0, 100, 100);
-        var topRight   = VisionProcessor.CellRect(bounds, 2, 2, 0, 1);
-        var bottomLeft = VisionProcessor.CellRect(bounds, 2, 2, 1, 0);
+        var topRight   = ZoneGeometry.CellRect(bounds, 2, 2, 0, 1);
+        var bottomLeft = ZoneGeometry.CellRect(bounds, 2, 2, 1, 0);
 
         Assert.True(topRight.X > bottomLeft.X);
         Assert.True(bottomLeft.Y > topRight.Y);
