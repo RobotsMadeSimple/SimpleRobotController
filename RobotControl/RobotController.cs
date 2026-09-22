@@ -25,7 +25,17 @@ namespace Controller.RobotControl
         public STB4100 stb = new();
         private RobotIdentity _identity = new();
         public Action<RobotIdentity>? OnIdentityChanged;
-        public ScalarMotionProfiler mp = new();
+        // ── Motion error latch ────────────────────────────────────────────
+        // Set on the motion thread when a queued move cannot be executed (e.g. the
+        // named point does not exist). The program executor consumes it after each
+        // awaited move so a dropped move is never mistaken for a completed one.
+        private volatile string? _lastMotionError;
+
+        /// <summary>Records a motion-level failure for the next ConsumeMotionError() call.</summary>
+        internal void LatchMotionError(string message) => _lastMotionError = message;
+
+        /// <summary>Returns and clears the last motion error, or null if none.</summary>
+        public string? ConsumeMotionError() => Interlocked.Exchange(ref _lastMotionError, null);
         private IRobotKinematics _kinematics = new ASTROKinematics();
         private readonly ProgramCycleManager programManager = new();
         private ProgramExecutor? programExecutor;
