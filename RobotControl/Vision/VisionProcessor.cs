@@ -121,6 +121,7 @@ namespace Controller.RobotControl.Vision
                     foreach (var insp in prog.Inspections)
                     {
                         if (!insp.Enabled) continue;
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
 
                         var ir = new InspectionResult
                         {
@@ -154,6 +155,7 @@ namespace Controller.RobotControl.Vision
                         catch { /* blob detection on this inspection failed — skip */ }
 
                         result.Inspections.Add(ir);
+                        result.Timings[insp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
                     // Run color coverage inspections
@@ -161,60 +163,70 @@ namespace Controller.RobotControl.Vision
                     foreach (var colorInsp in prog.ColorInspections)
                     {
                         if (!colorInsp.Enabled) continue;
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
                         try
                         {
                             var cr = RunColorInspection(src, annotated, colorInsp, prog.Zones, ref colorLabelY);
                             result.ColorResults.Add(cr);
                         }
                         catch { /* skip failed color inspection */ }
+                        result.Timings[colorInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
                     // Run polygon inspections
                     foreach (var polyInsp in prog.PolygonInspections)
                     {
                         if (!polyInsp.Enabled) continue;
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
                         try
                         {
                             var pr = RunPolygonInspection(src, annotated, polyInsp, prog.Zones, ref colorLabelY);
                             result.PolygonResults.Add(pr);
                         }
                         catch { /* skip failed polygon inspection */ }
+                        result.Timings[polyInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
                     // Run ArUco inspections
                     foreach (var arucoInsp in prog.ArucoInspections)
                     {
                         if (!arucoInsp.Enabled) continue;
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
                         try
                         {
                             var ar = RunArucoInspection(src, annotated, arucoInsp, prog.Zones, ref colorLabelY);
                             result.ArucoResults.Add(ar);
                         }
                         catch { /* skip failed ArUco inspection */ }
+                        result.Timings[arucoInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
                     // Run line inspections
                     foreach (var lineInsp in prog.LineInspections)
                     {
                         if (!lineInsp.Enabled) continue;
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
                         try
                         {
                             var lr = RunLineInspection(src, annotated, lineInsp, prog.Zones, ref colorLabelY);
                             result.LineResults.Add(lr);
                         }
                         catch { /* skip failed line inspection */ }
+                        result.Timings[lineInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
                     // Run barcode/QR inspections
                     foreach (var barcodeInsp in prog.BarcodeInspections)
                     {
                         if (!barcodeInsp.Enabled) continue;
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
                         try
                         {
                             var br = RunBarcodeInspection(src, annotated, barcodeInsp, prog.Zones, ref colorLabelY);
                             result.BarcodeResults.Add(br);
                         }
                         catch { /* skip failed barcode inspection */ }
+                        result.Timings[barcodeInsp.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
                     }
 
                     Cv2.ImEncode(".jpg", annotated, out var buf, JpegParams);

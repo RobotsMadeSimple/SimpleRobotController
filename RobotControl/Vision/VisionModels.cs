@@ -280,6 +280,10 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("arucoInspections")]    public List<ArucoInspection>         ArucoInspections    { get; set; } = new();
         [JsonPropertyName("lineInspections")]     public List<LineInspection>          LineInspections     { get; set; } = new();
         [JsonPropertyName("barcodeInspections")] public List<BarcodeInspection>       BarcodeInspections  { get; set; } = new();
+        // Display order of inspections as a flat list of ids across all the typed lists
+        // above. The editor lets the user drag inspections into any order; the controller
+        // only needs to preserve it round-trip (it runs each type independently).
+        [JsonPropertyName("inspectionOrder")]     public List<string>                 InspectionOrder     { get; set; } = new();
         [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs   { get; set; }
     }
 
@@ -309,5 +313,8 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("arucoResults")]    public List<ArucoResult>    ArucoResults    { get; set; } = new();
         [JsonPropertyName("lineResults")]     public List<LineResult>     LineResults     { get; set; } = new();
         [JsonPropertyName("barcodeResults")] public List<BarcodeResult>  BarcodeResults  { get; set; } = new();
+        // How long each inspection took to run this frame, in milliseconds, keyed by
+        // inspection id. Shown on the editor's inspection cards.
+        [JsonPropertyName("timings")]         public Dictionary<string, double> Timings { get; set; } = new();
     }
 }
