@@ -1,3 +1,4 @@
+using Controller.RobotControl.Persistence;
 ﻿using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -408,7 +409,7 @@ namespace Controller.RobotControl
             catch (UnknownVariableException ex)
             {
                 // While-loop re-checks run outside the step dispatch, so error here directly.
-                Finish(global::ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in while-loop condition");
+                Finish(Controller.RobotControl.ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in while-loop condition");
                 return false; // exit the loop — the program is already finishing with an error
             }
         }
@@ -502,7 +503,7 @@ namespace Controller.RobotControl
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = program.Name,
-                ProgramStatus     = global::ProgramStatus.Running,
+                ProgramStatus     = Controller.RobotControl.ProgramStatus.Running,
                 CurrentStepNumber = 0,
                 MaxStepCount      = totalSteps,
                 StepDescription   = "Starting…",
@@ -522,7 +523,7 @@ namespace Controller.RobotControl
             }
             catch (UnknownVariableException ex)
             {
-                Finish(global::ProgramStatus.Error,
+                Finish(Controller.RobotControl.ProgramStatus.Error,
                     $"Unknown variable '${ex.VariableName}' in a variable's initial value");
                 return;
             }
@@ -553,7 +554,7 @@ namespace Controller.RobotControl
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = _program!.Name,
-                ProgramStatus     = global::ProgramStatus.Running,
+                ProgramStatus     = Controller.RobotControl.ProgramStatus.Running,
                 CurrentStepNumber = _globalStepIndex,
                 StepDescription   = "Resuming…",
             });
@@ -568,7 +569,7 @@ namespace Controller.RobotControl
             // Finish() tears down every wait (move, aux, vision, background, webhook).
             if (_isBackground)
             {
-                Finish(global::ProgramStatus.Stopped, "Stopped by user");
+                Finish(Controller.RobotControl.ProgramStatus.Stopped, "Stopped by user");
                 return;
             }
 
@@ -620,7 +621,7 @@ namespace Controller.RobotControl
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = _program!.Name,
-                ProgramStatus     = global::ProgramStatus.Stopped,
+                ProgramStatus     = Controller.RobotControl.ProgramStatus.Stopped,
                 CurrentStepNumber = _globalStepIndex,
                 StepDescription   = "Stopped — Continue resumes from the current step",
             });
@@ -822,7 +823,7 @@ namespace Controller.RobotControl
                     var motionError = _controller.ConsumeMotionError();
                     if (motionError != null)
                     {
-                        Finish(global::ProgramStatus.Error, motionError);
+                        Finish(Controller.RobotControl.ProgramStatus.Error, motionError);
                         return;
                     }
                     // Report the step as completed now that the move has finished
@@ -862,7 +863,7 @@ namespace Controller.RobotControl
             // Nothing left to execute?
             if (_frameStack.Count == 0)
             {
-                Finish(global::ProgramStatus.Complete, "Complete");
+                Finish(Controller.RobotControl.ProgramStatus.Complete, "Complete");
                 return;
             }
 
@@ -952,7 +953,7 @@ namespace Controller.RobotControl
             {
                 // A typo'd variable in any step field or condition stops the program with
                 // a clear error instead of silently evaluating to 0 and moving the robot.
-                Finish(global::ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in step: {StepDescription(step)}");
+                Finish(Controller.RobotControl.ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in step: {StepDescription(step)}");
             }
             catch (Exception ex)
             {
@@ -960,7 +961,7 @@ namespace Controller.RobotControl
                 // errors the program cleanly instead of escaping to the ProgramLoop, which
                 // would log it and re-run the same step on every tick.
                 Console.WriteLine($"[ProgramExecutor] Step '{StepDescription(step)}' threw: {ex}");
-                Finish(global::ProgramStatus.Error, $"{StepDescription(step)}: {ex.Message}");
+                Finish(Controller.RobotControl.ProgramStatus.Error, $"{StepDescription(step)}: {ex.Message}");
             }
         }
 
@@ -1124,7 +1125,7 @@ namespace Controller.RobotControl
                     frame.Index++;
                     break;
                 default:
-                    Finish(global::ProgramStatus.Error, $"Unsupported step type {step.Type}");
+                    Finish(Controller.RobotControl.ProgramStatus.Error, $"Unsupported step type {step.Type}");
                     break;
             }
         }
@@ -1328,17 +1329,17 @@ namespace Controller.RobotControl
             {
                 var gp   = step.GridPoint;
                 var grid = _gridRepo.Get(gp.GridId);
-                if (grid == null) { Finish(global::ProgramStatus.Error, $"Grid not found: {gp.GridId}"); return false; }
+                if (grid == null) { Finish(Controller.RobotControl.ProgramStatus.Error, $"Grid not found: {gp.GridId}"); return false; }
 
                 var basePoint = _pointRepo.Get(grid.BasePointName);
-                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Grid base point not found: {grid.BasePointName}"); return false; }
+                if (basePoint == null) { Finish(Controller.RobotControl.ProgramStatus.Error, $"Grid base point not found: {grid.BasePointName}"); return false; }
 
                 int row, col;
                 if (gp.UseGridIndex)
                 {
                     if (!grid.ColCount.HasValue || grid.ColCount.Value <= 0)
                     {
-                        Finish(global::ProgramStatus.Error, $"Grid '{grid.Name}' requires colCount to use grid index");
+                        Finish(Controller.RobotControl.ProgramStatus.Error, $"Grid '{grid.Name}' requires colCount to use grid index");
                         return false;
                     }
                     int idx = (int)Math.Round(EvalField(step, "gridGridIndex", gp.GridIndex ?? 0));
@@ -1373,10 +1374,10 @@ namespace Controller.RobotControl
             {
                 var sp    = step.StackPoint;
                 var stack = _stackRepo.Get(sp.StackId);
-                if (stack == null) { Finish(global::ProgramStatus.Error, $"Stack not found: {sp.StackId}"); return false; }
+                if (stack == null) { Finish(Controller.RobotControl.ProgramStatus.Error, $"Stack not found: {sp.StackId}"); return false; }
 
                 var basePoint = _pointRepo.Get(stack.BasePointName);
-                if (basePoint == null) { Finish(global::ProgramStatus.Error, $"Stack base point not found: {stack.BasePointName}"); return false; }
+                if (basePoint == null) { Finish(Controller.RobotControl.ProgramStatus.Error, $"Stack base point not found: {stack.BasePointName}"); return false; }
 
                 int idx = (int)Math.Round(EvalField(step, "stackIndex", sp.Index ?? 0));
                 if (stack.MaxCount.HasValue && stack.MaxCount.Value > 0)
@@ -1396,7 +1397,7 @@ namespace Controller.RobotControl
             {
                 if (!TryGetPointList(step.VarPointName, out var ptList) || ptList.Count == 0)
                 {
-                    Finish(global::ProgramStatus.Error, $"Variable point '{step.VarPointName}' is empty or not set");
+                    Finish(Controller.RobotControl.ProgramStatus.Error, $"Variable point '{step.VarPointName}' is empty or not set");
                     return false;
                 }
                 int ptIdx = 0;
@@ -1422,7 +1423,7 @@ namespace Controller.RobotControl
                 {
                     if (ptList.Count == 0)
                     {
-                        Finish(global::ProgramStatus.Error, $"Points variable '{refName}' is empty or not set");
+                        Finish(Controller.RobotControl.ProgramStatus.Error, $"Points variable '{refName}' is empty or not set");
                         return false;
                     }
 
@@ -1442,14 +1443,14 @@ namespace Controller.RobotControl
                     var targetName = InterpolateVariables(step.PointNameExpr).Trim();
                     if (string.IsNullOrEmpty(targetName))
                     {
-                        Finish(global::ProgramStatus.Error, $"Point name '{step.PointNameExpr}' resolved to nothing");
+                        Finish(Controller.RobotControl.ProgramStatus.Error, $"Point name '{step.PointNameExpr}' resolved to nothing");
                         return false;
                     }
 
                     var namedPoint = _pointRepo.Get(targetName);
                     if (namedPoint is null)
                     {
-                        Finish(global::ProgramStatus.Error, $"Point not found: {targetName} (from '{step.PointNameExpr}')");
+                        Finish(Controller.RobotControl.ProgramStatus.Error, $"Point not found: {targetName} (from '{step.PointNameExpr}')");
                         return false;
                     }
                     point = namedPoint;
@@ -1469,7 +1470,7 @@ namespace Controller.RobotControl
                 var found = _pointRepo.Get(step.PointName);
                 if (found is null)
                 {
-                    Finish(global::ProgramStatus.Error, $"Point not found: {step.PointName}");
+                    Finish(Controller.RobotControl.ProgramStatus.Error, $"Point not found: {step.PointName}");
                     return false;
                 }
                 point = found;
@@ -1640,7 +1641,7 @@ namespace Controller.RobotControl
 
                 if (!jumpZ.HasValue && !jumpZStart.HasValue)
                 {
-                    Finish(global::ProgramStatus.Error, "Jump step: JumpZ must be set");
+                    Finish(Controller.RobotControl.ProgramStatus.Error, "Jump step: JumpZ must be set");
                     return;
                 }
 
@@ -1731,7 +1732,7 @@ namespace Controller.RobotControl
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName        = _program!.Name,
-                ProgramStatus      = global::ProgramStatus.Running,
+                ProgramStatus      = Controller.RobotControl.ProgramStatus.Running,
                 CurrentStepNumber  = _globalStepIndex,
                 StepDescription    = !string.IsNullOrEmpty(step.StatusMessage)
                     ? InterpolateVariables(step.StatusMessage)
@@ -1976,7 +1977,7 @@ namespace Controller.RobotControl
             var programId = step.VisionProgramId;
             if (string.IsNullOrEmpty(programId))
             {
-                Finish(global::ProgramStatus.Error, "RunVision step has no vision program selected");
+                Finish(Controller.RobotControl.ProgramStatus.Error, "RunVision step has no vision program selected");
                 return;
             }
 
@@ -1991,7 +1992,7 @@ namespace Controller.RobotControl
                 _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
                 {
                     ProgramName       = _program!.Name,
-                    ProgramStatus     = global::ProgramStatus.Running,
+                    ProgramStatus     = Controller.RobotControl.ProgramStatus.Running,
                     CurrentStepNumber = _globalStepIndex,
                     StepDescription   = $"Vision → {step.VisionProgramName ?? programId}",
                 });
@@ -2005,7 +2006,7 @@ namespace Controller.RobotControl
                 // Processor was stopped externally — treat as error
                 _awaitingVision  = false;
                 _visionProgramId = null;
-                Finish(global::ProgramStatus.Error, $"Vision processor lost for '{step.VisionProgramName}'");
+                Finish(Controller.RobotControl.ProgramStatus.Error, $"Vision processor lost for '{step.VisionProgramName}'");
                 return;
             }
 
@@ -2017,7 +2018,7 @@ namespace Controller.RobotControl
                 // 0 or less waits forever).
                 int timeout = step.WaitTimeoutMs ?? DefaultVisionTimeoutMs;
                 if (timeout > 0 && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _visionStartMs >= timeout)
-                    Finish(global::ProgramStatus.Error,
+                    Finish(Controller.RobotControl.ProgramStatus.Error,
                         $"Vision → {step.VisionProgramName ?? programId}: no result within {timeout} ms");
                 return;
             }
@@ -2137,7 +2138,7 @@ namespace Controller.RobotControl
             routine ??= _builtProgramRepo.Get(step.RoutineName ?? "");
             if (routine is null)
             {
-                Finish(global::ProgramStatus.Error, $"Routine not found: {step.RoutineName}");
+                Finish(Controller.RobotControl.ProgramStatus.Error, $"Routine not found: {step.RoutineName}");
                 return;
             }
             if (routine.Steps.Count == 0) { frame.Index++; ReportStepCompleted(step); return; }
@@ -2578,7 +2579,7 @@ namespace Controller.RobotControl
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName         = _program!.Name,
-                ProgramStatus       = global::ProgramStatus.Stopped,
+                ProgramStatus       = Controller.RobotControl.ProgramStatus.Stopped,
                 CurrentStepNumber   = _globalStepIndex,
                 StepDescription     = "Paused — press Continue to resume",
                 CurrentPointName    = "",
@@ -2600,7 +2601,7 @@ namespace Controller.RobotControl
         {
             if (string.IsNullOrEmpty(step.LabelId))
             {
-                Finish(global::ProgramStatus.Error, "GoToLabel: no label ID set");
+                Finish(Controller.RobotControl.ProgramStatus.Error, "GoToLabel: no label ID set");
                 return;
             }
 
@@ -2628,7 +2629,7 @@ namespace Controller.RobotControl
                 }
             }
 
-            Finish(global::ProgramStatus.Error,
+            Finish(Controller.RobotControl.ProgramStatus.Error,
                 $"GoToLabel: label '{step.LabelName ?? step.LabelId}' not found");
         }
 
@@ -2761,7 +2762,7 @@ namespace Controller.RobotControl
             else
             {
                 var local = _localRepo.Get(step.LocalName);
-                if (local is null) { Finish(global::ProgramStatus.Error, $"Local not found: {step.LocalName}"); return; }
+                if (local is null) { Finish(Controller.RobotControl.ProgramStatus.Error, $"Local not found: {step.LocalName}"); return; }
                 _activeLocal = new Vector6(local.X, local.Y, local.Z, local.RX, local.RY, local.RZ);
             }
             ReportStepCompleted(step);
@@ -3059,7 +3060,7 @@ namespace Controller.RobotControl
             var frameBytes = camera?.GetLatestFrame();
             if (frameBytes == null || frameBytes.Length == 0)
             {
-                Finish(global::ProgramStatus.Error,
+                Finish(Controller.RobotControl.ProgramStatus.Error,
                     $"SaveImage: no frame available from camera '{(string.IsNullOrEmpty(cameraId) ? "default" : cameraId)}'");
                 return;
             }
@@ -3073,7 +3074,7 @@ namespace Controller.RobotControl
             }
             catch (Exception ex)
             {
-                Finish(global::ProgramStatus.Error, $"SaveImage failed writing '{resolvedPath}': {ex.Message}");
+                Finish(Controller.RobotControl.ProgramStatus.Error, $"SaveImage failed writing '{resolvedPath}': {ex.Message}");
                 return;
             }
 
@@ -3215,12 +3216,12 @@ namespace Controller.RobotControl
             var cameraId = step.CaptureImageCameraId ?? "";
             if (string.IsNullOrWhiteSpace(varName))
             {
-                Finish(global::ProgramStatus.Error, "CaptureImage step has no target variable set");
+                Finish(Controller.RobotControl.ProgramStatus.Error, "CaptureImage step has no target variable set");
                 return;
             }
             if (!_imageVariables.ContainsKey(varName))
             {
-                Finish(global::ProgramStatus.Error, $"CaptureImage: variable '{varName}' is not an image variable");
+                Finish(Controller.RobotControl.ProgramStatus.Error, $"CaptureImage: variable '{varName}' is not an image variable");
                 return;
             }
             var camera = string.IsNullOrEmpty(cameraId)
@@ -3229,7 +3230,7 @@ namespace Controller.RobotControl
             var frameBytes = camera?.GetLatestFrame();
             if (frameBytes == null || frameBytes.Length == 0)
             {
-                Finish(global::ProgramStatus.Error,
+                Finish(Controller.RobotControl.ProgramStatus.Error,
                     $"CaptureImage: no frame available from camera '{(string.IsNullOrEmpty(cameraId) ? "default" : cameraId)}'");
                 return;
             }
@@ -3247,7 +3248,7 @@ namespace Controller.RobotControl
                 var name = step.HttpReceiveName ?? "";
                 if (string.IsNullOrWhiteSpace(name))
                 {
-                    Finish(global::ProgramStatus.Error, "HttpReceive step has no webhook name set");
+                    Finish(Controller.RobotControl.ProgramStatus.Error, "HttpReceive step has no webhook name set");
                     return;
                 }
                 var cts = new CancellationTokenSource(step.HttpReceiveTimeoutMs ?? 30_000);
@@ -3275,7 +3276,7 @@ namespace Controller.RobotControl
 
             if (result == null)
             {
-                Finish(global::ProgramStatus.Error,
+                Finish(Controller.RobotControl.ProgramStatus.Error,
                     $"HttpReceive: timeout waiting for webhook '{step.HttpReceiveName}'");
                 return;
             }
@@ -3426,7 +3427,7 @@ namespace Controller.RobotControl
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName          = _program!.Name,
-                ProgramStatus        = global::ProgramStatus.Running,
+                ProgramStatus        = Controller.RobotControl.ProgramStatus.Running,
                 CurrentStepNumber    = _globalStepIndex,
                 StepDescription      = desc,
                 WarningDescription   = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
@@ -3455,7 +3456,7 @@ namespace Controller.RobotControl
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName        = _program!.Name,
-                ProgramStatus      = global::ProgramStatus.Running,
+                ProgramStatus      = Controller.RobotControl.ProgramStatus.Running,
                 CurrentStepNumber  = _globalStepIndex,
                 StepDescription    = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step),
                 WarningDescription = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
@@ -3464,7 +3465,7 @@ namespace Controller.RobotControl
             });
         }
 
-        private void Finish(global::ProgramStatus status, string description)
+        private void Finish(Controller.RobotControl.ProgramStatus status, string description)
         {
             SavePersistentVars();
             int finalStepIndex = _globalStepIndex;
@@ -3474,7 +3475,7 @@ namespace Controller.RobotControl
             // time; a background executor stops ticking, so it reverts now). Any other
             // ending cancels it along with the rest of the run state.
             List<(long DueMs, Action Flip)>? keptFlips = null;
-            if (status == global::ProgramStatus.Complete && _outputFlips.Count > 0)
+            if (status == Controller.RobotControl.ProgramStatus.Complete && _outputFlips.Count > 0)
             {
                 if (_isBackground) FireAllOutputFlips();
                 else keptFlips = new(_outputFlips);
@@ -3496,7 +3497,7 @@ namespace Controller.RobotControl
                 ProgramStatus        = status,
                 CurrentStepNumber    = finalStepIndex,
                 StepDescription      = description,
-                ErrorDescription     = status == global::ProgramStatus.Error ? description : null,
+                ErrorDescription     = status == Controller.RobotControl.ProgramStatus.Error ? description : null,
                 CurrentPointName  = "",
                 CurrentOffsetX   = null, CurrentOffsetY  = null, CurrentOffsetZ  = null,
                 CurrentOffsetRX  = null, CurrentOffsetRY = null, CurrentOffsetRZ = null,

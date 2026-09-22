@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+namespace Controller.RobotControl.Persistence;
+
 /// <summary>
 /// Persists built programs to disk as individual JSON files under builtPrograms/.
 /// Program images are stored as separate JPEG files under programImages/.
@@ -54,7 +56,7 @@ public class BuiltProgramRepository
 
                     var dest = ProgramPath(p.Name);
                     if (!File.Exists(dest))
-                        Controller.RobotControl.Persistence.AtomicFile.WriteAllText(dest, JsonSerializer.Serialize(p, _opts));
+                        AtomicFile.WriteAllText(dest, JsonSerializer.Serialize(p, _opts));
                 }
             }
             // Rename so migration doesn't re-run on next boot
@@ -164,7 +166,7 @@ public class BuiltProgramRepository
 
     private void WriteFile(BuiltProgram program)
     {
-        Controller.RobotControl.Persistence.AtomicFile.WriteAllText(ProgramPath(program.Name), JsonSerializer.Serialize(program, _opts));
+        AtomicFile.WriteAllText(ProgramPath(program.Name), JsonSerializer.Serialize(program, _opts));
         LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 
@@ -240,7 +242,7 @@ public class BuiltProgramRepository
     public void SaveImage(string name, byte[] bytes)
     {
         Directory.CreateDirectory(_imageDir);
-        Controller.RobotControl.Persistence.AtomicFile.WriteAllBytes(ImagePath(name), bytes);
+        AtomicFile.WriteAllBytes(ImagePath(name), bytes);
     }
 
     public byte[]? GetImage(string name)

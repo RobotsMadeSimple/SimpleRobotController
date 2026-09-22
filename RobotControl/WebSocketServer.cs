@@ -1,9 +1,11 @@
-﻿using System.Net.WebSockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+
+namespace Controller.RobotControl.Hosting;
 
 public class RobotWebSocketServer
 {

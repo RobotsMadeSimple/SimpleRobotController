@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 // ── Aux Axis command params ────────────────────────────────────────────────────
 
 public class MoveAuxParams

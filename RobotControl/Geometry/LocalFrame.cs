@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 /// <summary>
 /// Rigid local frame transform. Positions get the FULL rotation (R = Rz·Ry·Rx,
 /// degrees) plus translation — a tilted frame maps local XY motion onto a

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 // ── Named-vector identity contract (shared by Point and Tool) ─────────────────
 
 public interface INamedVector

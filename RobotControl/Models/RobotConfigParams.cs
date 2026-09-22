@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 public class SetRobotIdentityParams
 {
     [JsonPropertyName("robotName")] public string? RobotName { get; set; }

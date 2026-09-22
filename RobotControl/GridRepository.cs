@@ -1,4 +1,5 @@
-using Controller.RobotControl.Persistence;
+
+namespace Controller.RobotControl.Persistence;
 
 /// <summary>Persists named grids to grids.json. All behaviour lives in <see cref="JsonListRepository{T}"/>.</summary>
 public class GridRepository : JsonListRepository<Grid>

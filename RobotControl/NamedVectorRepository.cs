@@ -5,6 +5,8 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 
+namespace Controller.RobotControl.Persistence;
+
 /// <summary>
 /// Generic base repository for any named Vector6-derived entity (Point, Tool, …).
 /// Handles JSON persistence, full CRUD, and a rolling 10-entry history per item.
@@ -86,7 +88,7 @@ public abstract class NamedVectorRepository<TItem, TEntry>
         catch (Exception ex)
         {
             // File exists but is corrupt or invalid — keep it aside for recovery, start fresh
-            Controller.RobotControl.Persistence.JsonFiles.QuarantineCorrupt(_itemsFile, ex, GetType().Name);
+            JsonFiles.QuarantineCorrupt(_itemsFile, ex, GetType().Name);
             _items = new();
             SaveItems();
         }
@@ -96,7 +98,7 @@ public abstract class NamedVectorRepository<TItem, TEntry>
     {
         LastUpdatedUnixMs = NowUnixMs();
         ItemsJson         = JsonSerializer.Serialize(_items.Values.ToList(), _jsonOptions);
-        Controller.RobotControl.Persistence.AtomicFile.WriteAllText(_itemsFile, ItemsJson);
+        AtomicFile.WriteAllText(_itemsFile, ItemsJson);
     }
 
     private void LoadHistory()
@@ -111,14 +113,14 @@ public abstract class NamedVectorRepository<TItem, TEntry>
         catch (Exception ex)
         {
             // File exists but is corrupt or invalid — keep it aside for recovery, start fresh
-            Controller.RobotControl.Persistence.JsonFiles.QuarantineCorrupt(_historyFile, ex, GetType().Name);
+            JsonFiles.QuarantineCorrupt(_historyFile, ex, GetType().Name);
             _history = new();
             SaveHistory();
         }
     }
 
     private void SaveHistory()
-        => Controller.RobotControl.Persistence.AtomicFile.WriteAllText(_historyFile, JsonSerializer.Serialize(_history, _jsonOptions));
+        => AtomicFile.WriteAllText(_historyFile, JsonSerializer.Serialize(_history, _jsonOptions));
 
     // ── CRUD ─────────────────────────────────────────────────────────────────
 

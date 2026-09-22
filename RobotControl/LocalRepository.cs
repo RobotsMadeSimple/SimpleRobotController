@@ -1,3 +1,4 @@
+namespace Controller.RobotControl.Persistence;
 /// <summary>
 /// Persists named work-frame coordinate systems (Local).
 /// All CRUD and history logic lives in NamedVectorRepository&lt;Local, LocalHistoryEntry&gt;.

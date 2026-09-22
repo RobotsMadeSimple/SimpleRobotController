@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 public class Vector6
 {
     public Vector6(double x=0, double y=0, double z=0, double rx=0, double ry=0, double rz=0) {

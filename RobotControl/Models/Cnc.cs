@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 /// <summary>Hole position for CNC threading (robot coordinates, mm).</summary>
 public class CncHole
 {

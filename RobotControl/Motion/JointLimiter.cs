@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 /// <summary>
 /// Pure joint soft-limit clamping. Operates on the four joint-space components
 /// of the target vector — index 0 = X (ASTRO J1 / CNC X), 1 = Y (ASTRO radial /

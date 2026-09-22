@@ -1,3 +1,4 @@
+namespace Controller.RobotControl.Controllers.STB4100;
 public class StepperMotor
 {
     public int StepsPerRev { get; private set; }

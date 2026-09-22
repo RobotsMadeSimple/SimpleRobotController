@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 /// <summary>
 /// One record in an object-list variable: named numeric fields, read in expressions as
 /// <c>$cells[$i].coverage</c>. Numbers only — booleans are 0/1 — because expressions

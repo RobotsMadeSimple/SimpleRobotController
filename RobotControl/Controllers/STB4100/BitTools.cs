@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+namespace Controller.RobotControl.Controllers.STB4100;
 
 public static class BitTools
 {

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+namespace Controller.RobotControl;
+
 // ── Stack ─────────────────────────────────────────────────────────────────────
 
 /// <summary>A 1-D positional array — position = basePoint + index × offset.</summary>

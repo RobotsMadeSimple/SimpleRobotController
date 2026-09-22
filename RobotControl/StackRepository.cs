@@ -1,4 +1,5 @@
-using Controller.RobotControl.Persistence;
+
+namespace Controller.RobotControl.Persistence;
 
 /// <summary>Persists named stacks to stacks.json. All behaviour lives in <see cref="JsonListRepository{T}"/>.</summary>
 public class StackRepository : JsonListRepository<RobotStack>

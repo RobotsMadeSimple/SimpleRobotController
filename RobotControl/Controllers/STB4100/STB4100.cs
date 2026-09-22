@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net.NetworkInformation;
 using System.Threading;
+namespace Controller.RobotControl.Controllers.STB4100;
 
 public class STB4100
 {
