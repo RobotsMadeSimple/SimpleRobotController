@@ -55,7 +55,8 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("invertDirection")] public bool   InvertDirection { get; set; } = false;
         // Rotary (degrees) or Linear (mm). Unconfigured = use raw steps. Serialized as
         // "Rotary" / "Linear" / "" — see AuxAxisTypeJsonConverter.
-        [JsonPropertyName("axisType")]        public AuxAxisType AxisType   { get; set; } = AuxAxisType.Unconfigured;
+        [JsonPropertyName("axisType"), JsonConverter(typeof(AuxAxisTypeJsonConverter))]
+        public AuxAxisType AxisType { get; set; } = AuxAxisType.Unconfigured;
         [JsonPropertyName("gearRatio")]       public double GearRatio       { get; set; } = 1.0;
         // Only used when AxisType == Linear
         [JsonPropertyName("mmPerRev")]        public double MmPerRev        { get; set; } = 0.0;
@@ -96,7 +97,8 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("position")]        public long   Position        { get; set; }
         [JsonPropertyName("stepsPerRev")]     public int    StepsPerRev     { get; set; } = 1600;
         [JsonPropertyName("invertDirection")] public bool   InvertDirection { get; set; } = false;
-        [JsonPropertyName("axisType")]        public AuxAxisType AxisType   { get; set; } = AuxAxisType.Unconfigured;
+        [JsonPropertyName("axisType"), JsonConverter(typeof(AuxAxisTypeJsonConverter))]
+        public AuxAxisType AxisType { get; set; } = AuxAxisType.Unconfigured;
         [JsonPropertyName("gearRatio")]       public double GearRatio       { get; set; } = 1.0;
         [JsonPropertyName("mmPerRev")]        public double MmPerRev        { get; set; } = 0.0;
     }

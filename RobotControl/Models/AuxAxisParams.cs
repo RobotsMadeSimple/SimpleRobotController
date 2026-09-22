@@ -50,7 +50,8 @@ public class SetAuxAxisConfigParams
     [JsonPropertyName("name")]           public string Name           { get; set; } = "";
     [JsonPropertyName("stepsPerRev")]    public int    StepsPerRev    { get; set; } = 1600;
     [JsonPropertyName("invertDirection")]public bool   InvertDirection{ get; set; } = false;
-    [JsonPropertyName("axisType")]       public AuxAxis.AuxAxisType AxisType { get; set; } = AuxAxis.AuxAxisType.Unconfigured;
+    [JsonPropertyName("axisType"), JsonConverter(typeof(AuxAxis.AuxAxisTypeJsonConverter))]
+    public AuxAxis.AuxAxisType AxisType { get; set; } = AuxAxis.AuxAxisType.Unconfigured;
     [JsonPropertyName("gearRatio")]      public double GearRatio      { get; set; } = 1.0;
     [JsonPropertyName("mmPerRev")]       public double MmPerRev       { get; set; } = 0.0;
 }
