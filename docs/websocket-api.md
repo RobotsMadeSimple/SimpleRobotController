@@ -32,6 +32,15 @@ Every command receives an ACK. Commands that return data merge it into the ACK:
 { "type": "ack", "command": "<CommandName>", "id": "any-correlation-id", "ok": true, "<data>": ... }
 ```
 
+A command that fails (unknown name, missing or malformed `params`, or an
+exception while handling it) still gets an ACK, with `ok: false` and a message:
+
+```json
+{ "type": "ack", "command": "<CommandName>", "id": "any-correlation-id", "ok": false, "error": "unknownCommand" }
+```
+
+The socket stays open; only that one command is rejected.
+
 The controller also **broadcasts** `GetStatus`-style state to all clients on a
 timer, so most UIs poll `GetStatus` rather than reacting to individual ACKs.
 

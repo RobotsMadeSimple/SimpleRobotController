@@ -364,9 +364,15 @@ program variables.
 | `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar, cellsVar, cellsPassedVar }`. |
 | `polygonOutputs` | Polygon/shape → `{ inspectionId, countVar, foundVar, angleVar, centerXVar, centerYVar }`. |
 | `arucoOutputs` | ArUco markers → `{ inspectionId, countVar, foundVar, firstIdVar, firstCenterXVar, firstCenterYVar }`. |
+| `waitTimeoutMs` | Max time to wait for a fresh vision result (default 30 000 ms; `0` or less waits forever). Expiry ends the program with an error. |
 
 Each `*Var` names a program variable that receives that result (counts, points,
 booleans, angles, coordinates).
+
+If an inspection throws while processing a frame, the vision result carries an
+`errors` entry (`"<inspectionId>: <message>"`) and that inspection reports no
+detections for the frame; check the vision program's editor card or the
+controller log when an output stays at zero unexpectedly.
 
 #### Zone grids
 
