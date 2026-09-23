@@ -68,7 +68,9 @@ internal sealed class IoCommands
     private void RenameNanoPin(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<RenameNanoPinParams>(msg);
-        _robot.NanoManager.RenamePin(p.NanoId, p.Pin, p.Name);
+        if (!_robot.NanoManager.RenamePin(p.NanoId, p.Pin, p.Name))
+            throw new InvalidOperationException(
+                $"Nano is not connected (or pin {p.Pin} is not configured) — the name was not saved.");
     }
 
     private void ConfigureNanoPin(CommandMessage msg)
@@ -81,7 +83,11 @@ internal sealed class IoCommands
             "Unconfigured" => PinType.Unconfigured,
             _              => PinType.Input,
         };
-        _robot.NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount);
+        // SetPinType returns false when the device isn't live — surface that
+        // instead of ACKing a save that silently changed nothing.
+        if (!_robot.NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount))
+            throw new InvalidOperationException(
+                $"Nano is not connected — pin {p.Pin} was not saved.");
     }
 
     private void SetRelay(CommandMessage msg)
