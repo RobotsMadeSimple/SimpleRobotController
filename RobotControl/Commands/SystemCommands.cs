@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Controller.RobotControl.UsbRelay;
 
@@ -249,53 +250,152 @@ internal sealed class SystemCommands
     {
         _ = Task.Run(async () =>
         {
-            await Task.Delay(500);
+            await Task.Delay(500); // let the ack go out first
             try
             {
-                // On a dev machine the project source sits three levels above the
-                // build output (…/RobotControl/bin/<Config>/net10.0/). When it's
-                // present, rebuild the latest code and relaunch the fresh binary
-                // instead of re-running the stale one. In production (published,
-                // no .csproj) we just relaunch the current binary as before.
-                var baseDir    = AppContext.BaseDirectory;
-                var projectDir = Path.GetFullPath(Path.Combine(baseDir, "..", "..", ".."));
-                var csproj     = Directory.Exists(projectDir)
-                    ? Directory.GetFiles(projectDir, "*.csproj").FirstOrDefault()
-                    : null;
-                var exePath = Environment.ProcessPath;
-
-                if (csproj != null && exePath != null)
-                {
-                    var sep    = Path.DirectorySeparatorChar;
-                    var config = baseDir.Contains($"{sep}Release{sep}") ? "Release" : "Debug";
-                    var psi = new System.Diagnostics.ProcessStartInfo
-                    {
-                        UseShellExecute  = true,
-                        WorkingDirectory = projectDir,
-                    };
-                    if (OperatingSystem.IsWindows())
-                    {
-                        // Wait for this process to release its own binary, rebuild, then relaunch.
-                        psi.FileName  = "cmd.exe";
-                        psi.Arguments = $"/c timeout /t 2 /nobreak >nul & dotnet build \"{csproj}\" -c {config} --nologo && start \"\" \"{exePath}\"";
-                    }
-                    else
-                    {
-                        psi.FileName  = "/bin/bash";
-                        psi.Arguments = $"-c \"sleep 2 && dotnet build '{csproj}' -c {config} --nologo && nohup '{exePath}' >/dev/null 2>&1 &\"";
-                    }
-                    System.Diagnostics.Process.Start(psi);
-                }
-                else if (exePath != null)
-                {
-                    System.Diagnostics.Process.Start(exePath);
-                }
+                RestartPlan.Execute();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Restart] Failed: {ex.Message}");
+                Console.WriteLine($"[Restart] Failed to launch the replacement: {ex}");
             }
+            Console.WriteLine("[Restart] Exiting.");
             Environment.Exit(0);
         });
+    }
+}
+
+/// <summary>
+/// Relaunches the controller with the same arguments and working directory.
+///
+/// On a dev box (the project's .csproj sits three levels above the build output) the
+/// helper script first rebuilds so the fresh code runs; the rebuild is best-effort — a
+/// missing SDK or a compile error must never leave the robot without a controller, so
+/// the existing binary is relaunched either way. The script waits for this process to
+/// exit before building/launching (the binary and the port are ours until then).
+///
+/// Under systemd (INVOCATION_ID is set) the unit has Restart=always, so the right move
+/// is simply to exit and let systemd bring the service back; spawning a child there
+/// would race it for the port.
+/// </summary>
+internal static class RestartPlan
+{
+    public static void Execute()
+    {
+        var exePath = Environment.ProcessPath ?? throw new InvalidOperationException("ProcessPath is unknown");
+        var args    = Environment.GetCommandLineArgs().Skip(1).ToArray();
+        var cwd     = Directory.GetCurrentDirectory();
+        var pid     = Environment.ProcessId;
+
+        var baseDir    = AppContext.BaseDirectory;
+        var projectDir = Path.GetFullPath(Path.Combine(baseDir, "..", "..", ".."));
+        var csproj     = Directory.Exists(projectDir) ? Directory.GetFiles(projectDir, "*.csproj").FirstOrDefault() : null;
+        var config     = baseDir.Contains($"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}") ? "Release" : "Debug";
+
+        if (!OperatingSystem.IsWindows() && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("INVOCATION_ID")))
+        {
+            Console.WriteLine("[Restart] Running under systemd — exiting and letting the service manager restart the controller.");
+            return;
+        }
+
+        var scriptPath = Path.Combine(cwd, OperatingSystem.IsWindows() ? "restart-controller.cmd" : "restart-controller.sh");
+        var script     = OperatingSystem.IsWindows()
+            ? WindowsScript(pid, exePath, args, cwd, csproj, config)
+            : UnixScript(pid, exePath, args, cwd, csproj, config);
+        File.WriteAllText(scriptPath, script);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        Console.WriteLine($"[Restart] {(csproj != null ? "Rebuilding and relaunching" : "Relaunching")} via {scriptPath}");
+        Console.WriteLine($"[Restart]   exe:  {exePath}");
+        Console.WriteLine($"[Restart]   args: {string.Join(" ", args)}");
+        Console.WriteLine($"[Restart]   cwd:  {cwd}");
+
+        // The helper must outlive this process. A child that shares our console dies
+        // with it on Windows (the console is destroyed when we exit), so launch it
+        // through ShellExecute, which gives cmd.exe a console of its own (hidden). On
+        // Linux a throwaway shell backgrounds it with nohup so it is not our child
+        // by the time we exit and cannot be hung up with us.
+        var psi = new ProcessStartInfo { WorkingDirectory = cwd };
+        if (OperatingSystem.IsWindows())
+        {
+            psi.UseShellExecute = true;
+            psi.WindowStyle     = ProcessWindowStyle.Hidden;
+            // Absolute path: the controller may have inherited a PATH without System32
+            // (e.g. launched from a minimal shell), and ShellExecute would then fail to
+            // find a bare "cmd.exe".
+            psi.FileName        = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            psi.Arguments       = $"/c \"\"{scriptPath}\"\"";
+        }
+        else
+        {
+            psi.UseShellExecute = false;
+            psi.FileName        = "/bin/bash";
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add($"nohup /bin/bash '{scriptPath.Replace("'", "'\\''")}' >/dev/null 2>&1 &");
+        }
+        Process.Start(psi);
+    }
+
+    /// <summary>The dotnet host to build with: the one that launched us if we run under the muxer,
+    /// else the machine-wide install, else whatever "dotnet" resolves to on the script's PATH.</summary>
+    private static string DotnetHost()
+    {
+        var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+        if (!string.IsNullOrEmpty(host) && File.Exists(host)) return host;
+        if (OperatingSystem.IsWindows())
+        {
+            var pf = Environment.GetEnvironmentVariable("ProgramFiles");
+            var candidate = string.IsNullOrEmpty(pf) ? null : Path.Combine(pf, "dotnet", "dotnet.exe");
+            if (candidate != null && File.Exists(candidate)) return candidate;
+        }
+        else
+        {
+            foreach (var c in new[] { "/usr/bin/dotnet", "/usr/share/dotnet/dotnet", "/usr/lib/dotnet/dotnet",
+                                      Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "dotnet") })
+                if (File.Exists(c)) return c;
+        }
+        return "dotnet";
+    }
+
+    private static string WindowsScript(int pid, string exe, string[] args, string cwd, string? csproj, string config)
+    {
+        static string Q(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+        // Every step appends to restart-controller.log next to the script, so a restart
+        // that does not come back can be diagnosed from the data directory.
+        var log = Q(Path.Combine(cwd, "restart-controller.log"));
+        var sys = Environment.SystemDirectory;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("@echo off");
+        sb.AppendLine($"rem Waits for controller PID {pid} to exit, rebuilds (best effort), relaunches with the same arguments.");
+        sb.AppendLine($"echo [%date% %time%] helper started for PID {pid}>> {log}");
+        sb.AppendLine(":wait");
+        sb.AppendLine($"{Q(Path.Combine(sys, "tasklist.exe"))} /FI \"PID eq {pid}\" 2>nul | {Q(Path.Combine(sys, "find.exe"))} \"{pid}\" >nul && ({Q(Path.Combine(sys, "timeout.exe"))} /t 1 /nobreak >nul & goto wait)");
+        sb.AppendLine($"echo [%time%] old process gone>> {log}");
+        if (csproj != null)
+        {
+            sb.AppendLine($"echo [%time%] building {config}>> {log}");
+            sb.AppendLine($"{Q(DotnetHost())} build {Q(csproj)} -c {config} --nologo >> {log} 2>&1");
+            sb.AppendLine($"echo [%time%] build exit %errorlevel%>> {log}");
+        }
+        sb.AppendLine($"cd /d {Q(cwd)}");
+        sb.AppendLine($"start \"\" /D {Q(cwd)} {Q(exe)} {string.Join(" ", args.Select(Q))}");
+        sb.AppendLine($"echo [%time%] launched %errorlevel%>> {log}");
+        sb.AppendLine("exit /b 0");
+        return sb.ToString();
+    }
+
+    private static string UnixScript(int pid, string exe, string[] args, string cwd, string? csproj, string config)
+    {
+        static string Q(string s) => "'" + s.Replace("'", "'\''") + "'";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("#!/bin/bash");
+        sb.AppendLine($"# Waits for controller PID {pid} to exit, rebuilds (best effort), relaunches with the same arguments.");
+        sb.AppendLine($"while kill -0 {pid} 2>/dev/null; do sleep 0.2; done");
+        if (csproj != null)
+            sb.AppendLine($"{Q(DotnetHost())} build {Q(csproj)} -c {config} --nologo || echo \"[restart] build failed; relaunching the existing binary\"");
+        sb.AppendLine($"cd {Q(cwd)}");
+        sb.AppendLine($"nohup {Q(exe)} {string.Join(" ", args.Select(Q))} >/dev/null 2>&1 &");
+        return sb.ToString();
     }
 }

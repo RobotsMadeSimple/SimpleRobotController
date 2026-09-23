@@ -433,3 +433,8 @@ local-data/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Restart helper artefacts written next to the data files
+restart-controller.cmd
+restart-controller.sh
+restart-controller.log
