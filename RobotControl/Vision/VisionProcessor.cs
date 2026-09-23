@@ -167,6 +167,8 @@ namespace Controller.RobotControl.Vision
             {
                 ProgramId      = plan.Program.Id,
                 TimestampMs    = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ImageWidth     = src.Width,
+                ImageHeight    = src.Height,
                 Inspections    = new List<InspectionResult>(),
                 ColorResults   = new List<ColorCoverageResult>(),
                 PolygonResults = new List<PolygonResult>(),

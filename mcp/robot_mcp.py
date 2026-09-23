@@ -478,6 +478,7 @@ READ_ONLY_COMMANDS = {
     "GetProgramImages", "GetProgramVariableImage", "GetCameras", "GetVisionPrograms",
     "GetNanoDevices", "GetRelays",
     "GetAuxDevices", "GetAuxAxisConfig", "GetCameraResolutions",
+    "GetCameraCalibration", "CalibrationPredict",
 }
 
 STATUS_FIELDS = [

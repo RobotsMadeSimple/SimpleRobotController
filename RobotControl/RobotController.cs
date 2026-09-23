@@ -264,6 +264,10 @@ namespace Controller.RobotControl
         public Vision.VisionProgramRepository VisionRepo    { get; private set; } = null!;
         public Vision.VisionManager           VisionManager { get; private set; } = null!;
 
+        // ── Camera-to-robot calibration ───────────────────────────────────────
+        public Vision.Calibration.CameraCalibrationRepository CalibrationRepo     { get; private set; } = null!;
+        public Vision.Calibration.CalibrationSessionManager   CalibrationSessions { get; } = new();
+
         // ── Webhooks ──────────────────────────────────────────────────────────
         public WebhookManager WebhookManager { get; private set; } = new();
 
@@ -320,6 +324,7 @@ namespace Controller.RobotControl
 
             VisionRepo    = new Vision.VisionProgramRepository("vision_programs");
             VisionManager = new Vision.VisionManager(CameraManager, VisionRepo);
+            CalibrationRepo = new Vision.Calibration.CameraCalibrationRepository("cameraCalibrations");
 
 
             backgroundProgramManager = new BackgroundProgramManager(

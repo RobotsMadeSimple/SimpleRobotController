@@ -308,6 +308,13 @@ public class ProgramStep
     [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>?    ColorOutputs   { get; set; }
     [JsonPropertyName("polygonOutputs")]    public List<PolygonVisionStepOutput>?  PolygonOutputs { get; set; }
     [JsonPropertyName("arucoOutputs")]      public List<ArucoVisionStepOutput>?    ArucoOutputs   { get; set; }
+    /// <summary>
+    /// Coordinate frame of the blob points and polygon/ArUco centers written by RunVision:
+    /// "pixel", "normalized" (0–1) or "robot" (mm on the camera's calibration plane, point
+    /// Z = planeZ; needs a camera calibration). Null keeps the original mix — blob points in
+    /// pixels, polygon/ArUco centers normalized. See docs/camera-calibration.md.
+    /// </summary>
+    [JsonPropertyName("outputFrame")]       public string? OutputFrame { get; set; }
 
     // Superseded by pointNameExpr, which expresses the same thing as "$name[index]".
     // Still read so programs saved before the merge keep running; the builder rewrites

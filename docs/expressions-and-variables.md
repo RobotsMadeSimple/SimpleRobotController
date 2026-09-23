@@ -76,6 +76,7 @@ Resolved live at evaluation time; never assignable. Names are case-insensitive.
 | `$program.runCount` `$program.stepIndex` `$program.stepCount` `$program.elapsedMs` `$program.loopDepth` | current run |
 | `$time.now` (unix ms) `$time.hour` `$time.minute` `$time.second` `$time.dayOfWeek` (0=Sun) `$time.dayOfYear` | wall clock |
 | `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes |
+| `$camera.<cameraId>.calibrated` | 1 when the camera has a camera-to-robot calibration ([camera-calibration.md](camera-calibration.md)) |
 
 Commands (section 4) expose the list so the app can offer them in pickers.
 
@@ -105,7 +106,10 @@ Also emitted: `unknownFunction` and `badArity` (the parse-error codes of section
 `readOnlyProperty` (a property or IO name used as a write target — Set Variable,
 loop/vision/HTTP output variables — or declared as a variable), `unknownProgram`
 (Start/Stop/WaitForBackground naming a missing program) and
-`unknownStepType(warning)` (a step type the controller does not know; it is skipped).
+`unknownStepType(warning)` (a step type the controller does not know; it is skipped),
+`cameraNotCalibrated` (RunVision `outputFrame: "robot"` for a vision program whose
+camera has no calibration) and `badOutputFrame` (an `outputFrame` other than
+`pixel`, `normalized` or `robot`).
 Problems inside templates (`statusMessage`, `saveImagePath`, string Set Variable,
 text conditions) are warnings: at run time an unresolved reference there is left
 as written rather than failing. `stepPath` uses the JSON field names

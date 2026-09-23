@@ -72,6 +72,12 @@ namespace Controller.RobotControl.Validation
         public const string ComputedGlobalScope  = "computedGlobalScope";
         /// <summary>isComputed together with isPersistent / isString / isImage / isStopwatch / items.</summary>
         public const string ComputedKindConflict = "computedKindConflict";
+
+        // Camera calibration (docs/camera-calibration.md):
+        /// <summary>RunVision asks for outputFrame "robot" but the vision program's camera has no calibration.</summary>
+        public const string CameraNotCalibrated  = "cameraNotCalibrated";
+        /// <summary>RunVision outputFrame that is not pixel, normalized or robot.</summary>
+        public const string BadOutputFrame       = "badOutputFrame";
     }
 
     /// <summary>
@@ -89,6 +95,8 @@ namespace Controller.RobotControl.Validation
         public Func<string, bool>? StackExists         { get; init; }
         /// <summary>By vision program id.</summary>
         public Func<string, bool>? VisionProgramExists { get; init; }
+        /// <summary>A vision program's camera and whether it has a camera-to-robot calibration; null for an unknown program.</summary>
+        public Func<string, (string CameraId, bool Calibrated)?>? VisionProgramCamera { get; init; }
         /// <summary>A built program / routine by id first, then name — the executor's own order.</summary>
         public Func<string?, string?, BuiltProgram?>? FindProgram { get; init; }
 
@@ -715,6 +723,7 @@ namespace Controller.RobotControl.Validation
                             Add(at, ValidationCodes.UnknownVisionProgram,
                                 $"Vision program '{s.VisionProgramName ?? s.VisionProgramId}' does not exist", "visionProgramId");
                         if (!string.IsNullOrWhiteSpace(s.VisionZoneVar)) CheckRead(s.VisionZoneVar, at, "visionZoneVar");
+                        CheckOutputFrame(s, at);
                         CheckVisionTargets(s, at);
                         break;
 
@@ -894,6 +903,22 @@ namespace Controller.RobotControl.Validation
                     CheckTemplate(s.VariableExpr, at, "variableExpr", ValidationSeverity.Warning);
                 else
                     CheckExpr(s.VariableExpr, at, "variableExpr");
+            }
+
+            private void CheckOutputFrame(ProgramStep s, At at)
+            {
+                if (!Vision.Calibration.VisionOutputFrame.TryParse(s.OutputFrame, out var kind))
+                {
+                    Add(at, ValidationCodes.BadOutputFrame,
+                        $"Output frame '{s.OutputFrame}' is not one of pixel, normalized or robot", "outputFrame");
+                    return;
+                }
+                if (kind != Vision.Calibration.OutputFrameKind.Robot || string.IsNullOrEmpty(s.VisionProgramId)
+                    || _ctx.VisionProgramCamera?.Invoke(s.VisionProgramId) is not { } cam || cam.Calibrated)
+                    return;
+                Add(at, ValidationCodes.CameraNotCalibrated,
+                    $"Robot coordinates need a calibrated camera; camera '{(string.IsNullOrEmpty(cam.CameraId) ? "(none)" : cam.CameraId)}' " +
+                    $"of vision program '{s.VisionProgramName ?? s.VisionProgramId}' has no calibration", "outputFrame");
             }
 
             private void CheckVisionTargets(ProgramStep s, At at)

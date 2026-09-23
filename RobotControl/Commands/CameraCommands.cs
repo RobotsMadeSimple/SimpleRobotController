@@ -22,6 +22,12 @@ internal sealed class CameraCommands
     private object? GetCameras(CommandMessage msg)
     {
         var states     = _robot.CameraManager.GetState();
+        foreach (var s in states)
+        {
+            var cal = _robot.CalibrationRepo.Get(s.Id);
+            s.Calibrated       = cal != null;
+            s.CalibratedUnixMs = cal?.CalibratedUnixMs;
+        }
         var statesJson = JsonSerializer.Serialize(states, CommandJson.CamelCase);
         return new { cameras = statesJson };
     }

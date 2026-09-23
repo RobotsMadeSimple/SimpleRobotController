@@ -481,6 +481,7 @@ program variables.
 | `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar, cellsVar, cellsPassedVar }`. |
 | `polygonOutputs` | Polygon/shape → `{ inspectionId, countVar, foundVar, angleVar, centerXVar, centerYVar }`. |
 | `arucoOutputs` | ArUco markers → `{ inspectionId, countVar, foundVar, firstIdVar, firstCenterXVar, firstCenterYVar }`. |
+| `outputFrame` | Frame of the positions written above (blob `pointsVar` points, polygon `centerXVar`/`centerYVar`, ArUco `firstCenterXVar`/`firstCenterYVar`): `"pixel"`, `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Unset keeps the original mix: blob points in pixels, polygon/ArUco centers normalized. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
 | `waitTimeoutMs` | Max time to wait for a fresh vision result (default 30 000 ms; `0` or less waits forever). Expiry ends the program with an error. |
 
 Each `*Var` names a program variable that receives that result (counts, points,
