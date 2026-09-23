@@ -34,15 +34,16 @@ recovered.
   "imageWidth": 1280, "imageHeight": 720,
   "dotPitchMm": 20,
   "pixelToSheet": [[h11,h12,h13],[h21,h22,h23],[h31,h32,h33]],   // pixel (px) -> sheet mm, homography
-  "sheetToRobot": { "cos": c, "sin": s, "tx": x, "ty": y },       // rigid 2-D
+  "sheetToRobot": { "cos": c, "sin": s, "tx": x, "ty": y, "mirrored": true }, // rigid 2-D: R·(x, ±y) + t
   "pixelToRobot": [[…],[…],[…]],                                   // composed homography px -> robot mm
   "planeZ": 12.5,
-  "taughtDots": [ { "i": 0, "j": 0, "u": 0.31, "v": 0.44, "robot": { "x":…, "y":…, "z":… } }, … ],
+  "taughtDots": [ { "dotIndex": 0, "i": 0, "j": 0, "u": 0.31, "v": 0.44, "robot": { "x":…, "y":…, "z":… }, "errorMm": 0.2 }, … ],
   "gridRows": 6, "gridCols": 8, "dotCount": 48,
   "gridRmsPx": 0.4,          // homography reprojection RMS over all dots, px
   "taughtRmsMm": 0.35,       // residual of taught dots after the rigid fit, mm
   "taughtMaxMm": 0.5,
   "pitchScaleEstimate": 1.004, // >1 means the taught distances are longer than pitch implies
+  "mirrored": true,          // the sheet→robot fit used a reflection (usual for a camera looking down)
   "activeTool": "None",      // tool that was active while teaching (the TCP that touched the dots)
   "calibratedUnixMs": 1790000000000
 }
@@ -84,8 +85,11 @@ session). Sessions expire 30 minutes after their last use.
   directions to seed basis vectors (median over all dots), assign each dot the
   integer `(i, j)` that best explains its position, fit `H` from `(i, j)` →
   pixel, re-assign by nearest reprojected lattice point, iterate ≤ 5 times, then
-  drop dots whose reprojection error exceeds 3 × the RMS (partial dots at the
-  edge, dirt). Indices are shifted so the minimum `i` and `j` are 0; the origin
+  drop dots whose reprojection error exceeds 3 × the RMS, but never below
+  0.5 px (partial dots at the edge, dirt; the floor keeps a near-perfect grid
+  from shedding good dots to quantisation noise). A blob whose lattice
+  position is more than 0.35 cells from an integer, or that claims a position
+  another dot fits better, is not on the grid either. Indices are shifted so the minimum `i` and `j` are 0; the origin
   and axis directions are arbitrary — the rigid fit against taught dots absorbs
   the choice, including a mirrored assignment (allow a reflection in the
   sheet→robot fit; report `mirrored: true` in the calibration when used).

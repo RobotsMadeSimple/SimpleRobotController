@@ -99,6 +99,14 @@ namespace Controller.RobotControl.Hosting
             // Annotated snapshot captured at the end of the most recent RunVision step.
             app.MapGet("/program-vision-snapshot/{visionProgramId}", (string visionProgramId, HttpContext context) =>
                 WriteJpegAsync(context, (() => robot.GetProgramVisionSnapshot(visionProgramId), 404)));
+
+            // Calibration wizard frame: detected dots numbered, taught dots highlighted.
+            // 404 for an unknown or expired session, 204 while it has no image.
+            app.MapGet("/calibration/{sessionId}/image", (string sessionId, HttpContext context) =>
+            {
+                var session = robot.CalibrationSessions.Get(sessionId);
+                return WriteJpegAsync(context, session == null ? null : (() => { lock (session.Sync) return session.AnnotatedJpeg; }, 204));
+            });
         }
 
         // ── Vector files (DXF + SVG) ──────────────────────────────────────────

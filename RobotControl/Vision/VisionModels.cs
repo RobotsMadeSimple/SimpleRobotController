@@ -337,6 +337,9 @@ namespace Controller.RobotControl.Vision
     {
         [JsonPropertyName("programId")]       public string                    ProgramId      { get; set; } = "";
         [JsonPropertyName("timestampMs")]     public long                      TimestampMs    { get; set; }
+        /// <summary>Size of the analysed frame, px (0 when unknown).</summary>
+        [JsonPropertyName("imageWidth")]      public int                       ImageWidth     { get; set; }
+        [JsonPropertyName("imageHeight")]     public int                       ImageHeight    { get; set; }
         [JsonPropertyName("inspections")]     public List<InspectionResult>    Inspections    { get; set; } = new();
         [JsonPropertyName("colorResults")]    public List<ColorCoverageResult> ColorResults   { get; set; } = new();
         [JsonPropertyName("polygonResults")]  public List<PolygonResult>       PolygonResults { get; set; } = new();

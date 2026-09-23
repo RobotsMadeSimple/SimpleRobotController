@@ -98,7 +98,7 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>The first segment of every property name — a <c>$name.…</c> starting with one of these is a property reference.</summary>
         public static readonly IReadOnlySet<string> Roots =
-            new HashSet<string>(["robot", "program", "time", "aux"], StringComparer.OrdinalIgnoreCase);
+            new HashSet<string>(["robot", "program", "time", "aux", "camera"], StringComparer.OrdinalIgnoreCase);
 
         public bool TryGet(string name, out double value)
         {
@@ -124,9 +124,31 @@ namespace Controller.RobotControl.Execution
             if (name.StartsWith("aux.", StringComparison.OrdinalIgnoreCase))
                 return TryGetAux(name, out value);
 
+            if (name.StartsWith("camera.", StringComparison.OrdinalIgnoreCase))
+                return TryGetCamera(name, out value);
+
             value = 0;
             return false;
         }
+
+        // $camera.<cameraId>.calibrated
+        private bool TryGetCamera(string name, out double value)
+        {
+            value = 0;
+            if (_robot == null) return false;
+            // Camera ids may not contain dots, but split from the right in case one does.
+            int last = name.LastIndexOf('.');
+            if (last <= "camera.".Length || !name[(last + 1)..].Equals("calibrated", StringComparison.OrdinalIgnoreCase))
+                return false;
+            var id = name["camera.".Length..last];
+            var cameraId = CameraIds().FirstOrDefault(c => string.Equals(c, id, StringComparison.OrdinalIgnoreCase));
+            if (cameraId == null) return false;
+            value = B(_robot.CalibrationRepo?.IsCalibrated(cameraId) ?? false);
+            return true;
+        }
+
+        private IEnumerable<string> CameraIds() =>
+            _robot?.CameraManager?.GetState().Select(s => s.Id) ?? [];
 
         // $aux.<deviceId>.<axisIndex>.position  and  $aux.<deviceId>.moving
         private bool TryGetAux(string name, out double value)
@@ -178,6 +200,9 @@ namespace Controller.RobotControl.Execution
                                   $"Aux '{d.Name}' axis {a.AxisIndex}{(string.IsNullOrEmpty(a.Name) ? "" : $" ({a.Name})")} position (steps)",
                                   "number");
             }
+
+            foreach (var id in CameraIds())
+                yield return ($"camera.{id}.calibrated", $"1 when camera '{id}' has a camera-to-robot calibration", "boolean");
         }
     }
 }

@@ -32,6 +32,10 @@ namespace Controller.RobotControl.Camera
         [JsonPropertyName("targetFps")]   public int    TargetFps   { get; set; }
         [JsonPropertyName("enabled")]              public bool                 Enabled              { get; set; }
         [JsonPropertyName("supportedResolutions")] public List<CameraResolution> SupportedResolutions { get; set; } = new();
+        /// <summary>A camera-to-robot calibration is saved for this camera (docs/camera-calibration.md).</summary>
+        [JsonPropertyName("calibrated")]           public bool                 Calibrated           { get; set; }
+        /// <summary>When the saved calibration was made; null when not calibrated.</summary>
+        [JsonPropertyName("calibratedUnixMs")]     public long?                CalibratedUnixMs     { get; set; }
     }
 
     public class CameraResolution

@@ -247,6 +247,8 @@ internal sealed class BuiltProgramCommands
             GridExists          = id => _robot.gridRepo.Get(id) != null,
             StackExists         = id => _robot.stackRepo.Get(id) != null,
             VisionProgramExists = vision == null ? null : id => vision.Get(id) != null,
+            VisionProgramCamera = vision == null || _robot.CalibrationRepo == null ? null
+                : id => vision.Get(id) is { } vp ? (vp.CameraId, _robot.CalibrationRepo.IsCalibrated(vp.CameraId)) : null,
             FindProgram         = (id, name) =>
                 (!string.IsNullOrEmpty(id) ? repo.GetById(id) : null)
                 ?? (!string.IsNullOrEmpty(name) ? repo.Get(name) : null),

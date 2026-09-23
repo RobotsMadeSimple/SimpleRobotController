@@ -1,4 +1,5 @@
 using Controller.RobotControl.Vision;
+using Controller.RobotControl.Vision.Calibration;
 
 namespace Controller.RobotControl.Execution
 {
@@ -80,7 +81,15 @@ namespace Controller.RobotControl.Execution
                 // Got a fresh result — write output variables, stop processor, advance.
                 // The zone override (if any) was applied to the processor at start, so every
                 // inspection ran in the selected zone and all of its outputs are relevant.
-                WriteOutputs(step, result, ctx.Vars);
+                var outputFrame = ResolveOutputFrame(step, result, ctx, out var frameError);
+                if (outputFrame == null)
+                {
+                    ctrl.VisionManager.StopProgram(vision.ProgramId!);
+                    vision.Awaiting  = false;
+                    vision.ProgramId = null;
+                    return ctx.Finish(ProgramStatus.Error, $"Vision → {step.VisionProgramName ?? programId}: {frameError}");
+                }
+                WriteOutputs(step, result, ctx.Vars, outputFrame);
 
                 var snap = proc.GetLatestAnnotated();
                 if (snap != null) ctrl.SetProgramVisionSnapshot(vision.ProgramId!, snap);
@@ -113,8 +122,44 @@ namespace Controller.RobotControl.Execution
                 return zoneId;
             }
 
-            private static void WriteOutputs(ProgramStep step, VisionResult result, VariableScope vars)
+            /// <summary>
+            /// The step's output frame for this result. Null (with <paramref name="error"/>) when
+            /// the frame name is unknown, or "robot" is asked for and the vision program's camera
+            /// has no calibration, or one made at a different resolution.
+            /// </summary>
+            private static VisionOutputFrame? ResolveOutputFrame(ProgramStep step, VisionResult result,
+                                                                 ExecutionContext ctx, out string error)
             {
+                error = "";
+                if (!VisionOutputFrame.TryParse(step.OutputFrame, out var kind))
+                {
+                    error = $"unknown outputFrame '{step.OutputFrame}' (use pixel, normalized or robot)";
+                    return null;
+                }
+                if (kind != OutputFrameKind.Robot)
+                    return new VisionOutputFrame(kind, result.ImageWidth, result.ImageHeight);
+
+                var cameraId = ctx.Controller.VisionManager.GetProgram(step.VisionProgramId!)?.CameraId ?? "";
+                var cal = ctx.Controller.CalibrationRepo.Get(cameraId);
+                if (cal == null)
+                {
+                    error = $"camera '{CameraLabel(cameraId)}' is not calibrated, so robot coordinates are not available";
+                    return null;
+                }
+                if (result.ImageWidth > 0 && (result.ImageWidth != cal.ImageWidth || result.ImageHeight != cal.ImageHeight))
+                {
+                    error = $"camera '{cameraId}' runs at {result.ImageWidth}×{result.ImageHeight} but was calibrated at " +
+                            $"{cal.ImageWidth}×{cal.ImageHeight}; calibrate it again";
+                    return null;
+                }
+                return new VisionOutputFrame(kind, cal.ImageWidth, cal.ImageHeight, cal);
+            }
+
+            private static void WriteOutputs(ProgramStep step, VisionResult result, VariableScope vars,
+                                              VisionOutputFrame? frame = null)
+            {
+                frame ??= new VisionOutputFrame(OutputFrameKind.Default, result.ImageWidth, result.ImageHeight);
+
                 foreach (var output in step.VisionOutputs ?? [])
                 {
                     var ir = result.Inspections.Find(i => i.InspectionId == output.InspectionId);
@@ -126,7 +171,11 @@ namespace Controller.RobotControl.Execution
                     if (!string.IsNullOrEmpty(output.PointsVar))
                     {
                         vars.SetList(output.PointsVar, ListVar.OfPoints(
-                            ir.Blobs.Select(b => new Vector6Val { X = b.X, Y = b.Y })));
+                            ir.Blobs.Select(b =>
+                            {
+                                var (x, y, z) = frame.FromPixel(b.X, b.Y);
+                                return new Vector6Val { X = x, Y = y, Z = z };
+                            })));
                     }
 
                     if (!string.IsNullOrEmpty(output.DetectedVar))
@@ -177,11 +226,12 @@ namespace Controller.RobotControl.Execution
                     if (!string.IsNullOrEmpty(output.AngleVar))
                         vars.Set(output.AngleVar, pr.Angle);
 
+                    var (pcx, pcy, _) = frame.FromNormalized(pr.CenterX, pr.CenterY);
                     if (!string.IsNullOrEmpty(output.CenterXVar))
-                        vars.Set(output.CenterXVar, pr.CenterX);
+                        vars.Set(output.CenterXVar, pcx);
 
                     if (!string.IsNullOrEmpty(output.CenterYVar))
-                        vars.Set(output.CenterYVar, pr.CenterY);
+                        vars.Set(output.CenterYVar, pcy);
                 }
 
                 foreach (var output in step.ArucoOutputs ?? [])
@@ -201,11 +251,12 @@ namespace Controller.RobotControl.Execution
                         if (!string.IsNullOrEmpty(output.FirstIdVar))
                             vars.Set(output.FirstIdVar, first.MarkerId);
 
+                        var (acx, acy, _) = frame.FromNormalized(first.CenterX, first.CenterY);
                         if (!string.IsNullOrEmpty(output.FirstCenterXVar))
-                            vars.Set(output.FirstCenterXVar, first.CenterX);
+                            vars.Set(output.FirstCenterXVar, acx);
 
                         if (!string.IsNullOrEmpty(output.FirstCenterYVar))
-                            vars.Set(output.FirstCenterYVar, first.CenterY);
+                            vars.Set(output.FirstCenterYVar, acy);
                     }
                 }
             }

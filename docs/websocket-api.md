@@ -303,7 +303,7 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 
 | Command | Params | Description |
 |---|---|---|
-| `GetCameras` | — | Returns camera states. |
+| `GetCameras` | — | Returns camera states (each with `calibrated` and `calibratedUnixMs`, see below). |
 | `AddCamera` | `name, deviceIndex, enabled, width=640, height=480, targetFps=15` | Add a USB camera. |
 | `RemoveCamera` | `id` | Remove a camera. |
 | `SetCameraConfig` | `id, name, deviceIndex, enabled, width, height, targetFps` | Update a camera's config. |
@@ -311,6 +311,54 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 
 Camera frames are streamed separately over `GET /camera/{id}/ws` (base64 MJPEG
 text frames) with a `GET /camera/{id}/snapshot` still image.
+
+---
+
+## Camera calibration
+
+Camera-to-robot calibration with a dot sheet — the method, the stored model and
+the grid rules are in [camera-calibration.md](camera-calibration.md). Image
+positions are normalized `u, v` (0–1). A wizard run is a **session** held in
+memory for 30 minutes after its last use.
+
+| Command | Params | Response (merged into the ack) |
+|---|---|---|
+| `GetCameraCalibration` | `cameraId` | `calibration` (the stored object) or `calibration: null`. |
+| `DeleteCameraCalibration` | `cameraId` | — |
+| `CalibrationStart` | `cameraId`, `dotPitchMm` (> 0), optional `minDotAreaPx` (30), `maxDotAreaPx` (20 000), `darkDots` (true) | `sessionId, cameraId, dotPitchMm, imageWidth, imageHeight, dots: [{ index, i, j, u, v, areaPx }], gridRows, gridCols, gridRmsPx, warnings: [string], imageUrl, taught: []` |
+| `CalibrationRedetect` | `sessionId`, optional detector params as above and `dotPitchMm` | Same as `CalibrationStart`, from a new frame. Taught dots with a dot still within 0.3 spacings of where they were are kept (re-indexed); others are dropped with a warning. |
+| `CalibrationTeachDot` | `sessionId`, `dotIndex` | `taught: [{ dotIndex, i, j, u, v, robot: {x,y,z}, tool }]` — records the current TCP position and active tool; replaces an earlier teach of the same dot. |
+| `CalibrationUnteachDot` | `sessionId`, `dotIndex` | `taught: […]` |
+| `CalibrationSolve` | `sessionId`, optional `save` (true) | `calibration, taughtRmsMm, taughtMaxMm, pitchScaleEstimate, mirrored, residuals: [{ dotIndex, i, j, errorMm }], warnings, saved` |
+| `CalibrationPredict` | `u`, `v`, and `sessionId` (its solved result, saved or not) or `cameraId` (the saved calibration) | `robot: {x, y, z}`, `source: "session"\|"saved"` |
+| `CalibrationDiscard` | `sessionId` | — |
+
+A failure answers `{ "ok": false, "error": "<code>", "message": "…" }`:
+
+| Code | When |
+|---|---|
+| `invalidParams` | A required parameter is missing or out of range (`dotPitchMm ≤ 0`, `minDotAreaPx ≥ maxDotAreaPx`, no `u`/`v`, …). |
+| `unknownCamera` | No camera with that id. |
+| `cameraNotConnected` | The camera exists but has no frame. |
+| `noDotsFound` | No blob passed the area/circularity filter. |
+| `gridNotFound` | Fewer than 4 dots fit a lattice, or the fit RMS exceeds 2 % of the dot spacing. |
+| `unknownSession` | Unknown or expired `sessionId`. |
+| `unknownDot` | `dotIndex` is not in the detected grid. |
+| `notEnoughTaught` | Solve with fewer than 2 taught dots (or before any grid was detected). |
+| `taughtCollinear` | Solve with 3+ taught dots that all lie on one grid line. With exactly 2 dots the solve succeeds with a warning, and the handedness of a camera looking down at the sheet is assumed. |
+| `notCalibrated` | Predict against a camera with no saved calibration, or a session not yet solved. |
+
+When `CalibrationStart` fails with `noDotsFound` or `gridNotFound` the session is
+still created: the error also carries `sessionId` and `imageUrl` (showing the raw
+frame) so the wizard can show what the camera saw and call `CalibrationRedetect`
+with other detector parameters.
+
+`GET /calibration/{sessionId}/image` returns the session's annotated JPEG: every
+dot circled and numbered, taught dots highlighted, and `i`/`j` arrows at dot
+(0, 0). 404 for an unknown or expired session, 204 when it has no image.
+
+`GetCameras` states carry `calibrated` (true/false) and `calibratedUnixMs` (null
+when not calibrated). Programs read `$camera.<id>.calibrated` (1/0).
 
 ---
 
