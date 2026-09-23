@@ -117,3 +117,13 @@ Expression properties: `$camera.<id>.calibrated` (1/0).
 
 Camera cards show a "calibrated" pill with the date; the vision editor shows the
 calibration state next to the camera picker.
+
+## Printable sheets
+
+`docs/calibration-sheet-A4-20mm.svg`, `docs/calibration-sheet-Letter-20mm.svg`
+and `docs/calibration-sheet-A4-10mm.svg` are drawn in true millimetres. Print
+at 100 % ("actual size", no fit-to-page) and confirm the 100 mm scale bar with
+a ruler; the pitch printed in the footer is the value to enter in the wizard.
+A 20 mm pitch suits cameras seeing roughly 200–400 mm of the workspace; use
+10 mm for a closer view. Tape the sheet flat on the surface the robot will work
+on: the calibration is only valid for that plane.
