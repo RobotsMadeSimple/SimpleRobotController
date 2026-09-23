@@ -35,6 +35,10 @@ namespace Controller.RobotControl.Execution
                         {
                             throw; // a syntax error errors the program too
                         }
+                        catch (ComputedVariableWriteException)
+                        {
+                            throw; // a computed variable cannot be assigned — errors the program
+                        }
                         catch
                         {
                             // Malformed expression — leave variable unchanged

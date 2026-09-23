@@ -50,6 +50,15 @@ namespace Controller.RobotControl.Execution
         private struct StopwatchEntry { public bool Running; public long AccumMs; public long StartTick; }
         private readonly Dictionary<string, StopwatchEntry> _stopwatches = new(StringComparer.OrdinalIgnoreCase);
 
+        // Computed variables (docs/expressions-and-variables.md §7): name → formula. Never
+        // stored as values; resolved on every read through _computedSource. Global computed
+        // formulas live in the GlobalVariableStore; _globalComputedNames are the ones this
+        // program declared (for the monitor and the write guard).
+        private readonly Dictionary<string, string> _computed = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _globalComputedNames = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ComputedPropertySource _computedSource;
+        private IPropertySource? _robotProperties;
+
         /// <param name="ioSource">Adds live IO values (stb.in1, relay.1, nano.x.y …) to a
         /// dictionary; null when there is no hardware (tests).</param>
         public VariableScope(GlobalVariableStore? globalVars = null, GlobalImageStore? globalImages = null,
@@ -59,18 +68,49 @@ namespace Controller.RobotControl.Execution
             _globalImages = globalImages;
             _ioSource     = ioSource;
             Eval          = new EvalContext(this);
+            _computedSource = new ComputedPropertySource(
+                _computed, () => Eval.Vars, () => _listVariables, globalVars, ioSource, () => _robotProperties);
         }
 
         /// <summary>The per-tick evaluation snapshot over this scope.</summary>
         public EvalContext Eval { get; }
 
         /// <summary>
-        /// Read-only system properties ($robot.x, $program.runCount, $time.hour …) consulted by
-        /// every expression evaluated through this scope when a name is not a variable or IO
-        /// value. Resolved lazily at lookup — never copied into the per-tick snapshot. Null in
-        /// tests (then only variables and IO resolve).
+        /// The property chain every expression evaluated through this scope consults when a
+        /// name is not a variable or IO value: computed variables first (this program's, then
+        /// global ones), then the read-only system properties ($robot.x, $program.runCount,
+        /// $time.hour …). Resolved lazily at lookup — never copied into the per-tick snapshot.
         /// </summary>
-        public IPropertySource? Properties { get; set; }
+        /// <remarks>
+        /// The setter sets the system-property source at the end of the chain (null in tests:
+        /// then only variables, IO and computed variables resolve); the getter always returns
+        /// the whole chain, so every evaluation path sees computed variables.
+        /// </remarks>
+        public IPropertySource? Properties
+        {
+            get => _computedSource;
+            set => _robotProperties = value;
+        }
+
+        /// <summary>
+        /// Whether assigning <paramref name="name"/> is refused because it is a computed
+        /// variable: one this program declared (local or global), or a global computed
+        /// variable registered by another program that this one has no stored variable for.
+        /// </summary>
+        public bool IsComputed(string name) =>
+            _computed.ContainsKey(name) || _globalComputedNames.Contains(name) ||
+            (_globalVars != null && !_variables.ContainsKey(name) && !_globalVarNames.Contains(name)
+             && _globalVars.TryGetComputed(name, out _));
+
+        /// <summary>Evaluates a computed variable now; false when <paramref name="name"/> is not one.
+        /// Evaluation errors (unknown variable, cycle) propagate.</summary>
+        public bool TryEvaluateComputed(string name, out double value) =>
+            _computedSource.TryGetComputed(name, out value);
+
+        private void RefuseComputedWrite(string name)
+        {
+            if (IsComputed(name)) throw new ComputedVariableWriteException(name);
+        }
 
         /// <summary>
         /// Bumped by every change to a scalar value or registration, so <see cref="EvalContext"/>
@@ -90,7 +130,11 @@ namespace Controller.RobotControl.Execution
         /// <summary>A program-local scalar only — globals are not consulted.</summary>
         public bool TryGetLocal(string name, out double value) => _variables.TryGetValue(name, out value);
 
-        public void SetList(string name, ListVar list) => _listVariables[name] = list;
+        public void SetList(string name, ListVar list)
+        {
+            RefuseComputedWrite(name);
+            _listVariables[name] = list;
+        }
 
         /// <summary>Clears all program variables (and their registrations). Image revisions survive.</summary>
         public void Clear()
@@ -105,16 +149,20 @@ namespace Controller.RobotControl.Execution
             _globalImageNames.Clear();
             _persistentVarOwners.Clear();
             _stopwatches.Clear();
+            _computed.Clear();
+            _globalComputedNames.Clear();
         }
 
         // ── Scalars ───────────────────────────────────────────────────────────
 
         /// <summary>
         /// The only writer of scalar values — every step, vision output, stopwatch refresh
-        /// and initialiser goes through here so globals are honoured.
+        /// and initialiser goes through here so globals are honoured. A computed variable
+        /// cannot be assigned: <see cref="ComputedVariableWriteException"/>.
         /// </summary>
         public void Set(string name, double value)
         {
+            RefuseComputedWrite(name);
             Version++;
             if (_globalVarNames.Contains(name) && _globalVars != null)
                 _globalVars.Set(name, value);
@@ -217,6 +265,7 @@ namespace Controller.RobotControl.Execution
         /// <summary>Applies a Start / Stop / Reset action and writes the new elapsed value.</summary>
         public void ControlStopwatch(string name, string? action)
         {
+            RefuseComputedWrite(name);
             if (!_stopwatches.TryGetValue(name, out var sw))
                 sw = new StopwatchEntry { Running = false, AccumMs = 0, StartTick = 0 };
 
@@ -248,6 +297,24 @@ namespace Controller.RobotControl.Execution
             {
                 bool isGlobal     = v.IsGlobal == true && _globalVars != null;
                 bool isPersistent = v.IsPersistent == true;
+
+                // Computed: a formula, not a value. Checked first so a stored-kind flag set
+                // alongside it (the validator's computedKindConflict) cannot give it storage.
+                if (v.IsComputed == true)
+                {
+                    var formula = v.ValueExpression ?? "";
+                    if (isGlobal)
+                    {
+                        _globalComputedNames.Add(v.Name);
+                        _globalVars!.RegisterComputed(v.Name, formula);
+                    }
+                    else
+                        _computed[v.Name] = formula;
+                    if (v.IsBoolean == true) _booleanVariables.Add(v.Name);
+                    Version++;
+                    continue;
+                }
+
                 // Lists of every element type, including ones saved before the list types
                 // were unified — ToListVar folds the legacy points/objects/values fields in.
                 if (v.ToListVar() is { } declaredList)
@@ -355,7 +422,26 @@ namespace Controller.RobotControl.Execution
             foreach (var kv in MergedVars()) result[kv.Key] = kv.Value;
             foreach (var kv in _stringVariables) result[kv.Key] = kv.Value;
             foreach (var kv in _listVariables) result[kv.Key] = kv.Value.Count;
+
+            // Computed variables: their formula's current result; null when it fails to evaluate.
+            var computedNames = new HashSet<string>(_computed.Keys, StringComparer.OrdinalIgnoreCase);
+            computedNames.UnionWith(_globalComputedNames);
+            if (_globalVars != null) computedNames.UnionWith(_globalVars.ComputedSnapshot().Keys);
+            foreach (var name in computedNames)
+            {
+                // A stored variable of the same name reads first in expressions; keep that value.
+                if (result.ContainsKey(name) && !_computed.ContainsKey(name)) continue;
+                double v = EvaluateComputedOrNaN(name);
+                result[name] = double.IsNaN(v) ? null : (object?)v;
+            }
             return result;
+        }
+
+        /// <summary>A computed variable's current value, or NaN when it is not one or its formula fails.</summary>
+        private double EvaluateComputedOrNaN(string name)
+        {
+            try { return _computedSource.TryGetComputed(name, out var v) ? v : double.NaN; }
+            catch { return double.NaN; }
         }
 
         // ── Monitor display ───────────────────────────────────────────────────
@@ -369,6 +455,12 @@ namespace Controller.RobotControl.Execution
             foreach (var v in program.Variables)
             {
                 if (v.DisplayOnMonitor != true) continue;
+                // A computed variable shows its formula's current result — NaN when it fails.
+                if (v.IsComputed == true)
+                {
+                    result.Add((v.Name, EvaluateComputedOrNaN(v.Name), v.IsBoolean == true));
+                    continue;
+                }
                 // Non-scalar types are not supported in numeric display. The legacy list
                 // fields are still tested alongside Items so that an empty saved list —
                 // which ToListVar deliberately reads as a scalar — stays excluded here,
@@ -533,6 +625,14 @@ namespace Controller.RobotControl.Execution
                         return strVal;
                     if (_listVariables.TryGetValue(name, out var bare))
                         return bare.Describe();
+                    // A computed variable: its formula's result now. A failing formula leaves the
+                    // reference as written, like any other unresolvable name in text.
+                    try
+                    {
+                        if (_computedSource.TryGetComputed(name, out var cv))
+                            return _booleanVariables.Contains(name) ? (cv != 0 ? "True" : "False") : cv.ToString("G6");
+                    }
+                    catch { /* left as written */ }
                     return null;
                 }
 

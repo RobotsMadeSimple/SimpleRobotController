@@ -33,6 +33,8 @@ Programs define variables (`ProgramVariable`) that blocks can read and write:
   `StopwatchControl`).
 - **`displayOnMonitor`** — current value is shown on the monitor page while
   running.
+- **`isComputed`** — a named formula (user-defined property); see
+  [Computed variables](#computed-variables).
 
 #### List variables
 
@@ -194,6 +196,55 @@ non-zero result makes a boolean `True`.
 understand `valueExpression` uses, and the fallback for a runtime failure other
 than a syntax error or an unknown `$name` — both of those error the program at
 start, the same as anywhere else.
+
+#### Computed variables
+
+A variable with `isComputed: true` is a named formula — a user-defined property.
+Its `valueExpression` is evaluated **every time** `$name` is read, against the
+live variables, lists, IO and properties, exactly like `$robot.x`; it has no
+stored value (`value` is ignored). It works everywhere an expression is read:
+step fields, conditions, list indexes, `{…}` and bare `$name` text
+interpolation, `EvaluateExpression`.
+
+```json
+{ "name": "area",  "isComputed": true, "valueExpression": "$w * $h" }
+{ "name": "ready", "isComputed": true, "valueExpression": "$area > 100 and $stb.in1", "isBoolean": true, "displayOnMonitor": true }
+```
+
+- **Reading** — nested computed references are fine (`$volume` = `$area * $d`).
+  Unlike an initial value, a formula can use variables declared below it: it runs
+  when read, not at start. A formula that ends up reading itself stops the
+  program with an expression error (code `computedCycle`) instead of recursing.
+  An unknown `$name` inside the formula stops the program like anywhere else.
+- **Writing** — refused. A Set Variable, loop index, forEach value/index,
+  vision/HTTP output variable or stopwatch naming a computed variable stops the
+  program with "Cannot assign computed variable …".
+- **`isGlobal`** — the program that declares it registers the formula in the
+  global store on start (the latest declaring program wins); every program can
+  then read it, even one that does not declare it. A global formula is evaluated
+  against global variables, IO and properties only — never a reader's locals. A
+  program's own computed variable of the same name wins over a global one.
+- **`isBoolean`** — the monitor shows true/false; the formula still yields 1/0.
+- **`displayOnMonitor`** — shows the formula's current result; `NaN` when it
+  fails to evaluate.
+- **Symbols** — `GetExpressionSymbols` lists them with `kind: "computed"`, the
+  `expression`, `isBoolean`, `isGlobal` and a live `value` while an executor
+  holds the program (global ones are evaluated from the store otherwise);
+  without a program, the registered global computed variables are listed.
+- **Invalid combinations** — `isPersistent`, `isString`, `isImage`,
+  `isStopwatch` and list `items` make no sense for a formula; at run time the
+  variable is still treated as computed.
+
+Validation (`ValidateBuiltProgram`, all errors): the formula is parsed and every
+reference resolved like any other expression (`expressionSyntax`,
+`unknownVariable`, `unknownProperty`, …; an empty formula is `missingField`), plus:
+
+| Code | When |
+|---|---|
+| `computedCycle` | computed variables whose formulas depend on each other in a loop (reported on every variable in the loop) |
+| `computedVariable` | a write target — Set Variable, loop index, forEach value/index, vision/HTTP output variable, stopwatch — that is a computed variable |
+| `computedGlobalScope` | a global computed formula that references a non-global program variable, a list, or a non-global computed variable |
+| `computedKindConflict` | `isComputed` together with `isPersistent` / `isString` / `isImage` / `isStopwatch` / `items` |
 
 ### Variable interpolation
 

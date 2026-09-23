@@ -62,6 +62,16 @@ namespace Controller.RobotControl.Validation
         public const string UnknownProgram       = "unknownProgram";
         /// <summary>A step type this controller does not know (it would be skipped) — warning.</summary>
         public const string UnknownStepType      = "unknownStepType";
+
+        // Computed variables (§7):
+        /// <summary>Computed variables whose formulas depend on each other in a loop.</summary>
+        public const string ComputedCycle        = "computedCycle";
+        /// <summary>A write target (Set Variable, loop/forEach variable, vision/HTTP output, stopwatch) that is a computed variable.</summary>
+        public const string ComputedVariable     = "computedVariable";
+        /// <summary>A global computed formula that references a non-global program variable.</summary>
+        public const string ComputedGlobalScope  = "computedGlobalScope";
+        /// <summary>isComputed together with isPersistent / isString / isImage / isStopwatch / items.</summary>
+        public const string ComputedKindConflict = "computedKindConflict";
     }
 
     /// <summary>
@@ -113,7 +123,7 @@ namespace Controller.RobotControl.Validation
         private static readonly string[] ConditionOps =
             ["==", "!=", ">", ">=", "<", "<=", "contains", "startsWith", "endsWith"];
 
-        private enum SymKind { Number, Boolean, Stopwatch, String, Image, List }
+        private enum SymKind { Number, Boolean, Stopwatch, String, Image, List, Computed }
 
         private sealed record Sym(SymKind Kind, ListElementType ElementType = ListElementType.Record);
 
@@ -129,6 +139,12 @@ namespace Controller.RobotControl.Validation
             private readonly Dictionary<string, Sym> _implicit = new(StringComparer.OrdinalIgnoreCase);
             private readonly HashSet<string> _used = new(StringComparer.OrdinalIgnoreCase);
             private readonly HashSet<string> _functionNames;
+
+            // Declared variables flagged isGlobal, and every computed variable's formula (for
+            // the cycle and global-scope checks) — across the program and its routines.
+            private readonly HashSet<string> _globalNames = new(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, (string Formula, bool IsGlobal)> _computedFormulas =
+                new(StringComparer.OrdinalIgnoreCase);
 
             // Routines already validated, and the chain currently being walked (for recursion).
             private readonly HashSet<string> _validatedRoutines = new(StringComparer.OrdinalIgnoreCase);
@@ -207,6 +223,8 @@ namespace Controller.RobotControl.Validation
             private static Sym? SymOf(ProgramVariable v)
             {
                 if (string.IsNullOrWhiteSpace(v.Name)) return null;
+                // First, as at run time: a computed variable never gets storage of another kind.
+                if (v.IsComputed == true) return new Sym(SymKind.Computed);
                 if (v.ToListVar() is { } lv) return new Sym(SymKind.List, lv.ElementType);
                 if (v.IsStopwatch == true) return new Sym(SymKind.Stopwatch);
                 if (v.IsString == true)    return new Sym(SymKind.String);
@@ -228,7 +246,14 @@ namespace Controller.RobotControl.Validation
                 {
                     var p = queue.Dequeue();
                     foreach (var v in p.Variables ?? [])
-                        if (SymOf(v) is { } sym) _declared.TryAdd(v.Name.Trim(), sym);
+                    {
+                        if (SymOf(v) is not { } sym) continue;
+                        var name = v.Name.Trim();
+                        _declared.TryAdd(name, sym);
+                        if (v.IsGlobal == true) _globalNames.Add(name);
+                        if (sym.Kind == SymKind.Computed)
+                            _computedFormulas.TryAdd(name, (v.ValueExpression ?? "", v.IsGlobal == true));
+                    }
 
                     foreach (var s in Descend(p.Steps ?? new()))
                     {
@@ -322,7 +347,7 @@ namespace Controller.RobotControl.Validation
 
             private bool IsScalar(string name) =>
                 name.Equals("time_ms", StringComparison.OrdinalIgnoreCase) ||
-                Lookup(name) is { Kind: SymKind.Number or SymKind.Boolean or SymKind.Stopwatch };
+                Lookup(name) is { Kind: SymKind.Number or SymKind.Boolean or SymKind.Stopwatch or SymKind.Computed };
 
             private bool IsList(string name) => Lookup(name) is { Kind: SymKind.List };
 
@@ -381,8 +406,119 @@ namespace Controller.RobotControl.Validation
                         finally { _initScope = saved; }
                     }
 
+                    if (v.IsComputed == true) ValidateComputed(v, name, at);
+
                     if (SymOf(v) is { } sym) scope[name] = sym;
                 }
+            }
+
+            // ── Computed variables (§7) ───────────────────────────────────────
+
+            private void ValidateComputed(ProgramVariable v, string name, At at)
+            {
+                var conflicts = new List<string>();
+                if (v.IsPersistent == true) conflicts.Add("persistent");
+                if (v.IsString == true)     conflicts.Add("text");
+                if (v.IsImage == true)      conflicts.Add("image");
+                if (v.IsStopwatch == true)  conflicts.Add("stopwatch");
+                if (v.Items != null || v.Values != null || v.Points != null || v.Objects != null) conflicts.Add("list");
+                if (conflicts.Count > 0)
+                    Add(at, ValidationCodes.ComputedKindConflict,
+                        $"'${name}' is computed (a formula with no stored value) and cannot also be {string.Join(", ", conflicts)}",
+                        "isComputed");
+
+                var formula = v.ValueExpression;
+                if (string.IsNullOrWhiteSpace(formula))
+                {
+                    Add(at, ValidationCodes.MissingField, $"Computed variable '${name}' has no formula", "valueExpression");
+                    return;
+                }
+
+                // A formula is evaluated whenever it is read, so it sees every variable — not
+                // just the ones declared above it, as an initial value does.
+                var saved = _initScope;
+                _initScope = null;
+                try { CheckExpr(formula, at, "valueExpression"); }
+                finally { _initScope = saved; }
+
+                if (v.IsGlobal == true) CheckGlobalComputedScope(formula, name, at);
+
+                if (ComputedCycleThrough(name) is { } cycle)
+                    Add(at, ValidationCodes.ComputedCycle,
+                        $"Computed variable '${name}' depends on itself ({string.Join(" → ", cycle.Select(n => "$" + n))})",
+                        "valueExpression");
+            }
+
+            /// <summary>
+            /// A global computed formula is evaluated against the global store, IO and properties
+            /// only, so anything program-local it names would be unknown in another program.
+            /// </summary>
+            private void CheckGlobalComputedScope(string formula, string name, At at)
+            {
+                List<ExprRef> refs;
+                try { refs = ExpressionEvaluator.References(formula); }
+                catch (ExpressionParseException) { return; } // already reported
+                var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var r in refs)
+                {
+                    if (r.Kind is not (ExprRefKind.Plain or ExprRefKind.Indexed or ExprRefKind.ListArgument)) continue;
+                    string refName = r.Name;
+                    if (r.Kind == ExprRefKind.Plain && IsList(r.Parts[0])) refName = r.Parts[0];
+                    else if (r.Kind == ExprRefKind.Plain &&
+                             (IsIo(refName) || IsProperty(refName) || refName.Equals("time_ms", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+
+                    var sym = Lookup(refName);
+                    if (sym == null) continue; // unknown — reported by CheckExpr
+                    // Lists are never shared between programs; a scalar is when declared global.
+                    bool shared = sym.Kind != SymKind.List && _globalNames.Contains(refName);
+                    if (shared || !reported.Add(refName)) continue;
+                    Add(at, ValidationCodes.ComputedGlobalScope,
+                        $"Global computed variable '${name}' uses '${refName}', which is not a global variable — " +
+                        "other programs cannot see it", "valueExpression");
+                }
+            }
+
+            /// <summary>The dependency loop from <paramref name="start"/> back to itself, or null.</summary>
+            private List<string>? ComputedCycleThrough(string start)
+            {
+                var path = new List<string> { start };
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                bool Walk(string n)
+                {
+                    foreach (var dep in ComputedDependencies(n))
+                    {
+                        if (string.Equals(dep, start, StringComparison.OrdinalIgnoreCase))
+                        {
+                            path.Add(dep);
+                            return true;
+                        }
+                        if (!visited.Add(dep)) continue;
+                        path.Add(dep);
+                        if (Walk(dep)) return true;
+                        path.RemoveAt(path.Count - 1);
+                    }
+                    return false;
+                }
+
+                return Walk(start) ? path : null;
+            }
+
+            /// <summary>The computed variables a computed variable's formula reads directly.</summary>
+            private IEnumerable<string> ComputedDependencies(string name)
+            {
+                if (!_computedFormulas.TryGetValue(name, out var c)) return [];
+                try
+                {
+                    return ExpressionEvaluator.References(c.Formula)
+                        .Where(r => r.Kind is ExprRefKind.Plain or ExprRefKind.Indexed or ExprRefKind.ListArgument)
+                        .Select(r => r.Name)
+                        .Where(_computedFormulas.ContainsKey)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                }
+                catch (ExpressionParseException) { return []; }
             }
 
             private void ReportUnusedVariables()
@@ -899,6 +1035,12 @@ namespace Controller.RobotControl.Validation
                 {
                     Add(at, ValidationCodes.ReadOnlyProperty,
                         $"'${name}' is an IO value and cannot be assigned — use a Set Output step", field);
+                    return false;
+                }
+                if (_declared.TryGetValue(name, out var declared) && declared.Kind == SymKind.Computed)
+                {
+                    Add(at, ValidationCodes.ComputedVariable,
+                        $"'${name}' is a computed variable (a formula) and cannot be assigned", field);
                     return false;
                 }
                 if (requireDeclared && !_declared.ContainsKey(name) && !_loopScope.Contains(name, StringComparer.OrdinalIgnoreCase))

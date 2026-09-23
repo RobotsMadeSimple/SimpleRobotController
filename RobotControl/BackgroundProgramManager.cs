@@ -11,7 +11,33 @@ namespace Controller.RobotControl
     internal class GlobalVariableStore
     {
         private readonly Dictionary<string, double> _vars = new(System.StringComparer.OrdinalIgnoreCase);
+
+        // Global computed variables: name → formula. Registered by the program that declares
+        // them (on Start) and resolved by every program, evaluated against the global values,
+        // IO and properties only (docs/expressions-and-variables.md §7).
+        private readonly Dictionary<string, string> _computed = new(System.StringComparer.OrdinalIgnoreCase);
         private readonly object _lock = new();
+
+        /// <summary>
+        /// Registers (or replaces) a global computed variable's formula. The latest declaring
+        /// program wins — unlike a stored global's value, a formula carries no state worth
+        /// keeping, and the program being started has the current definition.
+        /// </summary>
+        public void RegisterComputed(string name, string expression)
+        {
+            lock (_lock) _computed[name] = expression ?? "";
+        }
+
+        public bool TryGetComputed(string name, out string expression)
+        {
+            lock (_lock) return _computed.TryGetValue(name, out expression!);
+        }
+
+        /// <summary>A point-in-time copy of every registered global computed formula.</summary>
+        public Dictionary<string, string> ComputedSnapshot()
+        {
+            lock (_lock) return new Dictionary<string, string>(_computed, System.StringComparer.OrdinalIgnoreCase);
+        }
 
         public bool TryGet(string name, out double value)
         {
@@ -45,7 +71,7 @@ namespace Controller.RobotControl
 
         public void Clear()
         {
-            lock (_lock) _vars.Clear();
+            lock (_lock) { _vars.Clear(); _computed.Clear(); }
         }
     }
 
