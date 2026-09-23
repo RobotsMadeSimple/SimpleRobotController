@@ -1,4 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using Controller.RobotControl.Execution;
+using Controller.RobotControl.Validation;
 
 namespace Controller.RobotControl.Commands;
 
@@ -37,6 +41,10 @@ internal sealed class BuiltProgramCommands
         // list, an unrelated thing, and the two would be a singular/plural apart.
         d.Add("GetProgramVariableImage", GetProgramVariableImage);
         d.Add("GetCncToolpath",          GetCncToolpath);
+        // Program editor support — docs/expressions-and-variables.md §4.
+        d.Add("ValidateBuiltProgram",    ValidateBuiltProgram);
+        d.Add("EvaluateExpression",      EvaluateExpression);
+        d.Add("GetExpressionSymbols",    GetExpressionSymbols);
     }
 
     private object? GetBuiltPrograms(CommandMessage msg)
@@ -156,5 +164,231 @@ internal sealed class BuiltProgramCommands
                 holes       = tp.Holes.Select(h => new { x = h.X, y = h.Y }).ToList(),
             },
         };
+    }
+
+    // ── Expressions and validation ────────────────────────────────────────────
+
+    private static readonly JsonSerializerOptions ProgramJson = new()
+    {
+        Converters = { new JsonStringEnumConverter() },
+        PropertyNameCaseInsensitive = true,
+    };
+
+    private static JsonElement? Param(CommandMessage msg, string name)
+    {
+        if (msg.Params is not { ValueKind: JsonValueKind.Object } p) return null;
+        foreach (var prop in p.EnumerateObject())
+            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase)) return prop.Value;
+        return null;
+    }
+
+    private static string? StringParam(CommandMessage msg, string name) =>
+        Param(msg, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
+
+    /// <summary>
+    /// ValidateBuiltProgram { program } → { problems: [...] }. The program may be unsaved;
+    /// a step type this controller does not know is reported rather than failing the parse.
+    /// </summary>
+    private object? ValidateBuiltProgram(CommandMessage msg)
+    {
+        var raw = Param(msg, "program")
+            ?? throw new InvalidOperationException("ValidateBuiltProgram needs a 'program' param");
+        // Accept the object itself or a JSON string of it (what some clients send).
+        var json = raw.ValueKind == JsonValueKind.String ? raw.GetString() ?? "{}" : raw.GetRawText();
+
+        var node = JsonNode.Parse(json) ?? throw new InvalidOperationException("'program' is null");
+        PatchUnknownStepTypes(node);
+        var program = node.Deserialize<BuiltProgram>(ProgramJson)
+            ?? throw new InvalidOperationException("'program' could not be read");
+
+        var problems = ProgramValidator.Validate(program, BuildValidationContext());
+        return new { problems };
+    }
+
+    // The arrays that hold steps; only their elements are step objects.
+    private static readonly HashSet<string> StepArrays =
+        new(["steps", "loopSteps", "ifSteps", "elseSteps", "cncProgramSteps"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Same idea as the repository's loader: a step whose "type" this controller
+    /// does not know becomes Unknown (with the original kept in unknownStepType).</summary>
+    private static void PatchUnknownStepTypes(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var kv in obj.ToList())
+                {
+                    if (StepArrays.Contains(kv.Key) && kv.Value is JsonArray steps)
+                        foreach (var step in steps)
+                            if (step is JsonObject so && so["type"] is JsonValue tv && tv.TryGetValue<string>(out var type) &&
+                                !Enum.TryParse<StepType>(type, ignoreCase: true, out _))
+                            {
+                                so["unknownStepType"] = type;
+                                so["type"] = nameof(StepType.Unknown);
+                            }
+                    PatchUnknownStepTypes(kv.Value);
+                }
+                break;
+            case JsonArray arr:
+                foreach (var item in arr) PatchUnknownStepTypes(item);
+                break;
+        }
+    }
+
+    private ValidationContext BuildValidationContext()
+    {
+        var repo   = _robot.builtProgramRepo;
+        var vision = _robot.VisionRepo;
+        return new ValidationContext
+        {
+            PointExists         = n => _robot.pointRepo.Get(n) != null,
+            ToolExists          = n => _robot.toolRepo.Get(n) != null,
+            LocalExists         = n => _robot.localRepo.Get(n) != null,
+            GridExists          = id => _robot.gridRepo.Get(id) != null,
+            StackExists         = id => _robot.stackRepo.Get(id) != null,
+            VisionProgramExists = vision == null ? null : id => vision.Get(id) != null,
+            FindProgram         = (id, name) =>
+                (!string.IsNullOrEmpty(id) ? repo.GetById(id) : null)
+                ?? (!string.IsNullOrEmpty(name) ? repo.Get(name) : null),
+            IoNames       = new HashSet<string>(IoSymbols().Select(i => i.Name), StringComparer.OrdinalIgnoreCase),
+            PropertyNames = new HashSet<string>(new RobotPropertySource(_robot, null).List().Select(p => p.Name),
+                                                StringComparer.OrdinalIgnoreCase),
+        };
+    }
+
+    /// <summary>
+    /// The executor whose live variables belong to <paramref name="name"/>: the foreground
+    /// executor while it holds the program (running, paused or just finished), else a
+    /// running background executor with that name, else null.
+    /// </summary>
+    private ProgramExecutor? LiveExecutorFor(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+        if (IsForeground(name!)) return _executor;
+        return _background.FindRunning(name!);
+    }
+
+    /// <summary>
+    /// EvaluateExpression { expression, programName? } → { ok, value, error?, isBoolean? }.
+    /// Against the named program's live variables when the foreground executor holds it,
+    /// otherwise against globals + IO + properties.
+    /// </summary>
+    private object? EvaluateExpression(CommandMessage msg)
+    {
+        var expr        = StringParam(msg, "expression") ?? "";
+        var programName = StringParam(msg, "programName");
+        try
+        {
+            double value;
+            if (LiveExecutorFor(programName) is { } live)
+                value = live.EvaluateLive(expr);
+            else
+            {
+                var vars = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                _background.GlobalVars.CopyInto(vars);
+                vars["time_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                ProgramExecutor.AddIoVariables(_robot, vars);
+                value = ExpressionEvaluator.Evaluate(expr, vars, null, new RobotPropertySource(_robot, null));
+            }
+            bool isBoolean = ExpressionEvaluator.IsBooleanExpression(expr);
+            if (!double.IsFinite(value))
+                return new { ok = false, value = (double?)null, error = $"Result is not a finite number ({value})", isBoolean };
+            return new { ok = true, value = (double?)value, error = (string?)null, isBoolean };
+        }
+        catch (ExpressionParseException ex)
+        {
+            return new { ok = false, value = (double?)null, error = $"{ex.Message} (at position {ex.Position})",
+                         isBoolean = false, position = ex.Position, code = ex.Code };
+        }
+        catch (UnknownVariableException ex)
+        {
+            return new { ok = false, value = (double?)null, error = ex.Message, isBoolean = false,
+                         position = -1, code = "unknownVariable" };
+        }
+    }
+
+    /// <summary>
+    /// GetExpressionSymbols { programName? } → { variables, properties, functions, io }.
+    /// Variables come from the program definition (with live values while the foreground
+    /// executor holds it); without a program, the current global variables.
+    /// </summary>
+    private object? GetExpressionSymbols(CommandMessage msg)
+    {
+        var programName = StringParam(msg, "programName");
+        var variables = new List<object>();
+
+        var program = string.IsNullOrEmpty(programName) ? null : _robot.builtProgramRepo.Get(programName!);
+        if (program != null)
+        {
+            var live = LiveExecutorFor(program.Name)?.SnapshotLiveValues();
+            foreach (var v in program.Variables ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(v.Name)) continue;
+                var list = v.ToListVar();
+                string kind = list != null ? "list"
+                            : v.IsString == true ? "string"
+                            : v.IsImage == true ? "image"
+                            : v.IsBoolean == true ? "boolean"
+                            : "number";
+                object? value = kind switch
+                {
+                    "list"   => list!.Count,
+                    "string" => v.StringValue ?? "",
+                    "image"  => null,
+                    _        => v.Value,
+                };
+                if (live != null && kind != "image" && live.TryGetValue(v.Name, out var lv)) value = lv;
+                variables.Add(new
+                {
+                    name         = v.Name,
+                    kind,
+                    elementType  = list != null ? list.ElementType.ToString() : null,
+                    isGlobal     = v.IsGlobal == true,
+                    isPersistent = v.IsPersistent == true,
+                    value,
+                });
+            }
+        }
+        else
+        {
+            foreach (var kv in _background.GlobalVars.Snapshot().OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+                variables.Add(new
+                {
+                    name = kv.Key, kind = "number", elementType = (string?)null,
+                    isGlobal = true, isPersistent = false, value = (object?)kv.Value,
+                });
+        }
+
+        var properties = new RobotPropertySource(_robot, null).List()
+            .Select(p => new { name = p.Name, description = p.Description, type = p.Type })
+            .Append(new { name = "time_ms", description = "Unix time in milliseconds (built-in variable; same as $time.now)", type = "number" })
+            .ToList();
+
+        var functions = ExpressionEvaluator.Functions
+            .Select(f => new { name = f.Name, signature = f.Signature, description = f.Description })
+            .ToList();
+
+        var io = IoSymbols().Select(i => new { name = i.Name, description = i.Description }).ToList();
+
+        return new { variables, properties, functions, io };
+    }
+
+    /// <summary>Every IO name an expression can read, as AddIoVariables writes them.</summary>
+    private List<(string Name, string Description)> IoSymbols()
+    {
+        var list = new List<(string, string)>();
+        for (int n = 1; n <= 4; n++) list.Add(($"stb.in{n}",  $"Driver board input {n}"));
+        for (int n = 1; n <= 4; n++) list.Add(($"stb.out{n}", $"Driver board output {n}"));
+        for (int n = 1; n <= 4; n++) list.Add(($"relay.{n}",  $"USB relay {n}"));
+        try
+        {
+            foreach (var nano in _robot.NanoManager.GetAllStates())
+                if (!string.IsNullOrEmpty(nano.Name))
+                    foreach (var pin in nano.Pins)
+                        if (!string.IsNullOrEmpty(pin.Name))
+                            list.Add(($"nano.{nano.Name}.{pin.Name}", $"Nano '{nano.Name}' pin {pin.Pin} ({pin.Type})"));
+        }
+        catch { /* no nano manager yet — the fixed names still stand */ }
+        return list;
     }
 }

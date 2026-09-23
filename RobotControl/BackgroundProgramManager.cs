@@ -235,6 +235,9 @@ namespace Controller.RobotControl
         public string GetDisplayImage(string name, string variable)
             => FindByName(name)?.GetDisplayImage(variable) ?? "";
 
+        /// <summary>The running background executor with this display name, or null.</summary>
+        internal ProgramExecutor? FindRunning(string name) => FindByName(name);
+
         private ProgramExecutor? FindByName(string name)
         {
             lock (_lock)

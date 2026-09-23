@@ -31,6 +31,10 @@ namespace Controller.RobotControl.Execution
                         {
                             throw; // errors the program via the dispatch-level handler
                         }
+                        catch (ExpressionParseException)
+                        {
+                            throw; // a syntax error errors the program too
+                        }
                         catch
                         {
                             // Malformed expression — leave variable unchanged

@@ -65,6 +65,14 @@ namespace Controller.RobotControl.Execution
         public EvalContext Eval { get; }
 
         /// <summary>
+        /// Read-only system properties ($robot.x, $program.runCount, $time.hour …) consulted by
+        /// every expression evaluated through this scope when a name is not a variable or IO
+        /// value. Resolved lazily at lookup — never copied into the per-tick snapshot. Null in
+        /// tests (then only variables and IO resolve).
+        /// </summary>
+        public IPropertySource? Properties { get; set; }
+
+        /// <summary>
         /// Bumped by every change to a scalar value or registration, so <see cref="EvalContext"/>
         /// knows when its cached snapshot is out of date.
         /// </summary>
@@ -307,8 +315,9 @@ namespace Controller.RobotControl.Execution
             // evaluated — a typo'd name quietly starting at 0 is how a clearance height
             // becomes a collision. Value is the fallback for anything else that goes wrong,
             // since it holds the last result the editor computed.
-            try { result = ExpressionEvaluator.Evaluate(v.ValueExpression, Eval.Vars, _listVariables); }
+            try { result = ExpressionEvaluator.Evaluate(v.ValueExpression, Eval.Vars, _listVariables, Properties); }
             catch (UnknownVariableException) { throw; }
+            catch (ExpressionParseException) { throw; }
             catch { return v.Value; }
 
             // A boolean holds 0 or 1, and an expression can produce any number — "$count"
@@ -333,6 +342,20 @@ namespace Controller.RobotControl.Execution
                 existing[prefix + name] = val;
             }
             PersistentVariableStore.Write(existing);
+        }
+
+        /// <summary>
+        /// Every variable's current value for the expression symbol list: scalars (globals
+        /// winning) as numbers, strings as text, lists as their element count. Images are
+        /// left out — their value is a camera frame.
+        /// </summary>
+        public Dictionary<string, object?> SnapshotValues()
+        {
+            var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in MergedVars()) result[kv.Key] = kv.Value;
+            foreach (var kv in _stringVariables) result[kv.Key] = kv.Value;
+            foreach (var kv in _listVariables) result[kv.Key] = kv.Value.Count;
+            return result;
         }
 
         // ── Monitor display ───────────────────────────────────────────────────
@@ -421,11 +444,13 @@ namespace Controller.RobotControl.Execution
             // Unknown variables propagate (and error the program) — a typo'd condition
             // silently comparing 0 could take the wrong branch on a machine that moves.
             double left, right;
-            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables); }
+            try { left  = ExpressionEvaluator.Evaluate(item.Left,  vars, _listVariables, Properties); }
             catch (UnknownVariableException) { throw; }
+            catch (ExpressionParseException) { throw; }
             catch { left  = 0; }
-            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables); }
+            try { right = ExpressionEvaluator.Evaluate(item.Right, vars, _listVariables, Properties); }
             catch (UnknownVariableException) { throw; }
+            catch (ExpressionParseException) { throw; }
             catch { right = 0; }
             // Shared with the comparison operators inside expressions, so "==" cannot come
             // to mean one thing in a condition row and another in "$a == $b".
@@ -448,9 +473,28 @@ namespace Controller.RobotControl.Execution
 
         // Matches $name, $name[expr] and $name[expr].component.
         private const string VarRef = @"(?<name>\w+)(?:\[(?<idx>[^\]]*)\](?:\.(?<comp>\w+))?)?";
-        private static readonly Regex TemplateToken = new(@"\{(?<body>[^{}]*)\}|\$" + VarRef);
-        private static readonly Regex LoneRef       = new(@"^\$" + VarRef + "$");
-        private static readonly Regex BareWord      = new(@"(?<![$.\w])[A-Za-z_]\w*");
+        internal static readonly Regex TemplateToken = new(@"\{(?<body>[^{}]*)\}|\$" + VarRef);
+        internal static readonly Regex LoneRef       = new(@"^\$" + VarRef + "$");
+        internal static readonly Regex BareWord      = new(@"(?<![$.\w])[A-Za-z_]\w*");
+
+        /// <summary>
+        /// A word inside {…} that is not a forgotten $: a literal (true/false), a word-spelled
+        /// operator (and/or/not), or a function name followed by "(" — "{round($x, 2)}".
+        /// </summary>
+        internal static bool IsAllowedBareWord(string body, Match w)
+        {
+            var word = w.Value;
+            if (word.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                word.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                word.Equals("and", StringComparison.OrdinalIgnoreCase) ||
+                word.Equals("or", StringComparison.OrdinalIgnoreCase) ||
+                word.Equals("not", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!ExpressionEvaluator.IsFunctionName(word)) return false;
+            int i = w.Index + w.Length;
+            while (i < body.Length && char.IsWhiteSpace(body[i])) i++;
+            return i < body.Length && body[i] == '(';
+        }
 
         /// <summary>A pose as it appears interpolated into a status message.</summary>
         private static string FormatPoint(Vector6Val pt) =>
@@ -496,7 +540,7 @@ namespace Controller.RobotControl.Execution
                 int idx = 0;
                 if (!string.IsNullOrEmpty(idxExpr))
                 {
-                    try { idx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, allVarsForTemplate, _listVariables)); }
+                    try { idx = (int)Math.Round(ExpressionEvaluator.Evaluate(idxExpr, allVarsForTemplate, _listVariables, Properties)); }
                     catch { idx = 0; }
                 }
 
@@ -537,9 +581,7 @@ namespace Controller.RobotControl.Execution
                 // turning a forgotten sigil into a plausible-looking wrong answer. Leave the
                 // braces written as-is instead, so it surfaces downstream. Words after a dot
                 // are components (.z, .length) and true/false are literals — both fine bare.
-                var bare = BareWord.Matches(body)
-                                .Any(w => !w.Value.Equals("true",  StringComparison.OrdinalIgnoreCase)
-                                       && !w.Value.Equals("false", StringComparison.OrdinalIgnoreCase));
+                var bare = BareWord.Matches(body).Any(w => !IsAllowedBareWord(body, w));
                 if (body.Length == 0 || bare) return m.Value;
 
                 var inner = LoneRef.Match(body);
@@ -551,7 +593,7 @@ namespace Controller.RobotControl.Execution
                 // Anything else is an expression. A failure leaves the braces in place,
                 // which surfaces downstream (a point lookup, say) rather than silently
                 // substituting something wrong.
-                try { return ExpressionEvaluator.Evaluate(body, allVarsForTemplate, _listVariables).ToString("G6"); }
+                try { return ExpressionEvaluator.Evaluate(body, allVarsForTemplate, _listVariables, Properties).ToString("G6"); }
                 catch { return m.Value; }
             });
         }
