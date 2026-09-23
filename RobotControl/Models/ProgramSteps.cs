@@ -136,6 +136,19 @@ public class ProgramStep
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
+    /// <summary>
+    /// False = the executor skips this step (it still counts toward progress). Null or
+    /// true = enabled. Lets a user park a step while debugging without deleting it.
+    /// </summary>
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+
+    /// <summary>Free-text note shown under the step in the editor. Not executed.</summary>
+    [JsonPropertyName("comment")]
+    public string? Comment { get; set; }
+
+    [JsonIgnore] public bool IsEnabled => Enabled != false;
+
     [JsonPropertyName("type")]
     public StepType Type { get; set; }
 

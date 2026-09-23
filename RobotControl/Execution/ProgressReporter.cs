@@ -126,6 +126,14 @@ namespace Controller.RobotControl.Execution
         }
 
         /// <summary>A step a background program skips (motion/tool/homing) — logged, then completed.</summary>
+        public void SkippedDisabled(ProgramStep step) =>
+            _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+            {
+                ProgramName     = ProgramName,
+                StepDescription = $"[Skipped — disabled] {StepDescription(step)}",
+                ShouldLog       = true,
+            });
+
         public void SkippedInBackground(ProgramStep step) =>
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {

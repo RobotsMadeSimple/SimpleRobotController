@@ -446,6 +446,14 @@ namespace Controller.RobotControl
 
         private void ExecuteStepInner(ProgramStep step, StepListFrame frame)
         {
+            // A step the user disabled in the editor is skipped but still counted.
+            if (!step.IsEnabled)
+            {
+                _ctx.Progress.SkippedDisabled(step);
+                _ctx.CompleteNow(step, frame);
+                return;
+            }
+
             // Background programs skip motion/tool/homing steps rather than error
             if (_isBackground && IsRestrictedInBackground(step.Type))
             {
