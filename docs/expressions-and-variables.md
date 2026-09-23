@@ -135,3 +135,21 @@ Stored beside the program: `builtPrograms/.revisions/<safe-name>/<unixms>.json`.
 A revision is written by `SaveBuiltProgram` when the new JSON differs from the
 current file, and by `RestoreBuiltProgramRevision`. Keep the newest 30 per
 program; delete the folder with the program. `id` is the unix-ms file stem.
+
+## 7. Computed variables (user-defined properties)
+
+A variable with `isComputed: true` is a named formula: its `valueExpression` is
+evaluated every time the variable is read, against the live variables, IO and
+properties, exactly like `$robot.*`. It has no stored value and cannot be
+assigned.
+
+| Rule | Detail |
+|---|---|
+| Model | `ProgramVariable { isComputed: true, valueExpression: "<expr>", isBoolean?, isGlobal?, displayOnMonitor? }`. `value` is ignored; `isPersistent`, `isString`, `isImage`, `isStopwatch`, `items` are invalid with `isComputed`. |
+| Read | `$name` resolves the formula each time. Nested computed references are fine; a cycle is a validation error (`computedCycle`) and at run time evaluates to a program error rather than recursing. |
+| Write | Any assignment (Set Variable, loop/vision/HTTP output targets) → validation code `computedVariable` (error); at run time the write is refused with a program error. |
+| Global | `isGlobal` computed variables are registered in the global store by the program that declares them and readable from every program, evaluated against globals + IO + properties only. A global computed formula that references a non-global program variable → `computedGlobalScope` (error). |
+| Boolean | `isBoolean` renders the value as true/false on the monitor; the formula still yields 1/0. |
+| Monitor | `displayOnMonitor` works; the value shown is the formula's current result. An evaluation error shows as `NaN`. |
+| Symbols | `GetExpressionSymbols` lists them with `kind: "computed"` and an extra `expression` field; live `value` when the program holds them. |
+| Validation | Formula parsed and every reference resolved like any other expression (`expressionSyntax`, `unknownVariable`, …), plus the three codes above. Declaring a computed variable with a stored-kind flag → `computedKindConflict`. |
