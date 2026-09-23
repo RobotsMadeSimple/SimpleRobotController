@@ -272,6 +272,7 @@ namespace Controller.RobotControl.Execution
             {
                 try { ptIdx = (int)Math.Round(ev.Evaluate(indexExpr)); }
                 catch (UnknownVariableException) { throw; }
+                catch (ExpressionParseException) { throw; }
                 catch { /* malformed expression — default 0 */ }
             }
             ptIdx = Math.Clamp(ptIdx, 0, ptList.Count - 1);

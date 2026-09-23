@@ -81,8 +81,9 @@ namespace Controller.RobotControl.Execution
             }
         }
 
-        /// <summary>Evaluates an expression against <see cref="Vars"/> and the list variables.</summary>
-        public double Evaluate(string expr) => ExpressionEvaluator.Evaluate(expr, Vars, _scope.Lists);
+        /// <summary>Evaluates an expression against <see cref="Vars"/>, the list variables and the
+        /// scope's properties (looked up lazily — never copied into the snapshot).</summary>
+        public double Evaluate(string expr) => ExpressionEvaluator.Evaluate(expr, Vars, _scope.Lists, _scope.Properties);
 
         public bool EvaluateCondition(ConditionGroup group) => _scope.EvaluateCondition(group, Vars);
 
@@ -90,8 +91,9 @@ namespace Controller.RobotControl.Execution
         /// Returns the evaluated value for a numeric field.
         /// If the step has an expression keyed by <paramref name="fieldName"/>, that expression is
         /// evaluated against the current variable dictionary; otherwise <paramref name="fallback"/> is returned.
-        /// An unknown variable in the expression propagates (and errors the program) rather than
-        /// silently falling back — a typo'd offset must never move the robot to the wrong place.
+        /// An unknown variable or a syntax error in the expression propagates (and errors the
+        /// program) rather than silently falling back — a typo'd offset must never move the
+        /// robot to the wrong place.
         /// </summary>
         public double EvalField(ProgramStep step, string fieldName, double fallback)
         {
@@ -99,7 +101,9 @@ namespace Controller.RobotControl.Execution
             {
                 try { return Evaluate(expr); }
                 catch (UnknownVariableException) { throw; }
-                catch { /* malformed expression — fall through to the literal */ }
+                // A syntax error errors the program too — the validator reports it before a run.
+                catch (ExpressionParseException) { throw; }
+                catch { /* anything else — fall through to the literal */ }
             }
             return fallback;
         }

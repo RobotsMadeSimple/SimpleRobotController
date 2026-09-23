@@ -91,6 +91,25 @@ namespace Controller.RobotControl
             lock (_controlLock) return _vars.GetDisplayImage(Program, name);
         }
 
+        // ── Expression tools (EvaluateExpression / GetExpressionSymbols) ─────
+
+        /// <summary>
+        /// Evaluates <paramref name="expr"/> against this executor's live variables, IO and
+        /// properties — what a step evaluating it right now would see. Throws like
+        /// <see cref="ExpressionEvaluator.Evaluate"/>.
+        /// </summary>
+        internal double EvaluateLive(string expr)
+        {
+            lock (_controlLock)
+                return ExpressionEvaluator.Evaluate(expr, _vars.EvalVars(), _vars.Lists, _vars.Properties);
+        }
+
+        /// <summary>Current values of every variable in scope: number, string, or a list's element count.</summary>
+        internal Dictionary<string, object?> SnapshotLiveValues()
+        {
+            lock (_controlLock) return _vars.SnapshotValues();
+        }
+
         // ── Public control ───────────────────────────────────────────────────
 
         // Start/Stop/Resume/Reset are called from WebSocket threads (and Stop from the
@@ -155,6 +174,12 @@ namespace Controller.RobotControl
             {
                 Finish(ProgramStatus.Error,
                     $"Unknown variable '${ex.VariableName}' in a variable's initial value");
+                return;
+            }
+            catch (ExpressionParseException ex)
+            {
+                Finish(ProgramStatus.Error,
+                    $"Expression error in a variable's initial value: {ProgressReporter.DescribeParseError(ex)}");
                 return;
             }
 
@@ -433,6 +458,13 @@ namespace Controller.RobotControl
                 // a clear error instead of silently evaluating to 0 and moving the robot.
                 Finish(ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in step: {ProgressReporter.StepDescription(step)}");
             }
+            catch (ExpressionParseException ex)
+            {
+                // A syntax error the validator would have reported — a clear message rather
+                // than a stack trace, and never a silent fallback value.
+                Finish(ProgramStatus.Error,
+                    $"Expression error in step {ProgressReporter.StepDescription(step)}: {ProgressReporter.DescribeParseError(ex)}");
+            }
             catch (Exception ex)
             {
                 // Anything else a step throws (device I/O, a bad repository entry, a bug)
@@ -510,7 +542,7 @@ namespace Controller.RobotControl
         }
 
         /// <summary>Writes live IO values (stb.inN/outN, relay.N, nano.name.pin) into <paramref name="io"/>.</summary>
-        private static void AddIoVariables(RobotController controller, Dictionary<string, double> io)
+        internal static void AddIoVariables(RobotController controller, Dictionary<string, double> io)
         {
             io["stb.in1"]  = controller.stb.Input1  ? 1.0 : 0.0;
             io["stb.in2"]  = controller.stb.Input2  ? 1.0 : 0.0;

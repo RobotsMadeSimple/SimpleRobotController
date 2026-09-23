@@ -34,11 +34,36 @@ namespace Controller.RobotControl.Execution
         /// <summary>Description of the step most recently started (background status list).</summary>
         public string CurrentStepDescription { get; private set; } = "";
 
+        /// <summary>Total steps this run reports (set by <see cref="Starting"/>). 0 when idle.</summary>
+        public int StepCount { get; private set; }
+
+        /// <summary>This program's start count since boot, this run included — mirrors the
+        /// cycle manager's runCount, which it bumps at the same moment.</summary>
+        public int RunCount { get; private set; }
+
+        private long _startTick; // Environment.TickCount64 at Starting; 0 = not running
+
+        /// <summary>Milliseconds since the run started; 0 when idle.</summary>
+        public long ElapsedMs => _startTick == 0 ? 0 : Environment.TickCount64 - _startTick;
+
+        // Starts per program name, shared by every executor (main and background) so the
+        // count matches the cycle manager's per-program runCount.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> RunCounts =
+            new(StringComparer.OrdinalIgnoreCase);
+
         public void Reset()
         {
             GlobalStepIndex        = 0;
             CurrentStepDescription = "";
+            StepCount              = 0;
+            _startTick             = 0;
         }
+
+        /// <summary>"message (at position n in 'expr')" — how a syntax error reads in a run's error text.</summary>
+        public static string DescribeParseError(ExpressionParseException ex) =>
+            string.IsNullOrEmpty(ex.Expression)
+                ? $"{ex.Message} (at position {ex.Position})"
+                : $"{ex.Message} (at position {ex.Position} in '{ex.Expression}')";
 
         // ── Step progress ─────────────────────────────────────────────────────
 
@@ -166,6 +191,9 @@ namespace Controller.RobotControl.Execution
             // Clear any terminal state so the incoming Running update is not blocked by the guard
             _programManager.ResetToReady(program.Name, totalSteps);
             _programManager.MarkStarted(program.Name);
+            RunCount   = RunCounts.AddOrUpdate(program.Name, 1, (_, n) => n + 1);
+            StepCount  = totalSteps;
+            _startTick = Math.Max(1, Environment.TickCount64);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = program.Name,

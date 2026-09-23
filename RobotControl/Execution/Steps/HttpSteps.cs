@@ -91,7 +91,7 @@ namespace Controller.RobotControl.Execution
                 {
                     double val = 0;
                     if (!string.IsNullOrWhiteSpace(kv.Expr))
-                        try { val = ExpressionEvaluator.Evaluate(kv.Expr, vars, scope.Lists); }
+                        try { val = ExpressionEvaluator.Evaluate(kv.Expr, vars, scope.Lists, scope.Properties); }
                         catch { /* leave as 0 */ }
                     body[kv.Key] = val;
                 }

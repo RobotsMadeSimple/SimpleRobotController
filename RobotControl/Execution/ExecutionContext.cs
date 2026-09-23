@@ -41,7 +41,7 @@ namespace Controller.RobotControl.Execution
     /// executor's control lock (the one exception, <see cref="PendingActions"/>, is a
     /// concurrent queue fed by HTTP completions and drained on the loop thread).
     /// </remarks>
-    internal sealed class ExecutionContext
+    internal sealed class ExecutionContext : IProgramRunInfo
     {
         private readonly Action<ProgramStatus, string> _finish;
         private readonly Action _pause;
@@ -66,7 +66,17 @@ namespace Controller.RobotControl.Execution
             LivePosition      = controller.GetCurrentPosition;
             _finish           = finish;
             _pause            = pause;
+            // $robot.* / $program.* / $time.* / $aux.* — read live at lookup time.
+            vars.Properties   = new RobotPropertySource(controller, this);
         }
+
+        // ── $program.* properties ─────────────────────────────────────────────
+
+        int  IProgramRunInfo.RunCount  => Progress.RunCount;
+        int  IProgramRunInfo.StepIndex => Progress.GlobalStepIndex;
+        int  IProgramRunInfo.StepCount => Progress.StepCount;
+        long IProgramRunInfo.ElapsedMs => Progress.ElapsedMs;
+        int  IProgramRunInfo.LoopDepth => Frames.LoopDepth;
 
         // ── Collaborators ─────────────────────────────────────────────────────
 
@@ -187,8 +197,8 @@ namespace Controller.RobotControl.Execution
             return false;
         }
 
-        /// <summary>Evaluates a while-loop condition; an unknown variable finishes the program
-        /// with an error and reads as false.</summary>
+        /// <summary>Evaluates a while-loop condition; an unknown variable or a syntax error
+        /// finishes the program with an error and reads as false.</summary>
         public bool EvalWhileCondition(ConditionGroup condition)
         {
             try
@@ -200,6 +210,11 @@ namespace Controller.RobotControl.Execution
                 // While-loop re-checks run outside the step dispatch, so error here directly.
                 Finish(ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in while-loop condition");
                 return false; // exit the loop — the program is already finishing with an error
+            }
+            catch (ExpressionParseException ex)
+            {
+                Finish(ProgramStatus.Error, $"Expression error in while-loop condition: {ProgressReporter.DescribeParseError(ex)}");
+                return false;
             }
         }
 

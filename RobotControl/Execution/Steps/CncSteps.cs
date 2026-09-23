@@ -36,6 +36,7 @@ namespace Controller.RobotControl.Execution
                         return fallback;
                     try { return ctx.Eval.Evaluate(expr); }
                     catch (UnknownVariableException) { throw; }
+                    catch (ExpressionParseException) { throw; }
                     catch { return fallback; }
                 }
 

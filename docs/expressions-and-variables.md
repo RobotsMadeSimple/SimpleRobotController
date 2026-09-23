@@ -28,8 +28,10 @@ Conditional   cond ? a : b            (lowest precedence, right-assoc)
 Grouping      ( … )
 ```
 
-Precedence, tightest first: `^` · unary `-`/`not` · `* / %` · `+ -` ·
-comparison · `and` · `or` · `? :`.
+Precedence, tightest first: `^` · unary `-` · `* / %` · `+ -` ·
+comparison · `not` · `and` · `or` · `? :`. A leading `not` keeps its existing
+place above comparison (`not $a > 5` is `not ($a > 5)`, as it always was); a
+`not` written as an operand (`$a == not $b`) binds like unary `-`.
 
 ### Functions (case-insensitive)
 
@@ -53,7 +55,11 @@ Unknown function → parse error `unknownFunction`. Wrong arity → `badArity`.
 `UnknownVariableException` (exists) stays fatal at run time. Syntax errors now
 throw `ExpressionParseException { Message, Position }` instead of silently
 evaluating to a fallback; the validator (section 5) reports them before a run.
-`ExpressionEvaluator.TryParse(expr, out error)` checks syntax only.
+`ExpressionEvaluator.TryParse(expr, out error)` (and the overload with
+`out position`) checks syntax only. `ExpressionParseException.Code` is
+`expressionSyntax`, `unknownFunction` or `badArity`. An empty expression is valid
+and evaluates to 0; a bare word without `$` is valid and evaluates to 0 (legacy —
+the validator warns).
 
 ## 3. Properties (read-only system variables)
 
@@ -94,6 +100,23 @@ unknownGrid unknownStack unknownLabel duplicateLabel unknownVariable
 unknownProperty expressionSyntax emptyLoop emptyBranch missingField
 routineRecursion disabledStep(warning) unreachableStep(warning)
 unusedVariable(warning)`.
+
+Also emitted: `unknownFunction` and `badArity` (the parse-error codes of section 2),
+`readOnlyProperty` (a property or IO name used as a write target — Set Variable,
+loop/vision/HTTP output variables — or declared as a variable), `unknownProgram`
+(Start/Stop/WaitForBackground naming a missing program) and
+`unknownStepType(warning)` (a step type the controller does not know; it is skipped).
+Problems inside templates (`statusMessage`, `saveImagePath`, string Set Variable,
+text conditions) are warnings: at run time an unresolved reference there is left
+as written rather than failing. `stepPath` uses the JSON field names
+(`steps[2].loopSteps[0]`, `steps[1].elseIfBranches[0].steps[3]`); a routine body is
+checked once, under the first call that reaches it: `steps[4].routine(Pick).steps[0]`.
+Program-level problems (variables) have `stepId: null` and `stepPath: "variables[i]"`.
+
+`EvaluateExpression` failures also carry `code` (`expressionSyntax`,
+`unknownFunction`, `badArity`, `unknownVariable`) and `position` (-1 when not a
+syntax error). The named program's variables are used while the foreground
+executor holds it (running, paused, or finished and not yet reset).
 
 ## 5. Validation rules
 
