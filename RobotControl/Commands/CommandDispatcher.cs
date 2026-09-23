@@ -45,6 +45,7 @@ internal sealed class CommandDispatcher
         new GridCommands(robot).Register(d);
         new StackCommands(robot).Register(d);
         new BuiltProgramCommands(robot, programs, executor, background).Register(d);
+        new RevisionCommands(robot).Register(d);
         new ProgramCycleCommands(robot, programs, executor).Register(d);
         new IoCommands(robot).Register(d);
         new AuxCommands(robot).Register(d);

@@ -60,4 +60,21 @@ public class SaveBuiltProgramImageParams
     [JsonPropertyName("image")] public string Image { get; set; } = ""; // base64-encoded JPEG bytes
 }
 
+/// <summary>Summary row for <c>GetBuiltProgramRevisions</c> — one saved snapshot of a program.</summary>
+public class ProgramRevisionInfo
+{
+    [JsonPropertyName("id")]            public string  Id            { get; set; } = ""; // unix-ms file stem
+    [JsonPropertyName("savedUnixMs")]   public long    SavedUnixMs   { get; set; }
+    [JsonPropertyName("stepCount")]     public int     StepCount     { get; set; }
+    [JsonPropertyName("variableCount")] public int     VariableCount { get; set; }
+    [JsonPropertyName("note")]          public string? Note          { get; set; }
+}
+
+/// <summary>Params for <c>GetBuiltProgramRevision</c> and <c>RestoreBuiltProgramRevision</c>.</summary>
+public class BuiltProgramRevisionParams
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("id")]   public string Id   { get; set; } = "";
+}
+
 

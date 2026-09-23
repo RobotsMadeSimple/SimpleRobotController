@@ -185,6 +185,38 @@ move targets (a `MoveL`/`MoveJ` `name` can be a grid/stack cell reference).
 | `StopBuiltProgram` | — | Stop/pause the running built program (frame stack kept for resume). |
 | `GetProgramVariables` | program name | Returns the program's current variable values, plus its display images as name + revision. |
 | `GetProgramVariableImage` | `name` (program) + `variable` | Returns the base64 bytes of one display image variable in `image`. |
+| `GetBuiltProgramRevisions` | `name` | Returns saved snapshots for a program, newest first, in `revisions`. |
+| `GetBuiltProgramRevision` | `name, id` | Returns one saved snapshot as JSON in `program`. |
+| `RestoreBuiltProgramRevision` | `name, id` | Makes that snapshot the current content and returns it as JSON in `program`. |
+
+### Revision history
+
+`SaveBuiltProgram` archives a revision of the program's **previous** on-disk
+content whenever the new save's serialized JSON differs from what is already
+there — an unchanged save creates nothing. Up to 30 revisions are kept per
+program, oldest dropped first; deleting a program deletes its history, and
+renaming a program (same id, new name) carries its history over to the new
+name. `RestoreBuiltProgramRevision` restores by saving the chosen snapshot as
+the current content — which itself archives the pre-restore state as a new
+revision — and keeps the program's current id/name even if the snapshot
+predates a rename.
+
+```json
+// GetBuiltProgramRevisions { "name": "PickAndPlace" }
+{ "revisions": [
+  { "id": "1758556800000", "savedUnixMs": 1758556800000, "stepCount": 42, "variableCount": 6, "note": null },
+  { "id": "1758553200000", "savedUnixMs": 1758553200000, "stepCount": 40, "variableCount": 6, "note": null }
+] }
+
+// GetBuiltProgramRevision { "name": "PickAndPlace", "id": "1758556800000" }
+{ "program": "{...}" }   // same JSON-string shape as GetBuiltPrograms' programs entries
+
+// RestoreBuiltProgramRevision { "name": "PickAndPlace", "id": "1758556800000" }
+{ "program": "{...}" }
+```
+
+An unknown `name` or `id` answers `{ "ok": false, "error": "unknownProgram" }`
+or `{ "ok": false, "error": "unknownRevision" }` instead of the normal payload.
 
 ### Display images
 
