@@ -216,6 +216,16 @@ public class ProgramVariable
     /// <summary>When true, this variable holds a JPEG image as a base64 string, populated at runtime by CaptureImage steps.</summary>
     [JsonPropertyName("isImage")]
     public bool? IsImage { get; set; }
+
+    /// <summary>
+    /// When true, this variable is a named formula (a user-defined property): its
+    /// <see cref="ValueExpression"/> is evaluated every time <c>$name</c> is read, against the
+    /// live variables, IO and properties. It has no stored value and cannot be assigned;
+    /// <see cref="Value"/> is ignored. Invalid together with IsPersistent, IsString, IsImage,
+    /// IsStopwatch or Items (docs/expressions-and-variables.md §7).
+    /// </summary>
+    [JsonPropertyName("isComputed")]
+    public bool? IsComputed { get; set; }
 }
 
 

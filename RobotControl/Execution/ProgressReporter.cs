@@ -61,7 +61,10 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>"message (at position n in 'expr')" — how a syntax error reads in a run's error text.</summary>
         public static string DescribeParseError(ExpressionParseException ex) =>
-            string.IsNullOrEmpty(ex.Expression)
+            // Not a syntax error at a character (a computed-variable cycle): no position to give.
+            ex.Position < 0
+                ? (string.IsNullOrEmpty(ex.Expression) ? ex.Message : $"{ex.Message} (in '{ex.Expression}')")
+            : string.IsNullOrEmpty(ex.Expression)
                 ? $"{ex.Message} (at position {ex.Position})"
                 : $"{ex.Message} (at position {ex.Position} in '{ex.Expression}')";
 

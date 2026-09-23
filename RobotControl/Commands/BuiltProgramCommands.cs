@@ -288,7 +288,10 @@ internal sealed class BuiltProgramCommands
                 _background.GlobalVars.CopyInto(vars);
                 vars["time_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 ProgramExecutor.AddIoVariables(_robot, vars);
-                value = ExpressionEvaluator.Evaluate(expr, vars, null, new RobotPropertySource(_robot, null));
+                // Global computed variables resolve too, ahead of the system properties.
+                var props = ComputedPropertySource.ForGlobals(_background.GlobalVars,
+                    io => ProgramExecutor.AddIoVariables(_robot, io), new RobotPropertySource(_robot, null));
+                value = ExpressionEvaluator.Evaluate(expr, vars, null, props);
             }
             bool isBoolean = ExpressionEvaluator.IsBooleanExpression(expr);
             if (!double.IsFinite(value))
@@ -297,7 +300,7 @@ internal sealed class BuiltProgramCommands
         }
         catch (ExpressionParseException ex)
         {
-            return new { ok = false, value = (double?)null, error = $"{ex.Message} (at position {ex.Position})",
+            return new { ok = false, value = (double?)null, error = ex.Position < 0 ? ex.Message : $"{ex.Message} (at position {ex.Position})",
                          isBoolean = false, position = ex.Position, code = ex.Code };
         }
         catch (UnknownVariableException ex)
@@ -315,15 +318,67 @@ internal sealed class BuiltProgramCommands
     private object? GetExpressionSymbols(CommandMessage msg)
     {
         var programName = StringParam(msg, "programName");
+        var program = string.IsNullOrEmpty(programName) ? null : _robot.builtProgramRepo.Get(programName!);
+        var live = program != null ? LiveExecutorFor(program.Name)?.SnapshotLiveValues() : null;
+        var globalProps = ComputedPropertySource.ForGlobals(_background.GlobalVars,
+            io => ProgramExecutor.AddIoVariables(_robot, io), new RobotPropertySource(_robot, null));
+        var variables = VariableSymbols(program, live, _background.GlobalVars, globalProps);
+
+        var properties = new RobotPropertySource(_robot, null).List()
+            .Select(p => new { name = p.Name, description = p.Description, type = p.Type })
+            .Append(new { name = "time_ms", description = "Unix time in milliseconds (built-in variable; same as $time.now)", type = "number" })
+            .ToList();
+
+        var functions = ExpressionEvaluator.Functions
+            .Select(f => new { name = f.Name, signature = f.Signature, description = f.Description })
+            .ToList();
+
+        var io = IoSymbols().Select(i => new { name = i.Name, description = i.Description }).ToList();
+
+        return new { variables, properties, functions, io };
+    }
+
+    /// <summary>
+    /// The <c>variables</c> of GetExpressionSymbols. With a program: its declared variables,
+    /// computed ones as <c>kind: "computed"</c> with their <c>expression</c>, valued from
+    /// <paramref name="live"/> when the program is held by an executor (a global computed
+    /// one is evaluated from the global store otherwise). Without: the current global values
+    /// and the registered global computed variables.
+    /// </summary>
+    internal static List<object> VariableSymbols(BuiltProgram? program, IReadOnlyDictionary<string, object?>? live,
+                                                 GlobalVariableStore globals, ComputedPropertySource globalProps)
+    {
         var variables = new List<object>();
 
-        var program = string.IsNullOrEmpty(programName) ? null : _robot.builtProgramRepo.Get(programName!);
+        object? GlobalComputedValue(string name)
+        {
+            try { return globalProps.TryGetComputed(name, out var v) && double.IsFinite(v) ? v : null; }
+            catch { return null; }
+        }
+
         if (program != null)
         {
-            var live = LiveExecutorFor(program.Name)?.SnapshotLiveValues();
             foreach (var v in program.Variables ?? [])
             {
                 if (string.IsNullOrWhiteSpace(v.Name)) continue;
+                if (v.IsComputed == true)
+                {
+                    object? cv = null;
+                    if (live != null && live.TryGetValue(v.Name, out var lcv)) cv = lcv;
+                    else if (v.IsGlobal == true && globals.TryGetComputed(v.Name, out _)) cv = GlobalComputedValue(v.Name);
+                    variables.Add(new
+                    {
+                        name         = v.Name,
+                        kind         = "computed",
+                        elementType  = (string?)null,
+                        isGlobal     = v.IsGlobal == true,
+                        isPersistent = false,
+                        isBoolean    = v.IsBoolean == true,
+                        expression   = v.ValueExpression ?? "",
+                        value        = cv,
+                    });
+                    continue;
+                }
                 var list = v.ToListVar();
                 string kind = list != null ? "list"
                             : v.IsString == true ? "string"
@@ -351,26 +406,29 @@ internal sealed class BuiltProgramCommands
         }
         else
         {
-            foreach (var kv in _background.GlobalVars.Snapshot().OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var kv in globals.Snapshot().OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
                 variables.Add(new
                 {
                     name = kv.Key, kind = "number", elementType = (string?)null,
                     isGlobal = true, isPersistent = false, value = (object?)kv.Value,
                 });
+            foreach (var kv in globals.ComputedSnapshot().OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+                variables.Add(new
+                {
+                    name = kv.Key, kind = "computed", elementType = (string?)null,
+                    isGlobal = true, isPersistent = false,
+                    // The store keeps formulas only; the flag lives in the declaring program.
+                    isBoolean = LooksBoolean(kv.Value),
+                    expression = kv.Value, value = GlobalComputedValue(kv.Key),
+                });
         }
+        return variables;
 
-        var properties = new RobotPropertySource(_robot, null).List()
-            .Select(p => new { name = p.Name, description = p.Description, type = p.Type })
-            .Append(new { name = "time_ms", description = "Unix time in milliseconds (built-in variable; same as $time.now)", type = "number" })
-            .ToList();
-
-        var functions = ExpressionEvaluator.Functions
-            .Select(f => new { name = f.Name, signature = f.Signature, description = f.Description })
-            .ToList();
-
-        var io = IoSymbols().Select(i => new { name = i.Name, description = i.Description }).ToList();
-
-        return new { variables, properties, functions, io };
+        static bool LooksBoolean(string expr)
+        {
+            try { return ExpressionEvaluator.IsBooleanExpression(expr); }
+            catch (ExpressionParseException) { return false; }
+        }
     }
 
     /// <summary>Every IO name an expression can read, as AddIoVariables writes them.</summary>

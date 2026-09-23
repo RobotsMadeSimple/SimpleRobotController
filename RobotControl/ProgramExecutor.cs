@@ -182,6 +182,12 @@ namespace Controller.RobotControl
                     $"Expression error in a variable's initial value: {ProgressReporter.DescribeParseError(ex)}");
                 return;
             }
+            catch (ComputedVariableWriteException ex)
+            {
+                Finish(ProgramStatus.Error,
+                    $"'${ex.VariableName}' is declared both as a computed variable and as a stored one");
+                return;
+            }
 
             // Programs start in the robot's active local (set from the jog page);
             // SetLocal / ClearLocal steps override it during the run.
@@ -294,6 +300,12 @@ namespace Controller.RobotControl
                 // per evaluated field — see EvalContext.
                 _vars.Eval.BeginTick();
                 try { UpdateCore(); }
+                catch (ComputedVariableWriteException ex)
+                {
+                    // Writes outside step dispatch — loop index/forEach variables as a loop
+                    // re-enters, queued HTTP inbound mappings — end the program the same way.
+                    Finish(ProgramStatus.Error, $"Cannot assign computed variable '${ex.VariableName}'");
+                }
                 finally { _vars.Eval.EndTick(); }
             }
         }
@@ -457,6 +469,12 @@ namespace Controller.RobotControl
                 // A typo'd variable in any step field or condition stops the program with
                 // a clear error instead of silently evaluating to 0 and moving the robot.
                 Finish(ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in step: {ProgressReporter.StepDescription(step)}");
+            }
+            catch (ComputedVariableWriteException ex)
+            {
+                // A computed variable is a formula; writing it would silently do nothing useful.
+                Finish(ProgramStatus.Error,
+                    $"Cannot assign computed variable '${ex.VariableName}' in step: {ProgressReporter.StepDescription(step)}");
             }
             catch (ExpressionParseException ex)
             {
