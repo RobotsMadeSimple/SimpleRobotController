@@ -304,13 +304,47 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | Command | Params | Description |
 |---|---|---|
 | `GetCameras` | — | Returns camera states (each with `calibrated` and `calibratedUnixMs`, see below). |
-| `AddCamera` | `name, deviceIndex, enabled, width=640, height=480, targetFps=15` | Add a USB camera. |
+| `AddCamera` | `name, deviceIndex, enabled, width=640, height=480, targetFps=15`, optional `sourceType="usb"`, `url`, `username`, `password`, `transport="tcp"` | Add a USB or network camera. |
 | `RemoveCamera` | `id` | Remove a camera. |
-| `SetCameraConfig` | `id, name, deviceIndex, enabled, width, height, targetFps` | Update a camera's config. |
-| `GetCameraResolutions` | `deviceIndex` | Probe supported resolutions for a device index. |
+| `SetCameraConfig` | `id, name, deviceIndex, enabled, width, height, targetFps`, optional `sourceType, url, username, password, transport` | Update a camera's config. An absent network field keeps the camera's current value. The capture restarts only when a capture-affecting field changed (device index, size, fps, enabled, or any source field). |
+| `GetCameraResolutions` | `deviceIndex`, optional `id` | Probe supported resolutions for a device index. Returns `[]` for a network camera (`id` of one); network cameras never match a `deviceIndex`. |
+| `TestCameraSource` | `url`, optional `username`, `password`, `transport` (`tcp`/`udp`), `timeoutMs` (8000) | Opens a network stream once on a worker thread, reads one frame and closes it. Returns `ok, width, height, openMs, firstFrameMs, error` (`error` null on success). |
 
 Camera frames are streamed separately over `GET /camera/{id}/ws` (base64 MJPEG
 text frames) with a `GET /camera/{id}/snapshot` still image.
+
+### Network cameras
+
+A camera with `sourceType: "network"` is an RTSP (`rtsp://`, `rtsps://`) or HTTP
+MJPEG/snapshot (`http://`, `https://`) stream opened through OpenCV's FFmpeg
+backend — see [network-cameras.md](network-cameras.md). `url` is stored without
+credentials; `username`/`password` are injected (URL-encoded) at open time and are
+returned by `GetCameras`, but logs only ever show the password as `***`.
+`deviceIndex` is ignored, and `width`/`height`/`supportedResolutions` are
+informational: the stream's own size is used.
+
+Extra `GetCameras` state fields (all cameras):
+
+| Field | Meaning |
+|---|---|
+| `sourceType` | `"usb"` (also when absent in an old `camera_config.json`) or `"network"`. |
+| `url`, `username`, `password`, `transport` | Network source settings (`""` / `"tcp"` for USB cameras). |
+| `streamWidth`, `streamHeight` | Size of the frames actually delivered; 0 until the first frame. |
+| `latencyMs` | Best-effort network decode latency estimate (wall clock vs the stream's presentation clock); 0 when unknown. |
+
+`TestCameraSource` errors:
+
+| `error` | Meaning |
+|---|---|
+| `invalidUrl` | Not an absolute `rtsp`/`rtsps`/`http`/`https` URL with a host. |
+| `openFailed` | FFmpeg could not open the stream (wrong address, port or credentials, host unreachable), or the controller's OpenCV build has no FFmpeg. |
+| `noFrame` | The stream opened but no frame could be read. |
+| `timeout` | The open or first read took longer than `timeoutMs` (+1 s margin); the worker closes the stream when the call returns. |
+
+RTSP transport is passed to FFmpeg through the process-wide
+`OPENCV_FFMPEG_CAPTURE_OPTIONS` environment variable, set just before each network
+open (last writer wins), so two network opens racing with different transports may
+pick up each other's setting.
 
 ---
 

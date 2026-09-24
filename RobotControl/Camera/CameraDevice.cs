@@ -1,6 +1,7 @@
 using OpenCvSharp;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,7 +9,8 @@ using System.Threading.Tasks;
 namespace Controller.RobotControl.Camera
 {
     /// <summary>
-    /// One USB camera. A single capture thread owns the OpenCV <see cref="VideoCapture"/>
+    /// One camera: a USB device, or a network (RTSP/HTTP) stream opened through FFmpeg
+    /// (docs/network-cameras.md). A single capture thread owns the OpenCV <see cref="VideoCapture"/>
     /// for its whole life: it opens the device, reads frames, services resolution probes
     /// between frames, and releases the device when it exits. No other thread ever
     /// touches the capture handle, which is what makes the lifecycle race-free.
@@ -30,6 +32,19 @@ namespace Controller.RobotControl.Camera
         public int    Height      { get; private set; }
         public int    TargetFps   { get; private set; }
         public bool   Enabled     { get; private set; }
+
+        // Network source (docs/network-cameras.md). DeviceIndex is ignored when IsNetwork.
+        public string SourceType   { get; private set; } = NetworkCameraSource.SourceUsb;
+        public string Url          { get; private set; } = "";
+        public string Username     { get; private set; } = "";
+        public string Password     { get; private set; } = "";
+        public string Transport    { get; private set; } = NetworkCameraSource.TransportTcp;
+        public bool   IsNetwork    => SourceType == NetworkCameraSource.SourceNetwork;
+        /// <summary>Size of the frames actually delivered (0 until the first frame).</summary>
+        public int    StreamWidth  { get; private set; }
+        public int    StreamHeight { get; private set; }
+        /// <summary>Best-effort network decode latency (see <see cref="UpdateLatency"/>); 0 when unknown.</summary>
+        public int    LatencyMs    { get; private set; }
 
         public List<CameraResolution>           SupportedResolutions  { get; set; } = new();
         public Action<List<CameraResolution>>?  OnResolutionsDetected;
@@ -75,7 +90,31 @@ namespace Controller.RobotControl.Camera
             TargetFps            = cfg.TargetFps;
             Enabled              = cfg.Enabled;
             SupportedResolutions = new List<CameraResolution>(cfg.SupportedResolutions);
+            ApplySource(cfg);
         }
+
+        private void ApplySource(CameraConfig cfg)
+        {
+            SourceType = NetworkCameraSource.NormalizeSourceType(cfg.SourceType);
+            Url        = cfg.Url?.Trim() ?? "";
+            Username   = cfg.Username ?? "";
+            Password   = cfg.Password ?? "";
+            Transport  = NetworkCameraSource.NormalizeTransport(cfg.Transport);
+        }
+
+        /// <summary>True when applying <paramref name="cfg"/> changes how the stream must be opened.</summary>
+        public bool SourceDiffers(CameraConfig cfg) =>
+               SourceType != NetworkCameraSource.NormalizeSourceType(cfg.SourceType)
+            || Url        != (cfg.Url?.Trim() ?? "")
+            || Username   != (cfg.Username ?? "")
+            || Password   != (cfg.Password ?? "")
+            || Transport  != NetworkCameraSource.NormalizeTransport(cfg.Transport);
+
+        /// <summary>The stream URL with credentials injected (what FFmpeg opens). Never log this.</summary>
+        private string? EffectiveUrl() => NetworkCameraSource.BuildUrl(Url, Username, Password);
+
+        /// <summary>The URL safe to log: password replaced by <c>***</c>.</summary>
+        public string MaskedUrl() => NetworkCameraSource.MaskUrl(EffectiveUrl() ?? Url);
 
         // ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -113,6 +152,7 @@ namespace Controller.RobotControl.Camera
             Height      = cfg.Height;
             TargetFps   = cfg.TargetFps;
             Enabled     = cfg.Enabled;
+            ApplySource(cfg);
             // SupportedResolutions preserved — they are detected, not user-configured
         }
 
@@ -132,6 +172,14 @@ namespace Controller.RobotControl.Camera
             TargetFps            = TargetFps,
             Enabled              = Enabled,
             SupportedResolutions = SupportedResolutions,
+            SourceType           = SourceType,
+            Url                  = Url,
+            Username             = Username,
+            Password             = Password,
+            Transport            = Transport,
+            StreamWidth          = StreamWidth,
+            StreamHeight         = StreamHeight,
+            LatencyMs            = LatencyMs,
         };
 
         // ── Resolution probing ─────────────────────────────────────────────────
@@ -143,7 +191,7 @@ namespace Controller.RobotControl.Camera
         /// </summary>
         public List<CameraResolution> ProbeResolutions()
         {
-            if (!Connected || !_running) return new List<CameraResolution>();
+            if (IsNetwork || !Connected || !_running) return new List<CameraResolution>();
 
             TaskCompletionSource<List<CameraResolution>> request;
             lock (_probeLock)
@@ -265,6 +313,42 @@ namespace Controller.RobotControl.Camera
             return null;
         }
 
+        private VideoCapture? OpenNetworkCapture()
+        {
+            var url = EffectiveUrl();
+            return url == null ? null : NetworkCameraSource.Open(url, Transport);
+        }
+
+        // Latency estimate: how far wall-clock time has run ahead of the stream's own
+        // presentation clock since the open, relative to the best (smallest) gap seen. A
+        // stream decoded in real time stays near 0; a growing backlog shows up here.
+        // Touched only by the capture thread.
+        private readonly Stopwatch _latencyClock = new();
+        private double _pts0   = double.NaN;
+        private double _minLag = double.MaxValue;
+
+        private void ResetLatency()
+        {
+            _latencyClock.Restart();
+            _pts0     = double.NaN;
+            _minLag   = double.MaxValue;
+            LatencyMs = 0;
+        }
+
+        private void UpdateLatency(VideoCapture cap)
+        {
+            try
+            {
+                double pts = cap.Get(VideoCaptureProperties.PosMsec);
+                if (pts <= 0 || double.IsNaN(pts)) { LatencyMs = 0; return; }
+                if (double.IsNaN(_pts0)) { _pts0 = pts; _latencyClock.Restart(); }
+                double lag = _latencyClock.Elapsed.TotalMilliseconds - (pts - _pts0);
+                if (lag < _minLag) _minLag = lag;
+                LatencyMs = (int)Math.Max(0, Math.Round(lag - _minLag));
+            }
+            catch { LatencyMs = 0; }
+        }
+
         private void CaptureLoopGuarded(int generation)
         {
             try   { CaptureLoop(generation); }
@@ -286,6 +370,11 @@ namespace Controller.RobotControl.Camera
             var intervalMs = Math.Max(1, 1000 / Math.Max(1, TargetFps));
             VideoCapture? cap = null;   // owned by this thread; never shared
             bool openFailureLogged = false;
+            // Network sources are drained as fast as frames arrive (no latency builds up in
+            // FFmpeg's buffer); only the publish (JPEG encode) is throttled to targetFps.
+            bool network = IsNetwork;
+            var  publishClock = Stopwatch.StartNew();
+            long lastPublishMs = long.MinValue / 2;
 
             try
             {
@@ -297,7 +386,30 @@ namespace Controller.RobotControl.Camera
                         {
                             SetConnected(generation, false);
                             ReleaseCapture(ref cap);
-                            cap = OpenCapture(DeviceIndex);
+
+                            if (network && !NetworkCameraSource.FfmpegAvailable)
+                            {
+                                if (!openFailureLogged)
+                                {
+                                    Console.WriteLine($"[Camera] ERROR: {Id} is a network camera but this OpenCV build has no FFmpeg backend; it stays disconnected");
+                                    openFailureLogged = true;
+                                }
+                                Thread.Sleep(ReopenDelayMs);
+                                continue;
+                            }
+
+                            cap = network ? OpenNetworkCapture() : OpenCapture(DeviceIndex);
+
+                            if (cap == null && network)
+                            {
+                                if (!openFailureLogged)
+                                {
+                                    Console.WriteLine($"[Camera] {Id} could not open {MaskedUrl()}; retrying every {ReopenDelayMs / 1000}s");
+                                    openFailureLogged = true;
+                                }
+                                Thread.Sleep(ReopenDelayMs);
+                                continue;
+                            }
 
                             if (cap == null)
                             {
@@ -311,13 +423,22 @@ namespace Controller.RobotControl.Camera
                             }
                             openFailureLogged = false;
 
-                            if (Width > 0 && Height > 0)
+                            if (network)
                             {
-                                cap.Set(VideoCaptureProperties.FrameWidth,  Width);
-                                cap.Set(VideoCaptureProperties.FrameHeight, Height);
+                                // The stream's own size is used; no resolution Set calls.
+                                ResetLatency();
+                                Console.WriteLine($"[Camera] {Id} opened {MaskedUrl()}");
                             }
+                            else
+                            {
+                                if (Width > 0 && Height > 0)
+                                {
+                                    cap.Set(VideoCaptureProperties.FrameWidth,  Width);
+                                    cap.Set(VideoCaptureProperties.FrameHeight, Height);
+                                }
 
-                            Console.WriteLine($"[Camera] {Id} opened on device {DeviceIndex}");
+                                Console.WriteLine($"[Camera] {Id} opened on device {DeviceIndex}");
+                            }
                         }
 
                         // A Stop/Start may have happened during the (possibly long) open above.
@@ -333,6 +454,22 @@ namespace Controller.RobotControl.Camera
                         }
 
                         SetConnected(generation, true);
+
+                        if (network)
+                        {
+                            if (generation == _generation)
+                            {
+                                StreamWidth  = frame.Width;
+                                StreamHeight = frame.Height;
+                                UpdateLatency(cap);
+                            }
+                            long now = publishClock.ElapsedMilliseconds;
+                            if (now - lastPublishMs < intervalMs) continue;   // decoded, not published
+                            lastPublishMs = now;
+                            Cv2.ImEncode(".jpg", frame, out var nbuf, JpegParams);
+                            lock (_frameLock) _latestFrame = nbuf;
+                            continue;   // no sleep: the next Read blocks until a frame arrives
+                        }
 
                         Cv2.ImEncode(".jpg", frame, out var buf, JpegParams);
                         lock (_frameLock) _latestFrame = buf;

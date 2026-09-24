@@ -20,6 +20,16 @@ namespace Controller.RobotControl.Camera
         {
             _configPath = configPath;
             _config     = Load();
+
+            // Network (RTSP/HTTP) cameras need OpenCV's FFmpeg backend (docs/network-cameras.md).
+            bool ffmpeg = NetworkCameraSource.FfmpegAvailable;
+            Console.WriteLine($"[Camera] Video backends: FFmpeg={(ffmpeg ? "yes" : "no")}");
+            if (!ffmpeg)
+            {
+                foreach (var c in _config.Cameras.Where(c => c.Enabled
+                             && NetworkCameraSource.NormalizeSourceType(c.SourceType) == NetworkCameraSource.SourceNetwork))
+                    Console.WriteLine($"[Camera] ERROR: network camera {c.Id} cannot be opened: this OpenCV build has no FFmpeg backend; it stays disconnected");
+            }
         }
 
         // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -126,7 +136,8 @@ namespace Controller.RobotControl.Camera
                                  || device.Width       != patch.Width
                                  || device.Height      != patch.Height
                                  || device.TargetFps   != patch.TargetFps
-                                 || device.Enabled     != patch.Enabled;
+                                 || device.Enabled     != patch.Enabled
+                                 || device.SourceDiffers(patch);
                 device.ApplyConfig(patch);
 
                 if (needsRestart)
@@ -152,7 +163,8 @@ namespace Controller.RobotControl.Camera
         public List<CameraResolution> ProbeResolutionsForIndex(int deviceIndex)
         {
             CameraDevice? device;
-            lock (_devicesLock) device = _devices.FirstOrDefault(d => d.DeviceIndex == deviceIndex);
+            // Network cameras have no device index (theirs is ignored), so they never match.
+            lock (_devicesLock) device = _devices.FirstOrDefault(d => !d.IsNetwork && d.DeviceIndex == deviceIndex);
             List<CameraResolution> resolutions;
 
             if (device != null)

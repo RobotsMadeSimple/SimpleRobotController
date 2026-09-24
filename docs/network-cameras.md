@@ -66,3 +66,22 @@ arrive** so no latency builds up in the FFmpeg buffer.
   (never the password). Resolution probing UI is hidden for network cameras.
 - The calibration wizard and vision editor need no changes beyond the state
   fields; they use the same feed endpoints.
+
+## Implementation notes
+
+- Code: `RobotControl/Camera/NetworkCameraSource.cs` (URL building, masking, FFmpeg
+  detection and open, `TestCameraSource`), the network branch of
+  `CameraDevice.CaptureLoop`, tests in `RobotControl.Tests/NetworkCameraTests.cs`
+  (including an in-process MJPEG HTTP server that exercises the FFmpeg path end to end).
+- `OPENCV_FFMPEG_CAPTURE_OPTIONS` is written before **every** network open (managed
+  environment plus the native one: `setenv` on Linux, `_putenv_s` on Windows, since
+  .NET keeps its own copy of the environment on Unix). It is process-wide and the last
+  writer wins. On Windows the FFmpeg plugin DLL may snapshot the environment when it
+  is first loaded, so changing a camera's transport may only take effect after a
+  controller restart there (unverified; TCP is also OpenCV's own default).
+- `SetCameraConfig`: an absent `sourceType`/`url`/`username`/`password`/`transport`
+  keeps the camera's current value, so an app that predates network cameras cannot
+  turn one into a USB camera by saving it.
+- `GetCameraResolutions` takes an optional `id`; a network camera's id answers `[]`.
+- `TestCameraSource`'s `timeoutMs` is the whole budget: it is used as the native open
+  and read timeouts, and the command answers `timeout` after `timeoutMs + 1 s`.
