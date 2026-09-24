@@ -85,3 +85,64 @@ arrive** so no latency builds up in the FFmpeg buffer.
 - `GetCameraResolutions` takes an optional `id`; a network camera's id answers `[]`.
 - `TestCameraSource`'s `timeoutMs` is the whole budget: it is used as the native open
   and read timeouts, and the command answers `timeout` after `timeoutMs + 1 s`.
+
+## Sofia / DVRIP (XMeye) cameras — `sourceType: "sofia"`
+
+Many inexpensive IP cameras (XMeye / Xiongmai firmware) speak the vendor
+"Sofia" protocol (DVRIP, TCP port 34567) alongside RTSP. Pulling the monitor
+stream over Sofia buffers far less than their RTSP server, so it is the
+lower-latency choice for those cameras. The client is a port of the proven
+`DvripClient` from octanecoffeebotv2 (login with the Sofia MD5 digest, monitor
+claim/start, keepalives, frame reassembly with resync).
+
+### Fields (additive on `CameraConfig` / `CameraState`)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `host` | | camera IP / hostname |
+| `port` | 34567 | DVRIP port |
+| `username` / `password` | `admin` / `""` | Sofia login (may differ from the RTSP credentials); stored and returned like the network fields, never logged |
+| `stream` | `"Main"` | `"Main"` (primary) or `"Extra1"` (sub-stream) |
+| `codec` | `"h264"` | `"h264"` or `"hevc"` — what the camera streams; used to hint the decoder |
+| `decoder` | `"opencv"` | `"opencv"`: in-process — the elementary stream is fed through a loopback TCP socket into OpenCV's FFmpeg backend (`tcp://127.0.0.1:<port>`, low-latency demux options). `"ffmpeg"`: an external `ffmpeg` process (`-f h264|hevc -i pipe:0 … -f mjpeg pipe:1`), the path the original repo used; supports `hwaccel`. |
+| `ffmpegPath` | `"ffmpeg"` | executable for the `ffmpeg` decoder |
+| `hwaccel` | `""` | `ffmpeg` decoder only: `""`, `"auto"`, `"d3d11va"`, … |
+
+`url`/`transport` are unused for Sofia cameras.
+
+### Behaviour
+
+- Same capture-thread ownership and reconnect rules as network cameras. The
+  DVRIP pump runs on its own thread and writes video frames into the decoder;
+  a socket error or the resync giving up tears both down and reconnects with
+  the 3 s backoff.
+- `streamWidth/streamHeight` come from the first decoded frame; `latencyMs` is
+  best-effort as for network cameras.
+- The first video frame's NAL header is inspected once and logged
+  (`h264 SPS` / `hevc VPS`); a mismatch with `codec` is logged as a warning and
+  the detected codec wins.
+- `decoder: "ffmpeg"` with the executable missing logs one clear error per
+  failure streak (`ffmpeg not found at <path>`) and leaves the camera
+  disconnected; `TestCameraSource` reports the same as `decoderUnavailable`.
+
+### `TestCameraSource` for Sofia
+
+Params: `sourceType: "sofia"`, `host`, `port?`, `username?`, `password?`,
+`stream?`, `codec?`, `decoder?`, `ffmpegPath?`, `timeoutMs?` (default 8000).
+Response: `ok`, `loginMs`, `firstFrameMs`, `detectedCodec` (`"h264"|"hevc"|"unknown"`),
+`firstFrameBytes`, and `width/height` when a frame was decoded (0 when the
+decoder could not be exercised within the budget). Errors: `connectFailed`,
+`loginFailed` (with the `Ret` code in the message), `claimFailed`, `noFrame`,
+`timeout`, `decoderUnavailable`.
+
+### App
+
+The Source control gains a third option, **Sofia / XMeye**: host, port,
+username, password (masked), stream (Main / Sub), codec (H.264 / H.265), and
+under "Advanced" the decoder (In-process / ffmpeg) with the ffmpeg path and
+hwaccel fields shown only for the ffmpeg decoder. Test connection shows login
+and first-frame timings, the detected codec, and the decoded size when
+available; error hints: `connectFailed` → check the IP and that port 34567 is
+open, `loginFailed` → credentials (the Sofia password can differ from RTSP),
+`noFrame` → try the other stream (Main/Sub). Cards show a "Sofia" tag with the
+host.
