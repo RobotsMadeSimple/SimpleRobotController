@@ -29,6 +29,11 @@ namespace Controller.RobotControl.Camera
                 foreach (var c in _config.Cameras.Where(c => c.Enabled
                              && NetworkCameraSource.NormalizeSourceType(c.SourceType) == NetworkCameraSource.SourceNetwork))
                     Console.WriteLine($"[Camera] ERROR: network camera {c.Id} cannot be opened: this OpenCV build has no FFmpeg backend; it stays disconnected");
+                // The in-process Sofia decoder goes through the same backend (decoder "ffmpeg" does not).
+                foreach (var c in _config.Cameras.Where(c => c.Enabled
+                             && NetworkCameraSource.NormalizeSourceType(c.SourceType) == NetworkCameraSource.SourceSofia
+                             && Sofia.SofiaCameraSource.NormalizeDecoder(c.Decoder) == Sofia.SofiaDecoder.DecoderOpenCv))
+                    Console.WriteLine($"[Camera] ERROR: Sofia camera {c.Id} uses the in-process decoder, which needs OpenCV's FFmpeg backend; set decoder \"ffmpeg\" or it stays disconnected");
             }
         }
 
@@ -137,7 +142,7 @@ namespace Controller.RobotControl.Camera
                                  || device.Height      != patch.Height
                                  || device.TargetFps   != patch.TargetFps
                                  || device.Enabled     != patch.Enabled
-                                 || device.SourceDiffers(patch);
+                                 || device.SourceDiffers(patch);   // incl. the Sofia fields
                 device.ApplyConfig(patch);
 
                 if (needsRestart)
@@ -163,8 +168,8 @@ namespace Controller.RobotControl.Camera
         public List<CameraResolution> ProbeResolutionsForIndex(int deviceIndex)
         {
             CameraDevice? device;
-            // Network cameras have no device index (theirs is ignored), so they never match.
-            lock (_devicesLock) device = _devices.FirstOrDefault(d => !d.IsNetwork && d.DeviceIndex == deviceIndex);
+            // Network and Sofia cameras have no device index (theirs is ignored), so they never match.
+            lock (_devicesLock) device = _devices.FirstOrDefault(d => d.IsUsb && d.DeviceIndex == deviceIndex);
             List<CameraResolution> resolutions;
 
             if (device != null)

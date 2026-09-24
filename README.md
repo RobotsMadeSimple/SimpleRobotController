@@ -122,6 +122,7 @@ All communication is line-based JSON over WebSocket on port `9000`.
 | STB4100 | Robot IO board — 4 inputs, 4 outputs |
 | USB cameras | Any UVC webcam (DirectShow on Windows, V4L2 on Linux) |
 | Network cameras | RTSP IP cameras and HTTP MJPEG/snapshot streams, opened through OpenCV's FFmpeg backend |
+| Sofia / XMeye cameras | Low-latency live view over the vendor DVRIP protocol (port 34567), decoded in-process through OpenCV's FFmpeg backend or by an external `ffmpeg` |
 
 ---
 
