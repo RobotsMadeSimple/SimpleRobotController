@@ -304,11 +304,11 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | Command | Params | Description |
 |---|---|---|
 | `GetCameras` | — | Returns camera states (each with `calibrated` and `calibratedUnixMs`, see below). |
-| `AddCamera` | `name, deviceIndex, enabled, width=640, height=480, targetFps=15`, optional `sourceType="usb"`, `url`, `username`, `password`, `transport="tcp"` | Add a USB or network camera. |
+| `AddCamera` | `name, deviceIndex, enabled, width=640, height=480, targetFps=15`, optional `sourceType="usb"`, `url`, `username`, `password`, `transport="tcp"`, and for Sofia `host`, `port=34567`, `stream="Main"`, `codec="h264"`, `decoder="opencv"`, `ffmpegPath="ffmpeg"`, `hwaccel=""` | Add a USB, network or Sofia camera (a Sofia camera without `username` logs in as `admin`). |
 | `RemoveCamera` | `id` | Remove a camera. |
-| `SetCameraConfig` | `id, name, deviceIndex, enabled, width, height, targetFps`, optional `sourceType, url, username, password, transport` | Update a camera's config. An absent network field keeps the camera's current value. The capture restarts only when a capture-affecting field changed (device index, size, fps, enabled, or any source field). |
-| `GetCameraResolutions` | `deviceIndex`, optional `id` | Probe supported resolutions for a device index. Returns `[]` for a network camera (`id` of one); network cameras never match a `deviceIndex`. |
-| `TestCameraSource` | `url`, optional `username`, `password`, `transport` (`tcp`/`udp`), `timeoutMs` (8000) | Opens a network stream once on a worker thread, reads one frame and closes it. Returns `ok, width, height, openMs, firstFrameMs, error` (`error` null on success). |
+| `SetCameraConfig` | `id, name, deviceIndex, enabled, width, height, targetFps`, optional `sourceType, url, username, password, transport, host, port, stream, codec, decoder, ffmpegPath, hwaccel` | Update a camera's config. An absent network or Sofia field keeps the camera's current value. The capture restarts only when a capture-affecting field changed (device index, size, fps, enabled, or any source field). |
+| `GetCameraResolutions` | `deviceIndex`, optional `id` | Probe supported resolutions for a device index. Returns `[]` for a network or Sofia camera (`id` of one); those never match a `deviceIndex`. |
+| `TestCameraSource` | `url`, optional `username`, `password`, `transport` (`tcp`/`udp`), `timeoutMs` (8000); or `sourceType: "sofia"` with `host`, optional `port`, `username`, `password`, `stream`, `codec`, `decoder`, `ffmpegPath`, `hwaccel`, `timeoutMs` | Opens a network stream once on a worker thread, reads one frame and closes it. Returns `ok, width, height, openMs, firstFrameMs, error` (`error` null on success). For Sofia see [Sofia cameras](#sofia--dvrip-xmeye-cameras). |
 
 Camera frames are streamed separately over `GET /camera/{id}/ws` (base64 MJPEG
 text frames) with a `GET /camera/{id}/snapshot` still image.
@@ -345,6 +345,45 @@ RTSP transport is passed to FFmpeg through the process-wide
 `OPENCV_FFMPEG_CAPTURE_OPTIONS` environment variable, set just before each network
 open (last writer wins), so two network opens racing with different transports may
 pick up each other's setting.
+
+### Sofia / DVRIP (XMeye) cameras
+
+A camera with `sourceType: "sofia"` is pulled over the vendor Sofia protocol (DVRIP,
+TCP 34567), which buffers far less than those cameras' RTSP server — see
+[network-cameras.md](network-cameras.md#sofia--dvrip-xmeye-cameras--sourcetype-sofia).
+`url`/`transport`/`deviceIndex` are unused; `username`/`password` are the Sofia login
+(may differ from RTSP; never logged). The first video frame's codec is detected and
+wins over `codec` when they differ.
+
+Extra `GetCameras` state fields (all cameras; defaults shown for non-Sofia cameras):
+
+| Field | Meaning |
+|---|---|
+| `host` | Camera IP / hostname (`""`). |
+| `port` | DVRIP port (`34567`). |
+| `stream` | `"Main"` or `"Extra1"` (sub-stream). |
+| `codec` | `"h264"` or `"hevc"`. |
+| `decoder` | `"opencv"` (in-process: loopback socket into OpenCV's FFmpeg backend) or `"ffmpeg"` (external process). |
+| `ffmpegPath` | Executable for the `ffmpeg` decoder (`"ffmpeg"`). |
+| `hwaccel` | `ffmpeg` decoder only: `""`, `"auto"`, `"d3d11va"`, … |
+
+`streamWidth`/`streamHeight` come from the first decoded picture; `latencyMs` is the
+best-effort time from a frame's arrival to its decoded picture.
+
+`TestCameraSource` with `sourceType: "sofia"` connects, logs in, claims the stream and
+waits for the first video frame within `timeoutMs`; if time remains it decodes one
+picture with the chosen decoder. Response:
+
+| Field | Meaning |
+|---|---|
+| `ok` | Handshake and first frame succeeded (the decode is optional). |
+| `loginMs` | Time to finish the handshake (connect, login, claim/start). |
+| `firstFrameMs` | Time until the first video frame arrived. |
+| `detectedCodec` | `"h264"`, `"hevc"` or `"unknown"` (from the first frame's NAL headers). |
+| `firstFrameBytes` | Size of the first video frame. |
+| `width`, `height` | Decoded size; 0 when the decoder could not be exercised within the budget. |
+| `error` | null, or `connectFailed` (host/port unreachable), `loginFailed` (credentials; the camera's `Ret` code is in `message`), `claimFailed`, `noFrame` (logged in but no video — try the other stream), `timeout`, `decoderUnavailable` (`ffmpeg` not found at `ffmpegPath`, or no FFmpeg backend for the in-process decoder). |
+| `message` | Error detail, e.g. `DVRIP login failed (Ret=203)`; never contains the password. |
 
 ---
 

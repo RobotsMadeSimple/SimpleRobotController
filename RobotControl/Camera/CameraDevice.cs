@@ -1,3 +1,4 @@
+using Controller.RobotControl.Camera.Sofia;
 using OpenCvSharp;
 using System;
 using System.Collections.Generic;
@@ -9,8 +10,9 @@ using System.Threading.Tasks;
 namespace Controller.RobotControl.Camera
 {
     /// <summary>
-    /// One camera: a USB device, or a network (RTSP/HTTP) stream opened through FFmpeg
-    /// (docs/network-cameras.md). A single capture thread owns the OpenCV <see cref="VideoCapture"/>
+    /// One camera: a USB device, a network (RTSP/HTTP) stream opened through FFmpeg, or a
+    /// Sofia/DVRIP (XMeye) camera (docs/network-cameras.md). A single capture thread owns the
+    /// OpenCV <see cref="VideoCapture"/> (for Sofia: the <see cref="SofiaSession"/>)
     /// for its whole life: it opens the device, reads frames, services resolution probes
     /// between frames, and releases the device when it exits. No other thread ever
     /// touches the capture handle, which is what makes the lifecycle race-free.
@@ -40,6 +42,16 @@ namespace Controller.RobotControl.Camera
         public string Password     { get; private set; } = "";
         public string Transport    { get; private set; } = NetworkCameraSource.TransportTcp;
         public bool   IsNetwork    => SourceType == NetworkCameraSource.SourceNetwork;
+        /// <summary>Sofia / DVRIP (XMeye) camera; username/password are its Sofia login.</summary>
+        public bool   IsSofia      => SourceType == NetworkCameraSource.SourceSofia;
+        public bool   IsUsb        => SourceType == NetworkCameraSource.SourceUsb;
+        public string Host         { get; private set; } = "";
+        public int    Port         { get; private set; } = SofiaCameraSource.DefaultPort;
+        public string Stream       { get; private set; } = SofiaCameraSource.StreamMain;
+        public string Codec        { get; private set; } = DvripClient.CodecH264;
+        public string Decoder      { get; private set; } = SofiaDecoder.DecoderOpenCv;
+        public string FfmpegPath   { get; private set; } = SofiaCameraSource.DefaultFfmpegPath;
+        public string Hwaccel      { get; private set; } = "";
         /// <summary>Size of the frames actually delivered (0 until the first frame).</summary>
         public int    StreamWidth  { get; private set; }
         public int    StreamHeight { get; private set; }
@@ -100,6 +112,13 @@ namespace Controller.RobotControl.Camera
             Username   = cfg.Username ?? "";
             Password   = cfg.Password ?? "";
             Transport  = NetworkCameraSource.NormalizeTransport(cfg.Transport);
+            Host       = cfg.Host?.Trim() ?? "";
+            Port       = SofiaCameraSource.NormalizePort(cfg.Port);
+            Stream     = SofiaCameraSource.NormalizeStream(cfg.Stream);
+            Codec      = SofiaCameraSource.NormalizeCodec(cfg.Codec);
+            Decoder    = SofiaCameraSource.NormalizeDecoder(cfg.Decoder);
+            FfmpegPath = SofiaCameraSource.NormalizeFfmpegPath(cfg.FfmpegPath);
+            Hwaccel    = SofiaCameraSource.NormalizeHwaccel(cfg.Hwaccel);
         }
 
         /// <summary>True when applying <paramref name="cfg"/> changes how the stream must be opened.</summary>
@@ -108,13 +127,26 @@ namespace Controller.RobotControl.Camera
             || Url        != (cfg.Url?.Trim() ?? "")
             || Username   != (cfg.Username ?? "")
             || Password   != (cfg.Password ?? "")
-            || Transport  != NetworkCameraSource.NormalizeTransport(cfg.Transport);
+            || Transport  != NetworkCameraSource.NormalizeTransport(cfg.Transport)
+            || Host       != (cfg.Host?.Trim() ?? "")
+            || Port       != SofiaCameraSource.NormalizePort(cfg.Port)
+            || Stream     != SofiaCameraSource.NormalizeStream(cfg.Stream)
+            || Codec      != SofiaCameraSource.NormalizeCodec(cfg.Codec)
+            || Decoder    != SofiaCameraSource.NormalizeDecoder(cfg.Decoder)
+            || FfmpegPath != SofiaCameraSource.NormalizeFfmpegPath(cfg.FfmpegPath)
+            || Hwaccel    != SofiaCameraSource.NormalizeHwaccel(cfg.Hwaccel);
 
         /// <summary>The stream URL with credentials injected (what FFmpeg opens). Never log this.</summary>
         private string? EffectiveUrl() => NetworkCameraSource.BuildUrl(Url, Username, Password);
 
         /// <summary>The URL safe to log: password replaced by <c>***</c>.</summary>
-        public string MaskedUrl() => NetworkCameraSource.MaskUrl(EffectiveUrl() ?? Url);
+        public string MaskedUrl() => IsSofia
+            ? $"sofia://{SofiaSettings().Username}@{Host}:{Port}/{Stream}"
+            : NetworkCameraSource.MaskUrl(EffectiveUrl() ?? Url);
+
+        /// <summary>The Sofia connection settings (an empty username logs in as admin).</summary>
+        public SofiaSettings SofiaSettings() =>
+            SofiaCameraSource.Settings(Host, Port, Username, Password, Stream, Codec, Decoder, FfmpegPath, Hwaccel);
 
         // ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -141,6 +173,8 @@ namespace Controller.RobotControl.Camera
             if (t != null && t != Thread.CurrentThread && !t.Join(StopJoinMs))
                 Console.WriteLine($"[Camera] {Id} capture thread is still inside a device call (open/read); it will release the camera when that returns");
             FailPendingProbe();
+            // A Sofia session blocks in socket/decoder reads; closing it lets the thread exit now.
+            Interlocked.Exchange(ref _sofiaSession, null)?.Abort();
             Connected = false;
         }
 
@@ -180,6 +214,13 @@ namespace Controller.RobotControl.Camera
             StreamWidth          = StreamWidth,
             StreamHeight         = StreamHeight,
             LatencyMs            = LatencyMs,
+            Host                 = Host,
+            Port                 = Port,
+            Stream               = Stream,
+            Codec                = Codec,
+            Decoder              = Decoder,
+            FfmpegPath           = FfmpegPath,
+            Hwaccel              = Hwaccel,
         };
 
         // ── Resolution probing ─────────────────────────────────────────────────
@@ -191,7 +232,7 @@ namespace Controller.RobotControl.Camera
         /// </summary>
         public List<CameraResolution> ProbeResolutions()
         {
-            if (IsNetwork || !Connected || !_running) return new List<CameraResolution>();
+            if (!IsUsb || !Connected || !_running) return new List<CameraResolution>();
 
             TaskCompletionSource<List<CameraResolution>> request;
             lock (_probeLock)
@@ -351,7 +392,11 @@ namespace Controller.RobotControl.Camera
 
         private void CaptureLoopGuarded(int generation)
         {
-            try   { CaptureLoop(generation); }
+            try
+            {
+                if (IsSofia) SofiaCaptureLoop(generation);
+                else         CaptureLoop(generation);
+            }
             catch (Exception ex) { Console.WriteLine($"[Camera] {Id} thread died: {ex}"); }
             SetConnected(generation, false);
             if (generation == _generation) FailPendingProbe();
@@ -494,6 +539,114 @@ namespace Controller.RobotControl.Camera
                 SetConnected(generation, false);
                 ReleaseCapture(ref cap);
             }
+        }
+
+        // ── Sofia / DVRIP ──────────────────────────────────────────────────────
+
+        // The live session of the Sofia capture thread, so Stop() can abort its blocking reads.
+        private SofiaSession? _sofiaSession;
+
+        private const int SofiaOpenTimeoutMs = NetworkCameraSource.DefaultOpenTimeoutMs;
+
+        /// <summary>
+        /// Capture thread for a Sofia camera. Each pass owns one <see cref="SofiaSession"/>
+        /// (DVRIP client + pump thread + decoder): connect/login/claim, read the first video
+        /// frame (codec detection), start the decoder, then publish decoded pictures until the
+        /// session ends. Any failure — connect, login, a decoder that yields no picture within
+        /// the open timeout, a socket error or the resync giving up — tears the session down and
+        /// reconnects after the usual backoff, logging once per failure streak.
+        /// </summary>
+        private void SofiaCaptureLoop(int generation)
+        {
+            var intervalMs     = Math.Max(1, 1000 / Math.Max(1, TargetFps));
+            var publishClock   = Stopwatch.StartNew();
+            long lastPublishMs = long.MinValue / 2;
+            bool streakLogged  = false;
+
+            while (ShouldRun(generation))
+            {
+                var settings = SofiaSettings();
+                var session  = new SofiaSession(settings, Id);
+                Volatile.Write(ref _sofiaSession, session);
+                string? failure = null;
+                bool unavailable = false;
+                int  gotPicture  = 0;
+                try
+                {
+                    // A Stop() that ran before the session was published could not abort it.
+                    if (!ShouldRun(generation)) break;
+                    if (string.IsNullOrWhiteSpace(settings.Host))
+                        throw new DvripException(DvripStage.Connect, "no host configured");
+
+                    session.Connect(SofiaOpenTimeoutMs);
+                    if (!ShouldRun(generation)) break;
+                    var first = session.ReadFirstFrame(SofiaCameraSource.StreamReadTimeoutMs);
+                    if (!ShouldRun(generation)) break;
+                    session.StartDecoder(first, SofiaOpenTimeoutMs, SofiaCameraSource.StreamReadTimeoutMs);
+                    Console.WriteLine($"[Sofia] {Id} streaming {MaskedUrl()} ({session.EffectiveCodec}, {settings.Decoder} decoder)");
+
+                    // No picture within the open timeout (probe/decoder never produced one): reconnect.
+                    using var watchdog = new Timer(_ =>
+                    {
+                        if (Volatile.Read(ref gotPicture) == 0) session.Abort();
+                    }, null, SofiaOpenTimeoutMs, Timeout.Infinite);
+
+                    while (ShouldRun(generation))
+                    {
+                        using var pic = session.ReadDecoded();
+                        if (pic == null) break;
+                        if (Interlocked.Exchange(ref gotPicture, 1) == 0)
+                        {
+                            streakLogged = false;
+                            Console.WriteLine($"[Sofia] {Id} first picture {pic.Width}x{pic.Height}");
+                        }
+
+                        SetConnected(generation, true);
+                        if (generation == _generation)
+                        {
+                            StreamWidth  = pic.Width;
+                            StreamHeight = pic.Height;
+                            LatencyMs    = session.LatencyMs;
+                        }
+                        // Decoded as fast as frames arrive; only the publish is throttled to targetFps.
+                        long now = publishClock.ElapsedMilliseconds;
+                        if (now - lastPublishMs < intervalMs) continue;
+                        lastPublishMs = now;
+                        var jpeg = pic.ToJpeg(JpegParams);
+                        lock (_frameLock) _latestFrame = jpeg;
+                    }
+
+                    failure = Volatile.Read(ref gotPicture) == 0
+                        ? $"decoder produced no picture within {SofiaOpenTimeoutMs / 1000}s"
+                        : session.PumpError?.Message ?? "stream ended";
+                }
+                catch (DecoderUnavailableException ex) { failure = ex.Message; unavailable = true; }
+                catch (Exception ex)                   { failure = ex.Message; }
+                finally
+                {
+                    Interlocked.CompareExchange(ref _sofiaSession, null, session);
+                    session.Dispose();
+                    SetConnected(generation, false);
+                    if (generation == _generation) LatencyMs = 0;
+                }
+
+                if (!ShouldRun(generation)) break;
+                if (!streakLogged && failure != null)
+                {
+                    Console.WriteLine(unavailable
+                        ? $"[Sofia] ERROR: {Id} {failure}; it stays disconnected (retrying every {ReopenDelayMs / 1000}s)"
+                        : $"[Sofia] {Id} {MaskedUrl()}: {failure}; retrying every {ReopenDelayMs / 1000}s");
+                    streakLogged = true;
+                }
+                SleepWhileRunning(generation, ReopenDelayMs);
+            }
+            SetConnected(generation, false);
+        }
+
+        private void SleepWhileRunning(int generation, int ms)
+        {
+            var sw = Stopwatch.StartNew();
+            while (ShouldRun(generation) && sw.ElapsedMilliseconds < ms) Thread.Sleep(50);
         }
     }
 }

@@ -1,9 +1,10 @@
 using System.Text.Json;
 using Controller.RobotControl.Camera;
+using Controller.RobotControl.Camera.Sofia;
 
 namespace Controller.RobotControl.Commands;
 
-/// <summary>Camera configuration: USB devices and network (RTSP/HTTP) streams.</summary>
+/// <summary>Camera configuration: USB devices, network (RTSP/HTTP) streams and Sofia/DVRIP cameras.</summary>
 internal sealed class CameraCommands
 {
     private readonly RobotController _robot;
@@ -36,6 +37,7 @@ internal sealed class CameraCommands
     private void AddCamera(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<AddCameraParams>(msg);
+        var sourceType = NetworkCameraSource.NormalizeSourceType(p.SourceType);
         _robot.CameraManager.AddCamera(new CameraConfig
         {
             Name        = p.Name,
@@ -44,11 +46,20 @@ internal sealed class CameraCommands
             Width       = p.Width,
             Height      = p.Height,
             TargetFps   = p.TargetFps,
-            SourceType  = NetworkCameraSource.NormalizeSourceType(p.SourceType),
+            SourceType  = sourceType,
             Url         = p.Url?.Trim() ?? "",
-            Username    = p.Username ?? "",
+            // A Sofia camera without a username logs in as "admin" (the contract default).
+            Username    = string.IsNullOrEmpty(p.Username) && sourceType == NetworkCameraSource.SourceSofia
+                              ? SofiaCameraSource.DefaultUsername : p.Username ?? "",
             Password    = p.Password ?? "",
             Transport   = NetworkCameraSource.NormalizeTransport(p.Transport),
+            Host        = p.Host?.Trim() ?? "",
+            Port        = SofiaCameraSource.NormalizePort(p.Port),
+            Stream      = SofiaCameraSource.NormalizeStream(p.Stream),
+            Codec       = SofiaCameraSource.NormalizeCodec(p.Codec),
+            Decoder     = SofiaCameraSource.NormalizeDecoder(p.Decoder),
+            FfmpegPath  = SofiaCameraSource.NormalizeFfmpegPath(p.FfmpegPath),
+            Hwaccel     = SofiaCameraSource.NormalizeHwaccel(p.Hwaccel),
         });
     }
 
@@ -61,9 +72,14 @@ internal sealed class CameraCommands
     private void SetCameraConfig(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<SetCameraConfigParams>(msg);
-        // Absent network fields keep the camera's current values (an older app does not send them).
-        var current = _robot.CameraManager.GetCamera(p.Id);
-        _robot.CameraManager.UpdateCamera(p.Id, new CameraConfig
+        // Absent network / Sofia fields keep the camera's current values (an older app does not send them).
+        _robot.CameraManager.UpdateCamera(p.Id, MergeSetCameraConfig(p, _robot.CameraManager.GetCamera(p.Id)));
+    }
+
+    /// <summary>The config SetCameraConfig applies: the given fields, with absent source fields taken from <paramref name="current"/>.</summary>
+    internal static CameraConfig MergeSetCameraConfig(SetCameraConfigParams p, CameraDevice? current)
+    {
+        return new CameraConfig
         {
             Id          = p.Id,
             Name        = p.Name,
@@ -77,14 +93,21 @@ internal sealed class CameraCommands
             Username    = p.Username ?? current?.Username ?? "",
             Password    = p.Password ?? current?.Password ?? "",
             Transport   = NetworkCameraSource.NormalizeTransport(p.Transport ?? current?.Transport),
-        });
+            Host        = (p.Host ?? current?.Host ?? "").Trim(),
+            Port        = SofiaCameraSource.NormalizePort(p.Port ?? current?.Port),
+            Stream      = SofiaCameraSource.NormalizeStream(p.Stream ?? current?.Stream),
+            Codec       = SofiaCameraSource.NormalizeCodec(p.Codec ?? current?.Codec),
+            Decoder     = SofiaCameraSource.NormalizeDecoder(p.Decoder ?? current?.Decoder),
+            FfmpegPath  = SofiaCameraSource.NormalizeFfmpegPath(p.FfmpegPath ?? current?.FfmpegPath),
+            Hwaccel     = SofiaCameraSource.NormalizeHwaccel(p.Hwaccel ?? current?.Hwaccel),
+        };
     }
 
     private async Task<object?> GetCameraResolutions(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<GetCameraResolutionsParams>(msg);
-        // A network camera has no resolution list: the stream's own size is used.
-        if (!string.IsNullOrEmpty(p.Id) && _robot.CameraManager.GetCamera(p.Id) is { IsNetwork: true })
+        // A network or Sofia camera has no resolution list: the stream's own size is used.
+        if (!string.IsNullOrEmpty(p.Id) && _robot.CameraManager.GetCamera(p.Id) is { IsUsb: false })
             return new { resolutions = "[]" };
         var deviceIndex = p.DeviceIndex;
         var resolutions = await Task.Run(() => _robot.CameraManager.ProbeResolutionsForIndex(deviceIndex));
@@ -98,6 +121,9 @@ internal sealed class CameraCommands
     /// <summary>The <c>TestCameraSource</c> response (static so tests can call it without a controller).</summary>
     internal static async Task<object?> TestCameraSourceAsync(TestCameraSourceParams p)
     {
+        if (NetworkCameraSource.NormalizeSourceType(p.SourceType) == NetworkCameraSource.SourceSofia)
+            return await TestSofiaSourceAsync(p);
+
         var r = await NetworkCameraSource.Test(p.Url, p.Username, p.Password, p.Transport,
                                                p.TimeoutMs > 0 ? p.TimeoutMs : NetworkCameraSource.DefaultOpenTimeoutMs);
         return new
@@ -108,6 +134,25 @@ internal sealed class CameraCommands
             openMs       = r.OpenMs,
             firstFrameMs = r.FirstFrameMs,
             error        = r.Error,
+        };
+    }
+
+    private static async Task<object?> TestSofiaSourceAsync(TestCameraSourceParams p)
+    {
+        var settings = SofiaCameraSource.Settings(p.Host, p.Port, p.Username, p.Password, p.Stream,
+                                                  p.Codec, p.Decoder, p.FfmpegPath, p.Hwaccel);
+        var r = await SofiaCameraSource.Test(settings, p.TimeoutMs > 0 ? p.TimeoutMs : SofiaCameraSource.DefaultTimeoutMs);
+        return new
+        {
+            ok              = r.Ok,
+            loginMs         = r.LoginMs,
+            firstFrameMs    = r.FirstFrameMs,
+            detectedCodec   = r.DetectedCodec,
+            firstFrameBytes = r.FirstFrameBytes,
+            width           = r.Width,
+            height          = r.Height,
+            error           = r.Error,
+            message         = r.Message,
         };
     }
 }

@@ -1,6 +1,7 @@
 using OpenCvSharp;
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,6 +29,8 @@ namespace Controller.RobotControl.Camera
     {
         public const string SourceUsb     = "usb";
         public const string SourceNetwork = "network";
+        /// <summary>XMeye / Sofia DVRIP camera (docs/network-cameras.md, "Sofia / DVRIP").</summary>
+        public const string SourceSofia   = "sofia";
         public const string TransportTcp  = "tcp";
         public const string TransportUdp  = "udp";
 
@@ -44,8 +47,13 @@ namespace Controller.RobotControl.Camera
 
         private static readonly string[] AllowedSchemes = { "rtsp", "rtsps", "http", "https" };
 
-        public static string NormalizeSourceType(string? s) =>
-            string.Equals(s?.Trim(), SourceNetwork, StringComparison.OrdinalIgnoreCase) ? SourceNetwork : SourceUsb;
+        public static string NormalizeSourceType(string? s)
+        {
+            var v = s?.Trim();
+            if (string.Equals(v, SourceNetwork, StringComparison.OrdinalIgnoreCase)) return SourceNetwork;
+            if (string.Equals(v, SourceSofia,   StringComparison.OrdinalIgnoreCase)) return SourceSofia;
+            return SourceUsb;
+        }
 
         public static string NormalizeTransport(string? t) =>
             string.Equals(t?.Trim(), TransportUdp, StringComparison.OrdinalIgnoreCase) ? TransportUdp : TransportTcp;
@@ -151,6 +159,14 @@ namespace Controller.RobotControl.Camera
         [DllImport("ucrtbase.dll", EntryPoint = "_putenv_s", CharSet = CharSet.Ansi)]
         private static extern int win_putenv_s(string name, string value);
 
+        // The prebuilt opencv_videoio_ffmpeg plugin on Windows reads its options through the
+        // legacy msvcrt.dll getenv, whose environment copy is snapshotted when msvcrt loads
+        // (before any managed code runs). Neither SetEnvironmentVariable nor the UCRT's
+        // _putenv_s reach it; msvcrt's own _putenv_s does (measured: a probesize option only
+        // took effect once written here).
+        [DllImport("msvcrt.dll", EntryPoint = "_putenv_s", CharSet = CharSet.Ansi)]
+        private static extern int msvcrt_putenv_s(string name, string value);
+
         private static readonly object _envLock = new();
 
         /// <summary>
@@ -160,18 +176,29 @@ namespace Controller.RobotControl.Camera
         /// different transport may pick up the other one. (.NET keeps its own copy of the
         /// environment on Unix, so the native environment is written directly.)
         /// </summary>
-        public static void SetTransport(string transport)
+        public static void SetTransport(string transport) =>
+            SetCaptureOptions("rtsp_transport;" + NormalizeTransport(transport));
+
+        /// <summary>
+        /// Writes <c>OPENCV_FFMPEG_CAPTURE_OPTIONS</c> (<c>key;value|key;value</c>) for the next
+        /// FFmpeg open: the managed environment plus every native copy OpenCV might read
+        /// (<c>setenv</c> on Linux; the UCRT and msvcrt environments on Windows). Process-wide,
+        /// last writer wins.
+        /// </summary>
+        public static void SetCaptureOptions(string value)
         {
-            var value = "rtsp_transport;" + NormalizeTransport(transport);
             lock (_envLock)
             {
                 try { Environment.SetEnvironmentVariable(CaptureOptionsEnv, value); } catch { }
-                try
+                if (OperatingSystem.IsWindows())
                 {
-                    if (OperatingSystem.IsWindows()) win_putenv_s(CaptureOptionsEnv, value);
-                    else                             unix_setenv(CaptureOptionsEnv, value, 1);
+                    try { win_putenv_s(CaptureOptionsEnv, value); }    catch { /* best effort */ }
+                    try { msvcrt_putenv_s(CaptureOptionsEnv, value); } catch { /* best effort */ }
                 }
-                catch { /* best effort — the managed variable is still set */ }
+                else
+                {
+                    try { unix_setenv(CaptureOptionsEnv, value, 1); } catch { /* best effort — the managed variable is still set */ }
+                }
             }
         }
 
@@ -184,14 +211,26 @@ namespace Controller.RobotControl.Camera
                                          int readTimeoutMs = DefaultReadTimeoutMs)
         {
             SetTransport(transport);
+            return OpenFfmpeg(effectiveUrl, openTimeoutMs, readTimeoutMs);
+        }
+
+        /// <summary>
+        /// Opens <paramref name="url"/> with the FFmpeg backend using whatever capture options
+        /// were last set (<see cref="SetCaptureOptions"/>). <paramref name="extraParams"/> are
+        /// appended to the open parameters (pairs of property id and value). Returns null when
+        /// it does not open; the caller owns (and must release) the returned capture.
+        /// </summary>
+        public static VideoCapture? OpenFfmpeg(string url, int openTimeoutMs, int readTimeoutMs, params int[] extraParams)
+        {
             VideoCapture? cap = null;
             try
             {
                 var prms = new[] { CapPropOpenTimeoutMsec, openTimeoutMs, CapPropReadTimeoutMsec, readTimeoutMs };
-                try   { cap = new VideoCapture(effectiveUrl, VideoCaptureAPIs.FFMPEG, prms); }
+                if (extraParams.Length > 0) prms = prms.Concat(extraParams).ToArray();
+                try   { cap = new VideoCapture(url, VideoCaptureAPIs.FFMPEG, prms); }
                 catch { cap = null; }
                 // Builds without open-parameter support: plain open.
-                if (cap == null) cap = new VideoCapture(effectiveUrl, VideoCaptureAPIs.FFMPEG);
+                if (cap == null) cap = new VideoCapture(url, VideoCaptureAPIs.FFMPEG);
 
                 if (!cap.IsOpened())
                 {

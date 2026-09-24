@@ -21,6 +21,14 @@ public class AddCameraParams
     [JsonPropertyName("username")]    public string Username    { get; set; } = "";
     [JsonPropertyName("password")]    public string Password    { get; set; } = "";
     [JsonPropertyName("transport")]   public string Transport   { get; set; } = "tcp";
+    // Sofia / DVRIP source fields (sourceType "sofia")
+    [JsonPropertyName("host")]        public string Host        { get; set; } = "";
+    [JsonPropertyName("port")]        public int    Port        { get; set; } = 34567;
+    [JsonPropertyName("stream")]      public string Stream      { get; set; } = "Main";
+    [JsonPropertyName("codec")]       public string Codec       { get; set; } = "h264";
+    [JsonPropertyName("decoder")]     public string Decoder     { get; set; } = "opencv";
+    [JsonPropertyName("ffmpegPath")]  public string FfmpegPath  { get; set; } = "ffmpeg";
+    [JsonPropertyName("hwaccel")]     public string Hwaccel     { get; set; } = "";
 }
 
 public class RemoveCameraParams
@@ -44,6 +52,14 @@ public class SetCameraConfigParams
     [JsonPropertyName("username")]    public string? Username   { get; set; }
     [JsonPropertyName("password")]    public string? Password   { get; set; }
     [JsonPropertyName("transport")]   public string? Transport  { get; set; }
+    // Sofia source fields: same rule, absent keeps the current value.
+    [JsonPropertyName("host")]        public string? Host       { get; set; }
+    [JsonPropertyName("port")]        public int?    Port       { get; set; }
+    [JsonPropertyName("stream")]      public string? Stream     { get; set; }
+    [JsonPropertyName("codec")]       public string? Codec      { get; set; }
+    [JsonPropertyName("decoder")]     public string? Decoder    { get; set; }
+    [JsonPropertyName("ffmpegPath")]  public string? FfmpegPath { get; set; }
+    [JsonPropertyName("hwaccel")]     public string? Hwaccel    { get; set; }
 }
 
 public class GetCameraResolutionsParams
@@ -55,11 +71,21 @@ public class GetCameraResolutionsParams
 
 public class TestCameraSourceParams
 {
+    /// <summary>"network" (default when absent) or "sofia".</summary>
+    [JsonPropertyName("sourceType")] public string? SourceType { get; set; }
     [JsonPropertyName("url")]       public string  Url       { get; set; } = "";
     [JsonPropertyName("username")]  public string? Username  { get; set; }
     [JsonPropertyName("password")]  public string? Password  { get; set; }
     [JsonPropertyName("transport")] public string? Transport { get; set; }
     [JsonPropertyName("timeoutMs")] public int     TimeoutMs { get; set; } = 8000;
+    // Sofia (sourceType "sofia")
+    [JsonPropertyName("host")]       public string? Host       { get; set; }
+    [JsonPropertyName("port")]       public int?    Port       { get; set; }
+    [JsonPropertyName("stream")]     public string? Stream     { get; set; }
+    [JsonPropertyName("codec")]      public string? Codec      { get; set; }
+    [JsonPropertyName("decoder")]    public string? Decoder    { get; set; }
+    [JsonPropertyName("ffmpegPath")] public string? FfmpegPath { get; set; }
+    [JsonPropertyName("hwaccel")]    public string? Hwaccel    { get; set; }
 }
 
 

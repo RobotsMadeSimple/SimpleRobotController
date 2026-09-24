@@ -76,9 +76,13 @@ arrive** so no latency builds up in the FFmpeg buffer.
 - `OPENCV_FFMPEG_CAPTURE_OPTIONS` is written before **every** network open (managed
   environment plus the native one: `setenv` on Linux, `_putenv_s` on Windows, since
   .NET keeps its own copy of the environment on Unix). It is process-wide and the last
-  writer wins. On Windows the FFmpeg plugin DLL may snapshot the environment when it
-  is first loaded, so changing a camera's transport may only take effect after a
-  controller restart there (unverified; TCP is also OpenCV's own default).
+  writer wins. On Windows the prebuilt `opencv_videoio_ffmpeg` plugin reads it through
+  the legacy `msvcrt.dll` `getenv`, whose environment copy is snapshotted at process
+  start: neither `SetEnvironmentVariable` nor the UCRT's `_putenv_s` reach it (measured:
+  a `probesize` option had no effect), so the helper also calls msvcrt's `_putenv_s`
+  (measured: the option then takes effect on the next open, no restart needed). Before
+  this, the transport option was silently ignored on Windows (TCP, OpenCV's default,
+  was always used).
 - `SetCameraConfig`: an absent `sourceType`/`url`/`username`/`password`/`transport`
   keeps the camera's current value, so an app that predates network cameras cannot
   turn one into a USB camera by saving it.
@@ -146,3 +150,34 @@ available; error hints: `connectFailed` → check the IP and that port 34567 is
 open, `loginFailed` → credentials (the Sofia password can differ from RTSP),
 `noFrame` → try the other stream (Main/Sub). Cards show a "Sofia" tag with the
 host.
+
+### Sofia implementation notes
+
+- Code: `RobotControl/Camera/Sofia/` — `DvripClient.cs` (the port: login digest,
+  claim/start, keepalive, framing, reassembly, resync; plus `ReadVideoFrame()`,
+  `DetectCodec()` and a connect timeout), `SofiaSession.cs` (client + pump thread +
+  decoder for one connection), `LoopbackEsDecoder.cs`, `FfmpegProcessDecoder.cs`,
+  `SofiaCameraSource.cs` (normalisation, `TestCameraSource`); the Sofia branch of
+  `CameraDevice` (`SofiaCaptureLoop`). Tests: `RobotControl.Tests/SofiaCameraTests.cs`.
+- In-process decoder options: `probesize;32768|analyzeduration;0|flags;low_delay` plus
+  the open parameter `CAP_PROP_N_THREADS = 1`. **`fflags;nobuffer` is deliberately not
+  set** for this path: FFmpeg then discards the packets read while probing — including
+  the key frame the probe needed — so the first picture waits for the next key frame
+  (measured with a 2 s-GOP clip: first picture after 2.8 s with it, 0.3 s without). Frame-threaded decoding held ~8 frames
+  (≈0.5 s at 15 fps) until `CAP_PROP_N_THREADS = 1` was added. Frames that arrive before
+  OpenCV connects are held from the latest key frame and flushed on accept, and the
+  open waits for a key frame plus two more (or half the open timeout) so the raw
+  `h264`/`hevc` demuxer can probe the Annex-B stream at once.
+- A session that yields no picture within the open timeout (8 s) is torn down and
+  reconnected; a camera silent for 10 s (socket read timeout) likewise. `Stop()` closes
+  the DVRIP socket and the decoder input, so it returns promptly; the VideoCapture itself
+  is only ever released by the capture thread.
+- The ffmpeg decoder adds `-flush_packets 1` (from the reference) to the command line
+  above so each JPEG is written to the pipe immediately.
+- `loginMs` in the `TestCameraSource` response covers the whole handshake (TCP
+  connect, login, monitor claim/start). The response also carries `message` (error
+  detail such as `DVRIP login failed (Ret=203)`; never the password).
+- The first-frame codec override applies to the session (decoder choice and logs); the
+  stored `codec` field is not rewritten.
+- Latency (`latencyMs`) is the wall time from a video frame arriving over DVRIP to its
+  picture leaving the decoder (frames matched in order; best-effort).
