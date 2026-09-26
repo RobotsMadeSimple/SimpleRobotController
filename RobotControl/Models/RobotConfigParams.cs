@@ -36,6 +36,17 @@ public class SetRobotConfigParams
     [JsonPropertyName("jogSlowSpeed")]              public double? JogSlowSpeed              { get; set; }
     [JsonPropertyName("jogNormalSpeed")]            public double? JogNormalSpeed            { get; set; }
     [JsonPropertyName("jogFastSpeed")]              public double? JogFastSpeed              { get; set; }
+    [JsonPropertyName("astroStepsPerRevM1")]        public int?    AstroStepsPerRevM1        { get; set; }
+    [JsonPropertyName("astroStepsPerRevM2")]        public int?    AstroStepsPerRevM2        { get; set; }
+    [JsonPropertyName("astroStepsPerRevM3")]        public int?    AstroStepsPerRevM3        { get; set; }
+    [JsonPropertyName("astroStepsPerRevM4")]        public int?    AstroStepsPerRevM4        { get; set; }
+    [JsonPropertyName("astroGearRatioM1")]          public double? AstroGearRatioM1          { get; set; }
+    [JsonPropertyName("astroGearRatioM2")]          public double? AstroGearRatioM2          { get; set; }
+    [JsonPropertyName("astroGearRatioM3")]          public double? AstroGearRatioM3          { get; set; }
+    [JsonPropertyName("astroGearRatioM4")]          public double? AstroGearRatioM4          { get; set; }
+    [JsonPropertyName("astroJoint1GearRatio")]      public double? AstroJoint1GearRatio      { get; set; }
+    [JsonPropertyName("astroJoint4GearRatio")]      public double? AstroJoint4GearRatio      { get; set; }
+    [JsonPropertyName("astroCoreXyPulleyPcdMm")]    public double? AstroCoreXyPulleyPcdMm    { get; set; }
     [JsonPropertyName("cncStepsPerRevX")]           public int?    CncStepsPerRevX           { get; set; }
     [JsonPropertyName("cncStepsPerRevY")]           public int?    CncStepsPerRevY           { get; set; }
     [JsonPropertyName("cncStepsPerRevZ")]           public int?    CncStepsPerRevZ           { get; set; }
@@ -62,6 +73,14 @@ public class SetRobotConfigParams
     [JsonPropertyName("joint3Max")]                 public double? Joint3Max                 { get; set; }
     [JsonPropertyName("joint4Min")]                 public double? Joint4Min                 { get; set; }
     [JsonPropertyName("joint4Max")]                 public double? Joint4Max                 { get; set; }
+}
+
+public class ResetRobotConfigParams
+{
+    /// <summary>"motorSetup" resets only steps/rev + gear ratios; anything else (or omitted)
+    /// resets all motion/tuning settings to defaults while preserving robot type and the
+    /// device/topology toggles (mDNS + card visibility).</summary>
+    [JsonPropertyName("section")] public string? Section { get; set; }
 }
 
 public class SetLimitBypassParams

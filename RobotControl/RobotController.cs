@@ -808,7 +808,15 @@ namespace Controller.RobotControl
             }
             else
             {
-                _kinematics = new ASTROKinematics();
+                stb.Motor1.Reconfigure(_config.AstroStepsPerRevM1, _config.AstroGearRatioM1);
+                stb.Motor2.Reconfigure(_config.AstroStepsPerRevM2, _config.AstroGearRatioM2);
+                stb.Motor3.Reconfigure(_config.AstroStepsPerRevM3, _config.AstroGearRatioM3);
+                stb.Motor4.Reconfigure(_config.AstroStepsPerRevM4, _config.AstroGearRatioM4);
+
+                _kinematics = new ASTROKinematics(
+                    _config.AstroJoint1GearRatio,
+                    _config.AstroJoint4GearRatio,
+                    _config.AstroCoreXyPulleyPcdMm);
             }
         }
 
@@ -914,6 +922,15 @@ namespace Controller.RobotControl
         {
             if (motorDirections) ApplyMotorDirections();
             if (kinematics)      InitializeKinematics();
+        });
+
+        /// <summary>Swaps in a whole new config and re-applies it (motor directions +
+        /// kinematics/motor setup) on the motion thread. Used by a full reset-to-defaults.</summary>
+        internal void ResetConfigOnMotionThread(RobotConfig newConfig) => PostToMotionThread(() =>
+        {
+            _config = newConfig;
+            ApplyMotorDirections();
+            InitializeKinematics();
         });
 
         internal void SelectTool(string? toolName) => PostToMotionThread(() =>
