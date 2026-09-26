@@ -1,3 +1,4 @@
+using Controller.RobotControl;
 using Controller.RobotControl.Vision;
 using OpenCvSharp;
 
@@ -38,8 +39,8 @@ public class VisionZoneRotationTests
     [Fact]
     public void AnUntiltedRectangleIsNotTreatedAsRotated()
     {
-        Assert.False(VisionProcessor.IsRotatedRect(Rect(0)));
-        Assert.True(VisionProcessor.IsRotatedRect(Rect(30)));
+        Assert.False(ZoneGeometry.IsRotatedRect(Rect(0)));
+        Assert.True(ZoneGeometry.IsRotatedRect(Rect(30)));
     }
 
     [Fact]
@@ -47,11 +48,11 @@ public class VisionZoneRotationTests
     {
         // Rotation is meaningless on a circle and redundant on a polygon, whose points are
         // already absolute. Both must keep their original paths even if the field is set.
-        Assert.False(VisionProcessor.IsRotatedRect(new VisionZoneGeometry
+        Assert.False(ZoneGeometry.IsRotatedRect(new VisionZoneGeometry
         {
             Shape = VisionZoneShape.Circle, Rotation = 45,
         }));
-        Assert.False(VisionProcessor.IsRotatedRect(new VisionZoneGeometry
+        Assert.False(ZoneGeometry.IsRotatedRect(new VisionZoneGeometry
         {
             Shape = VisionZoneShape.Polygon, Rotation = 45, Points = [[0, 0], [1, 0], [1, 1]],
         }));
@@ -60,7 +61,7 @@ public class VisionZoneRotationTests
     [Fact]
     public void UntiltedCornersAreTheRectangleItself()
     {
-        var c = VisionProcessor.RectCorners(Rect(0), W, H);
+        var c = ZoneGeometry.RectCorners(Rect(0), W, H);
 
         Assert.Equal(160, c[0].X, 3); Assert.Equal(120, c[0].Y, 3);   // top-left
         Assert.Equal(480, c[1].X, 3); Assert.Equal(120, c[1].Y, 3);   // top-right
@@ -74,7 +75,7 @@ public class VisionZoneRotationTests
         // This is the shear check. In pixels the rectangle is 320×240; if rotation were
         // applied in normalized space those sides would come out unequal to each other
         // after scaling, and the diagonals would stop matching.
-        var c = VisionProcessor.RectCorners(Rect(37), W, H);
+        var c = ZoneGeometry.RectCorners(Rect(37), W, H);
 
         Assert.Equal(320, Dist(c[0], c[1]), 2);   // top edge
         Assert.Equal(240, Dist(c[1], c[2]), 2);   // right edge
@@ -88,7 +89,7 @@ public class VisionZoneRotationTests
     {
         foreach (var angle in new double[] { 0, 15, 90, 180, -42 })
         {
-            var c = VisionProcessor.RectCorners(Rect(angle), W, H);
+            var c = ZoneGeometry.RectCorners(Rect(angle), W, H);
             Assert.Equal(320, c.Average(p => p.X), 2);
             Assert.Equal(240, c.Average(p => p.Y), 2);
         }
@@ -98,7 +99,7 @@ public class VisionZoneRotationTests
     public void NinetyDegreesSwapsTheSides()
     {
         // A quarter turn of a 320x240 box gives a 240x320 footprint about the same center.
-        var b = VisionProcessor.ZoneBounds(Rect(90), W, H);
+        var b = ZoneGeometry.ZoneBounds(Rect(90), W, H);
 
         Assert.Equal(320 - 120, b.X);
         Assert.Equal(240 - 160, b.Y);
@@ -111,13 +112,13 @@ public class VisionZoneRotationTests
     [Fact]
     public void UntiltedBoundsMatchThePreRotationResult()
     {
-        Assert.Equal(new Rect(160, 120, 320, 240), VisionProcessor.ZoneBounds(Rect(0), W, H));
+        Assert.Equal(new Rect(160, 120, 320, 240), ZoneGeometry.ZoneBounds(Rect(0), W, H));
     }
 
     [Fact]
     public void TiltedBoundsGrowAndStayCentered()
     {
-        var b = VisionProcessor.ZoneBounds(Rect(45), W, H);
+        var b = ZoneGeometry.ZoneBounds(Rect(45), W, H);
 
         // A 45 degree turn of 320x240 has an extent of (320+240)/sqrt(2) on both axes.
         double expected = 560 / Math.Sqrt(2);
@@ -136,7 +137,7 @@ public class VisionZoneRotationTests
             Shape = VisionZoneShape.Rectangle,
             X = 0.0, Y = 0.0, Width = 0.4, Height = 0.4, Rotation = 45,
         };
-        var b = VisionProcessor.ZoneBounds(geom, W, H);
+        var b = ZoneGeometry.ZoneBounds(geom, W, H);
 
         Assert.True(b.X >= 0 && b.Y >= 0);
         Assert.True(b.X + b.Width  <= W);
@@ -157,7 +158,7 @@ public class VisionZoneRotationTests
         for (int r = 0; r < rows; r++)
         for (int c = 0; c < cols; c++)
         {
-            var q    = VisionProcessor.CellQuad(Rect(33), rows, cols, r, c, W, H);
+            var q    = ZoneGeometry.CellQuad(Rect(33), rows, cols, r, c, W, H);
             double a = ShoelaceArea(q);
             Assert.Equal(whole / (rows * cols), a, 1);
             sum += a;
@@ -172,8 +173,8 @@ public class VisionZoneRotationTests
         // The lattice is built in the rectangle's own frame, so a cell's corners must be the
         // untilted cell's corners put through the same rotation — not a box re-derived from
         // the tilted bounding box, which is the mistake that makes cells drift off the zone.
-        var untilted = VisionProcessor.CellQuad(Rect(0),  3, 4, 1, 2, W, H);
-        var tilted   = VisionProcessor.CellQuad(Rect(25), 3, 4, 1, 2, W, H);
+        var untilted = ZoneGeometry.CellQuad(Rect(0),  3, 4, 1, 2, W, H);
+        var tilted   = ZoneGeometry.CellQuad(Rect(25), 3, 4, 1, 2, W, H);
 
         double a = 25 * Math.PI / 180.0, cos = Math.Cos(a), sin = Math.Sin(a);
         for (int i = 0; i < 4; i++)
@@ -195,13 +196,13 @@ public class VisionZoneRotationTests
         // 266 one way and 266.67 the other. That gap is harmless because the two paths never
         // both run on the same zone — the tolerance is here to catch a lattice that is
         // genuinely misplaced, such as cells offset by half a cell or indexed row/col swapped.
-        var bounds = VisionProcessor.ZoneBounds(Rect(0), W, H);
+        var bounds = ZoneGeometry.ZoneBounds(Rect(0), W, H);
 
         for (int r = 0; r < 3; r++)
         for (int c = 0; c < 3; c++)
         {
-            var rect = VisionProcessor.CellRect(bounds, 3, 3, r, c);
-            var quad = VisionProcessor.CellQuad(Rect(0), 3, 3, r, c, W, H);
+            var rect = ZoneGeometry.CellRect(bounds, 3, 3, r, c);
+            var quad = ZoneGeometry.CellQuad(Rect(0), 3, 3, r, c, W, H);
 
             AssertWithinAPixel(rect.X,               quad.Min(p => p.X));
             AssertWithinAPixel(rect.Y,               quad.Min(p => p.Y));

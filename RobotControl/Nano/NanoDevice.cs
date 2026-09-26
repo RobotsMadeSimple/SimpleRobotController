@@ -7,24 +7,9 @@ namespace Controller.RobotControl.Nano
     /// Manages the serial connection to a single Arduino Nano edge device.
     /// Runs entirely on its own background thread.
     /// </summary>
-    public sealed class NanoDevice : IDisposable
+    public sealed class NanoDevice : SerialLineDevice
     {
         private readonly NanoDeviceConfig _config;
-        private SerialPort? _port;
-        private Thread?     _thread;
-        private volatile bool _running;
-
-        private readonly object        _lock         = new();
-        private readonly Queue<string> _commandQueue = new();
-
-        // Port that last answered our ID probe — tried first on reconnect.
-        private string? _lastGoodPort;
-
-        /// <summary>Physical port this device is currently connected on, or null.</summary>
-        public string? PortName   { get; private set; }
-        public string  Id         => _config.Id;
-        public string  Name       => _config.Name;
-        public bool    Connected  { get; private set; }
 
         // Live pin state keyed by Arduino pin number
         private readonly Dictionary<int, NanoPinState> _pinStates = new();
@@ -32,10 +17,14 @@ namespace Controller.RobotControl.Nano
         /// <summary>Fired on the device thread when an Input pin changes value.</summary>
         public event Action<NanoPinState>? InputChanged;
 
-        /// <summary>Fired on the device thread when the connection is established or lost.</summary>
-        public event Action<bool>? ConnectionChanged;
+        // ── SerialLineDevice knobs ─────────────────────────────────────────────
+        protected override string DeviceTag                    => "Nano";
+        protected override string ThreadNamePrefix              => "NanoDevice";
+        protected override int    ProbeAttempts                 => 1;
+        protected override int    ProbeResponseDelayMs          => 100;
+        protected override bool   KeepProbePortOpenForSession   => false;
 
-        public NanoDevice(NanoDeviceConfig config)
+        public NanoDevice(NanoDeviceConfig config) : base(config.Id, config.Name)
         {
             _config = config;
 
@@ -55,155 +44,11 @@ namespace Controller.RobotControl.Nano
             }
         }
 
-        // ── Lifecycle ──────────────────────────────────────────────────────────
+        // ── Session hooks ───────────────────────────────────────────────────────
 
-        public void Start()
+        protected override void OnSessionStarted(SerialPort port)
         {
-            _running = true;
-            _thread  = new Thread(ConnectionLoop)
-            {
-                IsBackground = true,
-                Name         = $"NanoDevice-{_config.Id}"
-            };
-            _thread.Start();
-        }
-
-        public void Stop()
-        {
-            _running = false;
-            try { _port?.Close(); } catch { }
-        }
-
-        public void Dispose() => Stop();
-
-        // ── Connection loop ────────────────────────────────────────────────────
-
-        private void ConnectionLoop()
-        {
-            while (_running)
-            {
-                string? port = null;
-                try
-                {
-                    port = ScanForDevice();
-                    if (port == null)
-                    {
-                        Thread.Sleep(3000);
-                        continue;
-                    }
-
-                    RunSession(port);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Nano:{_config.Id}] Unhandled error: {ex.Message}");
-                }
-                finally
-                {
-                    if (port != null) SerialPortRegistry.Release(port, _config.Id);
-                }
-
-                if (Connected)
-                {
-                    Connected = false;
-                    PortName  = null;
-                    ConnectionChanged?.Invoke(false);
-                }
-
-                if (_running) Thread.Sleep(3000);
-            }
-        }
-
-        /// <summary>
-        /// Candidate ports in probe order. Skips built-in serial ports on Linux
-        /// (only USB adapters carry our devices) and tries the last known-good
-        /// port first so reconnects are near-instant.
-        /// </summary>
-        private IEnumerable<string> CandidatePorts()
-        {
-            var all = SerialPort.GetPortNames();
-            IEnumerable<string> ports = all;
-
-            if (!OperatingSystem.IsWindows())
-            {
-                var usb = all.Where(p => p.Contains("ttyUSB") || p.Contains("ttyACM")).ToArray();
-                if (usb.Length > 0) ports = usb;
-            }
-
-            if (_lastGoodPort != null)
-                ports = ports.OrderByDescending(p => p == _lastGoodPort);
-
-            return ports;
-        }
-
-        /// <summary>Iterates available COM ports looking for the device with our ID.</summary>
-        private string? ScanForDevice()
-        {
-            foreach (string portName in CandidatePorts())
-            {
-                if (!_running) return null;
-                // Skip ports another device already owns — opening one would
-                // DTR-reset that device's Arduino.
-                if (SerialPortRegistry.IsClaimedByOther(portName, _config.Id)) continue;
-
-                try
-                {
-                    // Serialize probes on this port so two scanners can't open it at once.
-                    lock (SerialPortRegistry.LockFor(portName))
-                    {
-                        if (SerialPortRegistry.IsClaimedByOther(portName, _config.Id)) continue;
-
-                        using var probe = new SerialPort(portName, 115200)
-                        {
-                            ReadTimeout  = 2500,
-                            WriteTimeout = 1000,
-                            NewLine      = "\n",
-                        };
-                        probe.Open();
-
-                        // Arduino resets on DTR toggle when the port opens — wait for boot
-                        Thread.Sleep(2000);
-                        probe.DiscardInBuffer();
-
-                        probe.WriteLine("ID?");
-                        Thread.Sleep(100);
-
-                        string line = probe.ReadLine().Trim();
-
-                        if (line == $"ID:{_config.Id}")
-                        {
-                            _lastGoodPort = portName;
-                            SerialPortRegistry.Claim(portName, _config.Id);
-                            return portName;
-                        }
-                    }
-                }
-                catch { }
-            }
-
-            return null;
-        }
-
-        /// <summary>Opens the known port, configures pins, then runs the read/write loop.</summary>
-        private void RunSession(string portName)
-        {
-            _port = new SerialPort(portName, 115200)
-            {
-                ReadTimeout  = 100,   // short so we can service the write queue promptly
-                WriteTimeout = 2000,
-                NewLine      = "\n",
-            };
-
-            _port.Open();
-
-            // Another reset delay after the real open
-            Thread.Sleep(2000);
-
-            PortName  = portName;
-            Connected = true;
-            ConnectionChanged?.Invoke(true);
-
-            Console.WriteLine($"[Nano:{_config.Id}] Session started on {portName}");
+            Console.WriteLine($"[{LogPrefix}] Session started on {port.PortName}");
 
             // ── Send pin configuration ────────────────────────────────────────
             foreach (var pin in _config.Pins)
@@ -226,52 +71,16 @@ namespace Controller.RobotControl.Nano
 
             // Request full state so we are up-to-date immediately
             SafeWrite("GET");
-
-            // ── Read / write loop ─────────────────────────────────────────────
-            string readBuf = "";
-
-            while (_running && _port.IsOpen)
-            {
-                // Drain outbound command queue
-                lock (_lock)
-                {
-                    while (_commandQueue.Count > 0)
-                        SafeWrite(_commandQueue.Dequeue());
-                }
-
-                // Read one byte; ReadTimeout=100 means we spin back to flush the queue
-                try
-                {
-                    int b = _port.ReadByte();
-                    if (b == '\n')
-                    {
-                        ProcessLine(readBuf.Trim());
-                        readBuf = "";
-                    }
-                    else if (b != '\r' && b >= 0)
-                    {
-                        readBuf += (char)b;
-                    }
-                }
-                catch (TimeoutException) { /* normal — no data this tick */ }
-                catch (InvalidOperationException) { break; /* port closed */ }
-            }
-
-            try { _port.Close(); } catch { }
-            _port = null;
-
-            Console.WriteLine($"[Nano:{_config.Id}] Session ended");
         }
 
-        private void SafeWrite(string line)
+        protected override void OnSessionEnded()
         {
-            try { _port?.WriteLine(line); }
-            catch (Exception ex) { Console.WriteLine($"[Nano:{_config.Id}] Write error: {ex.Message}"); }
+            Console.WriteLine($"[{LogPrefix}] Session ended");
         }
 
         // ── Protocol parsing ───────────────────────────────────────────────────
 
-        private void ProcessLine(string line)
+        protected override void OnLine(string line)
         {
             if (string.IsNullOrEmpty(line)) return;
 
@@ -283,7 +92,9 @@ namespace Controller.RobotControl.Nano
                     string[] parts = entry.Split(',');
                     if (parts.Length >= 3 && int.TryParse(parts[0], out int pin))
                     {
-                        if (_pinStates.TryGetValue(pin, out var state))
+                        NanoPinState? state;
+                        lock (_lock) _pinStates.TryGetValue(pin, out state);
+                        if (state != null)
                             state.Value = parts[2] != "0";
                     }
                 }
@@ -296,7 +107,9 @@ namespace Controller.RobotControl.Nano
                 string[] parts = line.Substring(4).Split(',');
                 if (parts.Length >= 2 && int.TryParse(parts[0], out int pin))
                 {
-                    if (_pinStates.TryGetValue(pin, out var state))
+                    NanoPinState? state;
+                    lock (_lock) _pinStates.TryGetValue(pin, out state);
+                    if (state != null)
                     {
                         state.Value = parts[1] != "0";
                         if (state.Type == PinType.Input)
@@ -314,12 +127,14 @@ namespace Controller.RobotControl.Nano
         /// <summary>Queues a digital output change. Thread-safe.</summary>
         public void SetOutput(int pin, bool value)
         {
+            NanoPinState? state;
             lock (_lock)
             {
                 _commandQueue.Enqueue($"SET:{pin},{(value ? 1 : 0)}");
+                _pinStates.TryGetValue(pin, out state);
             }
             // Optimistically update tracked state
-            if (_pinStates.TryGetValue(pin, out var state))
+            if (state != null)
                 state.Value = value;
         }
 
@@ -358,11 +173,15 @@ namespace Controller.RobotControl.Nano
 
         // ── State accessors ────────────────────────────────────────────────────
 
-        public List<NanoPinState> GetPinStates() =>
-            _pinStates.Values.ToList();
+        public List<NanoPinState> GetPinStates()
+        {
+            lock (_lock) return _pinStates.Values.ToList();
+        }
 
-        public NanoPinState? GetPinState(int pin) =>
-            _pinStates.TryGetValue(pin, out var s) ? s : null;
+        public NanoPinState? GetPinState(int pin)
+        {
+            lock (_lock) return _pinStates.TryGetValue(pin, out var s) ? s : null;
+        }
 
         /// <summary>
         /// Adds or updates the tracked state for a pin without sending a firmware
@@ -370,28 +189,34 @@ namespace Controller.RobotControl.Nano
         /// </summary>
         public void UpsertPinState(int pin, PinType type, string name, int pixelCount)
         {
-            if (_pinStates.TryGetValue(pin, out var existing))
+            lock (_lock)
             {
-                existing.Type       = type;
-                existing.Name       = name;
-                existing.PixelCount = pixelCount;
-            }
-            else
-            {
-                _pinStates[pin] = new NanoPinState
+                if (_pinStates.TryGetValue(pin, out var existing))
                 {
-                    Pin        = pin,
-                    Type       = type,
-                    Name       = name,
-                    NanoId     = _config.Id,
-                    NanoName   = _config.Name,
-                    PixelCount = pixelCount,
-                    Value      = false,
-                };
+                    existing.Type       = type;
+                    existing.Name       = name;
+                    existing.PixelCount = pixelCount;
+                }
+                else
+                {
+                    _pinStates[pin] = new NanoPinState
+                    {
+                        Pin        = pin,
+                        Type       = type,
+                        Name       = name,
+                        NanoId     = _config.Id,
+                        NanoName   = _config.Name,
+                        PixelCount = pixelCount,
+                        Value      = false,
+                    };
+                }
             }
         }
 
         /// <summary>Removes a pin from live state tracking.</summary>
-        public void RemovePinState(int pin) => _pinStates.Remove(pin);
+        public void RemovePinState(int pin)
+        {
+            lock (_lock) _pinStates.Remove(pin);
+        }
     }
 }

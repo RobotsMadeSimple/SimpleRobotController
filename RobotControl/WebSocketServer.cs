@@ -1,9 +1,11 @@
-﻿using System.Net.WebSockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+
+namespace Controller.RobotControl.Hosting;
 
 public class RobotWebSocketServer
 {
@@ -135,11 +137,47 @@ public class RobotWebSocketServer
         {
             case "Command":
                 {
-                    var cmd = JsonSerializer.Deserialize<CommandMessage>(json, JsonOpts);
+                    CommandMessage? cmd;
+                    try
+                    {
+                        cmd = JsonSerializer.Deserialize<CommandMessage>(json, JsonOpts);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Malformed Command envelope (e.g. wrong field types) — report it
+                        // instead of letting the exception tear down the client socket.
+                        Console.WriteLine($"[WebSocket] Failed to deserialize Command: {ex}");
+                        await SendJson(socket, new Dictionary<string, object?>
+                        {
+                            ["type"]    = "ack",
+                            ["command"] = null,
+                            ["id"]      = null,
+                            ["ok"]      = false,
+                            ["error"]   = ex.Message
+                        });
+                        return;
+                    }
                     if (cmd == null)
                         return;
 
-                    var resultObj = await _commandHandler(cmd);
+                    object? resultObj;
+                    try
+                    {
+                        resultObj = await _commandHandler(cmd);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[WebSocket] Command '{cmd.Command}' failed: {ex}");
+                        await SendJson(socket, new Dictionary<string, object?>
+                        {
+                            ["type"]    = "ack",
+                            ["command"] = cmd.Command,
+                            ["id"]      = cmd.Id,
+                            ["ok"]      = false,
+                            ["error"]   = ex.Message
+                        });
+                        return;
+                    }
 
                     // Base ACK object
                     var ack = new Dictionary<string, object?>

@@ -77,8 +77,22 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("grid")]     public VisionZoneGrid?    Grid     { get; set; }
     }
 
+    /// <summary>
+    /// What every inspection type has in common. Lets code that only cares about identity,
+    /// enablement and zone (ordering, zone overrides, used-zone outlines) treat the six typed
+    /// lists on <see cref="VisionProgram"/> as one sequence. Not serialized — each type still
+    /// persists through its own list.
+    /// </summary>
+    public interface IVisionInspection
+    {
+        string  Id      { get; }
+        string  Name    { get; }
+        bool    Enabled { get; }
+        string? ZoneId  { get; set; }
+    }
+
     /// <summary>Blob detection run; optionally restricted to a zone by center-point containment.</summary>
-    public class BlobInspection
+    public class BlobInspection : IVisionInspection
     {
         [JsonPropertyName("id")]         public string              Id         { get; set; } = "";
         [JsonPropertyName("name")]       public string              Name       { get; set; } = "";
@@ -97,7 +111,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("tolerance")] public int    Tolerance { get; set; } = 20;
     }
 
-    public class ColorCoverageInspection
+    public class ColorCoverageInspection : IVisionInspection
     {
         [JsonPropertyName("id")]          public string           Id          { get; set; } = "";
         [JsonPropertyName("name")]        public string           Name        { get; set; } = "";
@@ -137,7 +151,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("cellsPassed")]  public int?   CellsPassed  { get; set; }
     }
 
-    public class PolygonInspection
+    public class PolygonInspection : IVisionInspection
     {
         [JsonPropertyName("id")]           public string  Id           { get; set; } = "";
         [JsonPropertyName("name")]         public string  Name         { get; set; } = "";
@@ -168,7 +182,7 @@ namespace Controller.RobotControl.Vision
     }
 
     /// <summary>Line detection inspection using Canny + HoughLinesP.</summary>
-    public class LineInspection
+    public class LineInspection : IVisionInspection
     {
         [JsonPropertyName("id")]              public string  Id              { get; set; } = "";
         [JsonPropertyName("name")]            public string  Name            { get; set; } = "";
@@ -210,7 +224,7 @@ namespace Controller.RobotControl.Vision
     }
 
     /// <summary>ArUco marker detection inspection.</summary>
-    public class ArucoInspection
+    public class ArucoInspection : IVisionInspection
     {
         [JsonPropertyName("id")]            public string  Id            { get; set; } = "";
         [JsonPropertyName("name")]          public string  Name          { get; set; } = "";
@@ -240,7 +254,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("markers")]      public List<ArucoMarkerResult> Markers      { get; set; } = new();
     }
 
-    public class BarcodeInspection
+    public class BarcodeInspection : IVisionInspection
     {
         [JsonPropertyName("id")]      public string       Id      { get; set; } = "";
         [JsonPropertyName("name")]    public string       Name    { get; set; } = "";
@@ -280,7 +294,27 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("arucoInspections")]    public List<ArucoInspection>         ArucoInspections    { get; set; } = new();
         [JsonPropertyName("lineInspections")]     public List<LineInspection>          LineInspections     { get; set; } = new();
         [JsonPropertyName("barcodeInspections")] public List<BarcodeInspection>       BarcodeInspections  { get; set; } = new();
+        // Order of inspections as a flat list of ids across all the typed lists above. The
+        // editor lets the user drag inspections into any order; the processor runs (and
+        // stacks labels) in this order. Ids missing from the list run after the listed ones,
+        // in type order (see AllInspections).
+        [JsonPropertyName("inspectionOrder")]     public List<string>                 InspectionOrder     { get; set; } = new();
         [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs   { get; set; }
+
+        /// <summary>
+        /// Every inspection across the six typed lists, in type order: blob, color, polygon,
+        /// ArUco, line, barcode — each list in its stored order. Ignores InspectionOrder.
+        /// A list sent as JSON null is treated as empty.
+        /// </summary>
+        public IEnumerable<IVisionInspection> AllInspections()
+        {
+            foreach (var i in Inspections ?? [])        yield return i;
+            foreach (var i in ColorInspections ?? [])   yield return i;
+            foreach (var i in PolygonInspections ?? []) yield return i;
+            foreach (var i in ArucoInspections ?? [])   yield return i;
+            foreach (var i in LineInspections ?? [])    yield return i;
+            foreach (var i in BarcodeInspections ?? []) yield return i;
+        }
     }
 
     // ── Runtime results ───────────────────────────────────────────────────────────
@@ -303,11 +337,19 @@ namespace Controller.RobotControl.Vision
     {
         [JsonPropertyName("programId")]       public string                    ProgramId      { get; set; } = "";
         [JsonPropertyName("timestampMs")]     public long                      TimestampMs    { get; set; }
+        /// <summary>Size of the analysed frame, px (0 when unknown).</summary>
+        [JsonPropertyName("imageWidth")]      public int                       ImageWidth     { get; set; }
+        [JsonPropertyName("imageHeight")]     public int                       ImageHeight    { get; set; }
         [JsonPropertyName("inspections")]     public List<InspectionResult>    Inspections    { get; set; } = new();
         [JsonPropertyName("colorResults")]    public List<ColorCoverageResult> ColorResults   { get; set; } = new();
         [JsonPropertyName("polygonResults")]  public List<PolygonResult>       PolygonResults { get; set; } = new();
         [JsonPropertyName("arucoResults")]    public List<ArucoResult>    ArucoResults    { get; set; } = new();
         [JsonPropertyName("lineResults")]     public List<LineResult>     LineResults     { get; set; } = new();
         [JsonPropertyName("barcodeResults")] public List<BarcodeResult>  BarcodeResults  { get; set; } = new();
+        // How long each inspection took to run this frame, in milliseconds, keyed by
+        // inspection id. Shown on the editor's inspection cards.
+        [JsonPropertyName("timings")]         public Dictionary<string, double> Timings { get; set; } = new();
+        /// <summary>Per-inspection error messages from this pass, formatted "{inspectionId}: {message}".</summary>
+        [JsonPropertyName("errors")]         public List<string>        Errors          { get; set; } = new();
     }
 }

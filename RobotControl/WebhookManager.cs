@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
 
+namespace Controller.RobotControl.Hosting;
+
 public class WebhookManager
 {
     private readonly object _lock = new();

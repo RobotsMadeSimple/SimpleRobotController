@@ -1,3 +1,4 @@
+namespace Controller.RobotControl.Persistence;
 /// <summary>
 /// Persists named TCP-offset tool frames (Tool).
 /// All CRUD and history logic lives in NamedVectorRepository&lt;Tool, ToolHistoryEntry&gt;.

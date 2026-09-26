@@ -1,3 +1,4 @@
+using Controller.RobotControl;
 using Controller.RobotControl.MotionProfilers;
 
 namespace RobotControl.Tests;

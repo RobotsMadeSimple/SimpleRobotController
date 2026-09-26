@@ -221,7 +221,8 @@ ROBOT = RobotLink()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Program validation (offline - no robot needed)
+# Program validation - offline fallback (robot_validate_program prefers the controller's
+# ValidateBuiltProgram; robot_save_program still gates saves on these checks)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _walk_steps(steps, path="steps"):
@@ -432,12 +433,23 @@ def validate_program(prog, known_points=None, known_programs=None):
 # would be reported as "and" missing its $.
 _EXPR_KEYWORDS = ("true", "false", "and", "or", "not")
 
+# The controller's expression functions (docs/expressions-and-variables.md section 2). A name
+# from this list followed by "(" is a call, not a forgotten $.
+_EXPR_FUNCTIONS = (
+    "abs", "sign", "sqrt", "pow", "min", "max", "clamp", "round", "floor", "ceil", "trunc", "mod",
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "deg", "rad", "hypot", "dist", "dist3",
+    "if", "len", "sum", "avg", "minof", "maxof", "rand", "map", "lerp",
+)
+
 
 def _bare_words(expr):
-    """Identifiers in an expression that are not $-prefixed, not .components, not keywords."""
+    """Identifiers in an expression that are not $-prefixed, not .components, not keywords,
+    and not function calls."""
     import re
     stripped = re.sub(r"\$\w+", " ", expr)
     stripped = re.sub(r"\.\w+", " ", stripped)
+    stripped = re.sub(r"\b(" + "|".join(_EXPR_FUNCTIONS) + r")\s*\(", "(", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"\d+(\.\d*)?[eE][+-]?\d+", " ", stripped)  # 1e3 is a number
     return [w for w in re.findall(r"[A-Za-z_]\w*", stripped) if w.lower() not in _EXPR_KEYWORDS]
 
 
@@ -466,6 +478,7 @@ READ_ONLY_COMMANDS = {
     "GetProgramImages", "GetProgramVariableImage", "GetCameras", "GetVisionPrograms",
     "GetNanoDevices", "GetRelays",
     "GetAuxDevices", "GetAuxAxisConfig", "GetCameraResolutions",
+    "GetCameraCalibration", "CalibrationPredict",
 }
 
 STATUS_FIELDS = [
@@ -574,19 +587,41 @@ def tool_robot_save_program(args):
 
 
 def tool_robot_validate_program(args):
+    """
+    Validate on the controller (ValidateBuiltProgram): it knows the expression language,
+    the property and function tables, routine bodies and every point/tool/local/grid/stack/
+    vision program on the robot. The local Python checks in validate_program() are only a
+    fallback for when the controller cannot be reached (or predates the command), or when
+    check_robot=false asks for an offline structural check.
+    """
     prog = args["program"]
     if isinstance(prog, str):
         prog = json.loads(prog)
-    known_points = known_programs = None
+
+    controller_error = None
     if args.get("check_robot", True):
         try:
-            known_points = {str(p.get("name")) for p in ROBOT.send("GetPoints").get("points", [])}
-            known_programs = {str(p.get("name")) for p in ROBOT.send("GetBuiltPrograms").get("programs", [])}
+            data = ROBOT.send("ValidateBuiltProgram", {"program": prog})
+            problems = data.get("problems") or []
+            errors = [p for p in problems if p.get("severity") == "error"]
+            warnings = [p for p in problems if p.get("severity") != "error"]
+            return _ok({
+                "valid": not errors,
+                "source": "controller",
+                "errorCount": len(errors),
+                "warningCount": len(warnings),
+                "problems": problems,
+            })
         except RobotError as e:
-            return _ok({"error": f"Could not reach the robot to check point/routine names: {e}",
-                        "hint": "Pass check_robot=false to validate structure only."})
-    errors, warnings = validate_program(prog, known_points, known_programs)
-    return _ok({"valid": not errors, "errors": errors, "warnings": warnings})
+            controller_error = str(e)
+
+    errors, warnings = validate_program(prog)
+    result = {"valid": not errors, "source": "offline", "errors": errors, "warnings": warnings}
+    if controller_error:
+        result["note"] = (f"Controller validation unavailable ({controller_error}); ran the offline "
+                          f"structural checks only - expressions, point names and routines were not "
+                          f"verified.")
+    return _ok(result)
 
 
 def tool_robot_step_schema(args):
@@ -663,11 +698,24 @@ def tool_robot_run_program(args):
 
 
 def tool_robot_set_output(args):
-    params = {"outputNumber": args["number"], "outputValue": bool(args["value"])}
-    if args.get("card"):
-        params["outputCard"] = args["card"]
-    ROBOT.send("SetOutput", params)
-    return _ok({"sent": "SetOutput", "params": params})
+    # "SetOutput" is a program *step* type, not a WebSocket command. Each IO card
+    # has its own command (see docs/websocket-api.md, "IO" section).
+    card   = (args.get("card") or "stb").lower()
+    number = int(args["number"])
+    value  = bool(args["value"])
+    if card == "stb":
+        cmd, params = "SetSTBOutput", {"pin": number, "value": value}
+    elif card == "nano":
+        nano_id = args.get("nanoId")
+        if not nano_id:
+            return _ok({"error": "nanoId is required when card is 'nano' (see robot_status.io.nanos)."})
+        cmd, params = "SetNanoOutput", {"nanoId": nano_id, "pin": number, "value": value}
+    elif card == "relay":
+        cmd, params = "SetRelay", {"relay": number, "value": value}
+    else:
+        return _ok({"error": f"Unknown card '{card}'. Use 'stb', 'nano' or 'relay'."})
+    ROBOT.send(cmd, params)
+    return _ok({"sent": cmd, "params": params})
 
 
 def tool_robot_raw_command(args):
@@ -736,12 +784,15 @@ TOOLS = [
        handler=tool_robot_step_schema),
 
     _t("robot_validate_program",
-       "Check a program for unknown step types, duplicate ids, undeclared variables, unresolved "
-       "GoToLabel targets, and variable references missing their $ sigil (which silently evaluate "
-       "to 0). Untaught points and unconfigured steps come back as warnings. Saves and runs nothing.",
+       "Validate a program on the controller (ValidateBuiltProgram): expression syntax, unknown "
+       "functions/variables/properties, read-only property writes, missing points/tools/locals/"
+       "grids/stacks/vision programs/routines, routine recursion, labels, empty loops/branches, "
+       "missing fields, plus disabled/unreachable steps and unused variables as warnings. Returns "
+       "problems [{stepId, stepPath, field, severity, code, message}]. Falls back to offline "
+       "structural checks if the robot is unreachable. Saves and runs nothing.",
        {"program": {"type": "object", "description": "The program object to check."},
         "check_robot": {"type": "boolean",
-                        "description": "Also verify point and routine names against the robot. Default true."}},
+                        "description": "Validate on the robot (default true). false = offline structural checks only."}},
        required=["program"], handler=tool_robot_validate_program),
 
     _t("robot_save_program",
@@ -790,9 +841,10 @@ TOOLS = [
 
     _t("robot_set_output",
        "DRIVES HARDWARE. Sets a digital output - grippers, valves, actuators.",
-       {"number": {"type": "integer", "description": "Output index."},
+       {"number": {"type": "integer", "description": "Output index: STB pin 1-4, Nano pin number, or relay 1-4."},
         "value":  {"type": "boolean", "description": "Target state."},
-        "card":   {"type": "string", "description": 'IO device, e.g. "STB". Omit for the default.'}},
+        "card":   {"type": "string", "description": 'IO device: "stb" (default), "nano" or "relay".'},
+        "nanoId": {"type": "string", "description": 'Nano device id, required when card is "nano".'}},
        required=["number", "value"], handler=tool_robot_set_output, gated=True),
 
     _t("robot_raw_command",

@@ -1,4 +1,6 @@
-﻿using System.Numerics;
+using System.Numerics;
+
+namespace Controller.RobotControl.Joints;
 
 public class CoreXYStage
 {

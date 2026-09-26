@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Controller.RobotControl.Nano
 {
     /// <summary>
@@ -10,13 +8,6 @@ namespace Controller.RobotControl.Nano
     public sealed class NanoManager : IDisposable
     {
         private readonly List<NanoDevice> _devices = new();
-
-        private static readonly JsonSerializerOptions _jsonOpts = new()
-        {
-            Converters           = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
-            PropertyNameCaseInsensitive = true,
-            WriteIndented        = true,
-        };
 
         // Path to the config file — kept so we can persist renames
         private readonly string _configPath;
@@ -29,16 +20,16 @@ namespace Controller.RobotControl.Nano
         {
             _configPath = configPath;
 
-            if (!File.Exists(configPath))
+            var loaded = Persistence.JsonFiles.Load<NanoConfig>(configPath, logTag: "NanoManager");
+            if (loaded != null)
+            {
+                _config = loaded;
+            }
+            else
             {
                 Console.WriteLine($"[NanoManager] Config not found — writing default to {configPath}");
                 _config = BuildDefaultConfig();
                 SaveConfig();
-            }
-            else
-            {
-                var json = File.ReadAllText(configPath);
-                _config = JsonSerializer.Deserialize<NanoConfig>(json, _jsonOpts) ?? BuildDefaultConfig();
             }
 
             foreach (var nanoCfg in _config.Nanos)
@@ -205,8 +196,7 @@ namespace Controller.RobotControl.Nano
         {
             try
             {
-                var json = JsonSerializer.Serialize(_config, _jsonOpts);
-                File.WriteAllText(_configPath, json);
+                Persistence.JsonFiles.Save(_configPath, _config);
             }
             catch (Exception ex)
             {

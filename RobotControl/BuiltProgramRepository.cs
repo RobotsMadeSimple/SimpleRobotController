@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+namespace Controller.RobotControl.Persistence;
+
 /// <summary>
 /// Persists built programs to disk as individual JSON files under builtPrograms/.
 /// Program images are stored as separate JPEG files under programImages/.
@@ -54,7 +56,7 @@ public class BuiltProgramRepository
 
                     var dest = ProgramPath(p.Name);
                     if (!File.Exists(dest))
-                        File.WriteAllText(dest, JsonSerializer.Serialize(p, _opts));
+                        AtomicFile.WriteAllText(dest, JsonSerializer.Serialize(p, _opts));
                 }
             }
             // Rename so migration doesn't re-run on next boot
@@ -164,14 +166,138 @@ public class BuiltProgramRepository
 
     private void WriteFile(BuiltProgram program)
     {
-        File.WriteAllText(ProgramPath(program.Name), JsonSerializer.Serialize(program, _opts));
+        AtomicFile.WriteAllText(ProgramPath(program.Name), JsonSerializer.Serialize(program, _opts));
         LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 
-    private string ProgramPath(string name)
+    private static string SafeName(string name) =>
+        string.Concat(name.Split(Path.GetInvalidFileNameChars()));
+
+    private string ProgramPath(string name) => Path.Combine(_dir, SafeName(name) + ".json");
+
+    // ── Revisions ─────────────────────────────────────────────────────────────
+
+    private const int MaxRevisionsPerProgram = 30;
+
+    private string RevisionDir(string name) => Path.Combine(_dir, ".revisions", SafeName(name));
+
+    /// <summary>
+    /// If a program is already saved at <paramref name="program"/>'s path and its on-disk
+    /// JSON differs from what would be written now, archives the CURRENT (pre-overwrite)
+    /// content as a new revision, then trims the folder down to the newest 30.
+    /// </summary>
+    private void ArchiveRevisionIfChanged(BuiltProgram program)
     {
-        var safe = string.Concat(name.Split(Path.GetInvalidFileNameChars()));
-        return Path.Combine(_dir, safe + ".json");
+        var path = ProgramPath(program.Name);
+        if (!File.Exists(path)) return;
+
+        string oldJson;
+        try { oldJson = File.ReadAllText(path); }
+        catch { return; }
+
+        if (!ContentDiffers(oldJson, program)) return;
+
+        var revDir = RevisionDir(program.Name);
+        Directory.CreateDirectory(revDir);
+
+        var stamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var dest = Path.Combine(revDir, stamp + ".json");
+        while (File.Exists(dest))
+        {
+            stamp++;
+            dest = Path.Combine(revDir, stamp + ".json");
+        }
+        AtomicFile.WriteAllText(dest, oldJson);
+
+        TrimRevisions(revDir);
+    }
+
+    /// <summary>
+    /// True unless the on-disk content and <paramref name="newProgram"/> are equal in every
+    /// field but <see cref="BuiltProgram.LastUpdatedUnixMs"/> — <see cref="Save"/> always
+    /// bumps that stamp, so comparing it too would archive a revision on every re-save even
+    /// when nothing the user edited actually changed.
+    /// </summary>
+    private bool ContentDiffers(string oldJson, BuiltProgram newProgram)
+    {
+        BuiltProgram? oldProgram;
+        try { oldProgram = JsonSerializer.Deserialize<BuiltProgram>(oldJson, _opts); }
+        catch { return true; } // unreadable on-disk content — treat as changed, best effort
+
+        if (oldProgram == null) return true;
+
+        var actualStamp = newProgram.LastUpdatedUnixMs;
+        newProgram.LastUpdatedUnixMs = oldProgram.LastUpdatedUnixMs;
+        try
+        {
+            var oldCanonical = JsonSerializer.Serialize(oldProgram, _opts);
+            var newCanonical = JsonSerializer.Serialize(newProgram, _opts);
+            return oldCanonical != newCanonical;
+        }
+        finally
+        {
+            newProgram.LastUpdatedUnixMs = actualStamp;
+        }
+    }
+
+    private static void TrimRevisions(string revDir)
+    {
+        var files = Directory.GetFiles(revDir, "*.json");
+        if (files.Length <= MaxRevisionsPerProgram) return;
+
+        var oldest = files
+            .Select(f => (file: f, id: ParseRevisionId(f)))
+            .OrderByDescending(x => x.id)
+            .Skip(MaxRevisionsPerProgram)
+            .Select(x => x.file);
+        foreach (var file in oldest)
+        {
+            try { File.Delete(file); } catch { /* best effort */ }
+        }
+    }
+
+    private static long ParseRevisionId(string file) =>
+        long.TryParse(Path.GetFileNameWithoutExtension(file), out var v) ? v : 0;
+
+    /// <summary>Moves a program's revision folder when it is renamed (same id, new name).</summary>
+    private void MoveRevisionFolder(string oldName, string newName)
+    {
+        var oldDir = RevisionDir(oldName);
+        var newDir = RevisionDir(newName);
+        if (!Directory.Exists(oldDir) || string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(newDir)!);
+        if (!Directory.Exists(newDir))
+        {
+            Directory.Move(oldDir, newDir);
+        }
+        else
+        {
+            // Destination already has revisions (e.g. renamed onto a name that once existed) —
+            // merge file-by-file rather than losing either set.
+            foreach (var f in Directory.GetFiles(oldDir))
+                File.Move(f, Path.Combine(newDir, Path.GetFileName(f)), overwrite: true);
+            Directory.Delete(oldDir, recursive: true);
+        }
+    }
+
+    /// <summary>Counts steps recursively (loop bodies, if/else-if/else branches) without following CallRoutine.</summary>
+    private static int CountSteps(IEnumerable<ProgramStep>? steps)
+    {
+        if (steps == null) return 0;
+        var count = 0;
+        foreach (var s in steps)
+        {
+            count++;
+            count += CountSteps(s.LoopSteps);
+            count += CountSteps(s.IfSteps);
+            count += CountSteps(s.ElseSteps);
+            if (s.ElseIfBranches != null)
+                foreach (var branch in s.ElseIfBranches)
+                    count += CountSteps(branch.Steps);
+        }
+        return count;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -193,7 +319,10 @@ public class BuiltProgramRepository
                 var oldFile = ProgramPath(previous.Name);
                 if (File.Exists(oldFile)) File.Delete(oldFile);
                 _programs.Remove(previous.Name);
+                MoveRevisionFolder(previous.Name, program.Name);
             }
+
+            ArchiveRevisionIfChanged(program);
 
             _programs[program.Name] = program;
             WriteFile(program);
@@ -210,7 +339,76 @@ public class BuiltProgramRepository
             LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var imgPath = ImagePath(name);
             if (File.Exists(imgPath)) File.Delete(imgPath);
+            var revDir = RevisionDir(name);
+            if (Directory.Exists(revDir)) { try { Directory.Delete(revDir, recursive: true); } catch { /* best effort */ } }
             return true;
+        }
+    }
+
+    /// <summary>Newest-first summary of the saved revisions for a program. Empty if none/unknown.</summary>
+    public List<ProgramRevisionInfo> ListRevisions(string name)
+    {
+        lock (_lock)
+        {
+            var revDir = RevisionDir(name);
+            if (!Directory.Exists(revDir)) return new List<ProgramRevisionInfo>();
+
+            var result = new List<ProgramRevisionInfo>();
+            foreach (var file in Directory.GetFiles(revDir, "*.json"))
+            {
+                var idStr = Path.GetFileNameWithoutExtension(file);
+                if (!long.TryParse(idStr, out var savedUnixMs)) continue;
+
+                BuiltProgram? p = null;
+                try { p = JsonSerializer.Deserialize<BuiltProgram>(File.ReadAllText(file), _opts); }
+                catch { /* corrupt revision — still listed, with zero counts */ }
+
+                result.Add(new ProgramRevisionInfo
+                {
+                    Id            = idStr,
+                    SavedUnixMs   = savedUnixMs,
+                    StepCount     = CountSteps(p?.Steps),
+                    VariableCount = p?.Variables?.Count ?? 0,
+                    Note          = null,
+                });
+            }
+            result.Sort((a, b) => b.SavedUnixMs.CompareTo(a.SavedUnixMs));
+            return result;
+        }
+    }
+
+    private BuiltProgram? GetRevisionLocked(string name, string id)
+    {
+        if (string.IsNullOrEmpty(id) || !id.All(char.IsDigit)) return null;
+        var file = Path.Combine(RevisionDir(name), id + ".json");
+        if (!File.Exists(file)) return null;
+        try { return JsonSerializer.Deserialize<BuiltProgram>(File.ReadAllText(file), _opts); }
+        catch { return null; }
+    }
+
+    public BuiltProgram? GetRevision(string name, string id)
+    {
+        lock (_lock) { return GetRevisionLocked(name, id); }
+    }
+
+    /// <summary>
+    /// Restores a revision as the current content, saving it via <see cref="Save"/> (which itself
+    /// archives the pre-restore state as a new revision). Keeps the program's current id/name even
+    /// if the revision predates a rename.
+    /// </summary>
+    public BuiltProgram? RestoreRevision(string name, string id)
+    {
+        lock (_lock)
+        {
+            if (!_programs.TryGetValue(name, out var current)) return null;
+            var revision = GetRevisionLocked(name, id);
+            if (revision == null) return null;
+
+            revision.Id   = current.Id;
+            revision.Name = current.Name;
+
+            Save(revision);
+            return revision;
         }
     }
 
@@ -240,7 +438,7 @@ public class BuiltProgramRepository
     public void SaveImage(string name, byte[] bytes)
     {
         Directory.CreateDirectory(_imageDir);
-        File.WriteAllBytes(ImagePath(name), bytes);
+        AtomicFile.WriteAllBytes(ImagePath(name), bytes);
     }
 
     public byte[]? GetImage(string name)

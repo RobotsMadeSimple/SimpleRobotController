@@ -33,6 +33,8 @@ Programs define variables (`ProgramVariable`) that blocks can read and write:
   `StopwatchControl`).
 - **`displayOnMonitor`** — current value is shown on the monitor page while
   running.
+- **`isComputed`** — a named formula (user-defined property); see
+  [Computed variables](#computed-variables).
 
 #### List variables
 
@@ -97,26 +99,90 @@ Most numeric fields can be a **math expression** instead of a literal. A step's
 `expressions` map holds `{ "<fieldName>": "<expr>" }` keyed by the JSON field
 name (e.g. `"speed": "$baseSpeed * 2"`, `"offsetZ": "$layer * 5"`). Expressions
 are evaluated at execution time. Variable references **require the `$` sigil** —
-a bare `baseSpeed` is not a lookup, it evaluates to `0`. The built-in `$time_ms`
-is also available (e.g. in `SaveImage` paths).
+a bare `baseSpeed` is not a lookup, it evaluates to `0` (the validator warns
+about it). The built-in `$time_ms` is also available (e.g. in `SaveImage` paths).
+The full contract is [docs/expressions-and-variables.md](expressions-and-variables.md).
 
-| Operators | | 
+| Syntax | |
 |---|---|
-| Arithmetic | `+` `-` `*` `/` |
+| Literals | `3.14` `-5` `1e3` `true` `false` |
+| Variables | `$name` — program, routine, global and persistent variables |
+| IO | `$stb.in1` `$stb.out2` `$relay.3` `$nano.<board>.<pin>` |
+| Properties | `$robot.x` `$program.runCount` `$time.hour` … — read-only, see below |
+| Lists | `$list.length` `$list.count` `$list[i]` `$pts[i].x` `$pts[i][0]` `$recs[i].field` |
+| Arithmetic | `+` `-` `*` `/` `%` `^` — `%` is the remainder (sign of the left side), `^` is power; `/` and `%` by zero give `0` |
 | Comparison | `==` `!=` `<` `<=` `>` `>=` |
 | Logic | `and` `or` `not` — `&&`, `\|\|` and `!` are accepted spellings of the same three |
-| Grouping | `(…)` |
+| Conditional | `cond ? a : b` |
+| Functions | `abs(x)`, `min(a, b, …)`, `round(x, 2)`, `sin(deg)`, `len($list)` … — see below |
+| Grouping | `(…)` — braces `{…}` are ignored, so `{$x + 1}` also works in a numeric field |
 
-Precedence, tightest first: `* /`, `+ -`, comparison, `not`, `and`, `or`. So
-`$count > 5 and $count < 10` needs no parentheses, and `not $a > 5` means
-`not ($a > 5)`.
+Precedence, tightest first: `^`, unary `-`, `* / %`, `+ -`, comparison, `not`,
+`and`, `or`, `? :`. So `$count > 5 and $count < 10` needs no parentheses,
+`not $a > 5` means `not ($a > 5)`, `-2 ^ 2` is `-4`, `2 ^ 3 ^ 2` is `2 ^ 9`
+(`^` is right-associative, as is `?:`), and `$n > 0 ? $sum / $n : 0` needs no
+parentheses either. A `not` written as an operand (`$a == not $b`) binds like
+unary minus.
 
 Comparison and logic yield `1` or `0` — which is exactly how a boolean variable
 is stored, so a comparison can be assigned to one directly. Any non-zero value
 counts as true on the way in. Chained comparisons are left-associative as in C
 rather than mathematical: `1 < 2 < 3` is `(1 < 2) < 3`, which is `1`. `==`
 compares within `1e-9`, the same tolerance an `IfCondition` row uses, so
-`0.1 + 0.2 == 0.3` holds.
+`0.1 + 0.2 == 0.3` holds. Both sides of `and`/`or` and both branches of `?:` /
+`if()` are always evaluated — nothing has side effects, and it means a typo'd
+variable fails the run whichever way the condition goes.
+
+#### Functions
+
+Names are case-insensitive. Angles are in **degrees**, in and out.
+
+| Function | Result |
+|---|---|
+| `abs(x)` `sign(x)` `sqrt(x)` `pow(x, y)` | absolute value, -1/0/1, square root, x to the y |
+| `min(a, b, …)` `max(a, b, …)` | smallest / largest of any number of arguments |
+| `clamp(x, lo, hi)` | x limited to lo…hi |
+| `round(x)` `round(x, digits)` | rounds half **away from zero** (`round(2.5)` = 3, `round(-2.5)` = -3); negative digits round to tens, hundreds… |
+| `floor(x)` `ceil(x)` `trunc(x)` | down, up, toward zero |
+| `mod(a, b)` | same as `a % b` |
+| `sin(deg)` `cos(deg)` `tan(deg)` | trigonometry on degrees |
+| `asin(x)` `acos(x)` `atan(x)` `atan2(y, x)` | inverse trigonometry, result in degrees |
+| `deg(rad)` `rad(deg)` | unit conversion |
+| `hypot(x, y)` `dist(x1, y1, x2, y2)` `dist3(x1, y1, z1, x2, y2, z2)` | lengths and distances |
+| `if(cond, a, b)` | same as `cond ? a : b` |
+| `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | over a list variable; `len` works on any list, the others on number/boolean lists (an empty list gives 0). The argument must be a bare list reference. |
+| `rand()` `rand(lo, hi)` | uniform random number in [0, 1) or [lo, hi) |
+| `map(x, inLo, inHi, outLo, outHi)` `lerp(a, b, t)` | range re-mapping and linear interpolation |
+
+#### Properties
+
+Read-only system values, resolved live whenever an expression reads them (and
+only then). They can be read anywhere an expression is allowed and in `{…}`
+text interpolation, but never assigned — the validator rejects a Set Variable,
+loop, vision or HTTP target named like one (`readOnlyProperty`).
+
+| Property | Value |
+|---|---|
+| `$robot.x` `y` `z` `rx` `ry` `rz` | current TCP pose |
+| `$robot.targetX` … `targetRz` | commanded target |
+| `$robot.moving` `homed` `faulted` `driverConnected` | 1/0 |
+| `$robot.speedS` `accelS` `decelS` `speedJ` `accelJ` `decelJ` | current motion defaults |
+| `$robot.speedOverride` | percent |
+| `$robot.joint1` `joint2x` `joint2z` `joint4` | joint readouts |
+| `$program.runCount` `stepIndex` `stepCount` `elapsedMs` `loopDepth` | the current run |
+| `$time.now` (unix ms) `hour` `minute` `second` `dayOfWeek` (0 = Sunday) `dayOfYear` | local wall clock |
+| `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes (steps, 1/0) |
+
+A name that is a variable or IO value wins over a property of the same name.
+
+#### Errors
+
+An unknown `$name` stops the program with an error — a typo'd offset must never
+move the robot somewhere unintended. A **syntax error** (unbalanced parentheses,
+a stray token such as `1 2` or `#`, an unknown function, a function given the
+wrong number of arguments) also stops the program, with the position of the
+problem; older builds silently fell back to the field's literal value.
+`ValidateBuiltProgram` reports both before a run.
 
 #### Expressions as a variable's initial value
 
@@ -126,9 +192,59 @@ is entered, against the variables declared *above* it plus IO — variables
 initialise in declaration order, so it cannot see one declared below. Any
 non-zero result makes a boolean `True`.
 
-`value` should still be written alongside it: it is the fallback used if the
-expression cannot be evaluated. An unknown `$name` in it is not a fallback case —
-it errors the program at start, the same as an unknown variable anywhere else.
+`value` should still be written alongside it: it is what a build that does not
+understand `valueExpression` uses, and the fallback for a runtime failure other
+than a syntax error or an unknown `$name` — both of those error the program at
+start, the same as anywhere else.
+
+#### Computed variables
+
+A variable with `isComputed: true` is a named formula — a user-defined property.
+Its `valueExpression` is evaluated **every time** `$name` is read, against the
+live variables, lists, IO and properties, exactly like `$robot.x`; it has no
+stored value (`value` is ignored). It works everywhere an expression is read:
+step fields, conditions, list indexes, `{…}` and bare `$name` text
+interpolation, `EvaluateExpression`.
+
+```json
+{ "name": "area",  "isComputed": true, "valueExpression": "$w * $h" }
+{ "name": "ready", "isComputed": true, "valueExpression": "$area > 100 and $stb.in1", "isBoolean": true, "displayOnMonitor": true }
+```
+
+- **Reading** — nested computed references are fine (`$volume` = `$area * $d`).
+  Unlike an initial value, a formula can use variables declared below it: it runs
+  when read, not at start. A formula that ends up reading itself stops the
+  program with an expression error (code `computedCycle`) instead of recursing.
+  An unknown `$name` inside the formula stops the program like anywhere else.
+- **Writing** — refused. A Set Variable, loop index, forEach value/index,
+  vision/HTTP output variable or stopwatch naming a computed variable stops the
+  program with "Cannot assign computed variable …".
+- **`isGlobal`** — the program that declares it registers the formula in the
+  global store on start (the latest declaring program wins); every program can
+  then read it, even one that does not declare it. A global formula is evaluated
+  against global variables, IO and properties only — never a reader's locals. A
+  program's own computed variable of the same name wins over a global one.
+- **`isBoolean`** — the monitor shows true/false; the formula still yields 1/0.
+- **`displayOnMonitor`** — shows the formula's current result; `NaN` when it
+  fails to evaluate.
+- **Symbols** — `GetExpressionSymbols` lists them with `kind: "computed"`, the
+  `expression`, `isBoolean`, `isGlobal` and a live `value` while an executor
+  holds the program (global ones are evaluated from the store otherwise);
+  without a program, the registered global computed variables are listed.
+- **Invalid combinations** — `isPersistent`, `isString`, `isImage`,
+  `isStopwatch` and list `items` make no sense for a formula; at run time the
+  variable is still treated as computed.
+
+Validation (`ValidateBuiltProgram`, all errors): the formula is parsed and every
+reference resolved like any other expression (`expressionSyntax`,
+`unknownVariable`, `unknownProperty`, …; an empty formula is `missingField`), plus:
+
+| Code | When |
+|---|---|
+| `computedCycle` | computed variables whose formulas depend on each other in a loop (reported on every variable in the loop) |
+| `computedVariable` | a write target — Set Variable, loop index, forEach value/index, vision/HTTP output variable, stopwatch — that is a computed variable |
+| `computedGlobalScope` | a global computed formula that references a non-global program variable, a list, or a non-global computed variable |
+| `computedKindConflict` | `isComputed` together with `isPersistent` / `isString` / `isImage` / `isStopwatch` / `items` |
 
 ### Variable interpolation
 
@@ -141,7 +257,7 @@ references into the surrounding text:
 | `$name` / `{$name}` | Scalar → value, string → value, list → a count worded by element type: `"N items"`, `"N points"`, `"N objects"`. |
 | `$name[expr]` / `{$name[expr]}` | One element, rendered by element type — a `Number` as the value, a `Boolean` as `True`/`False`, a `Point` as `(x=…, y=…, …)`, a `Record` as `(row=0, col=1, …)`. `expr` is itself an expression, and an empty list renders `(empty)`. |
 | `$name[expr].z` / `{$name[expr].z}` | One named field of that element — a point's axis, or a record's field. Unknown fields render `0`. |
-| `{expr}` | Any math expression, e.g. `{$index + 1}` or `{$row * 3 + $col}`. Braced form only. |
+| `{expr}` | Any math expression, e.g. `{$index + 1}`, `{$row * 3 + $col}`, `{round($mm, 1)}` or `{$robot.z}`. Braced form only — properties and dotted names need braces (`$robot.x` bare reads as `$robot` followed by text). |
 
 The braces are purely a delimiter — the `$` is required inside them just as it is
 everywhere else. They exist for two reasons. They let a reference sit directly
@@ -153,7 +269,8 @@ Anything that resolves to neither a known variable nor a valid expression is lef
 in the text as written rather than substituted. A braced body containing a name
 written *without* its `$` is left alone for the same reason: to the evaluator a
 bare word is not a lookup but the value `0`, so substituting it would quietly
-produce a wrong answer instead of an obvious one.
+produce a wrong answer instead of an obvious one. Function names followed by `(`,
+`true`/`false` and `and`/`or`/`not` are not bare names.
 
 ### Conditions
 
@@ -364,9 +481,16 @@ program variables.
 | `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar, cellsVar, cellsPassedVar }`. |
 | `polygonOutputs` | Polygon/shape → `{ inspectionId, countVar, foundVar, angleVar, centerXVar, centerYVar }`. |
 | `arucoOutputs` | ArUco markers → `{ inspectionId, countVar, foundVar, firstIdVar, firstCenterXVar, firstCenterYVar }`. |
+| `outputFrame` | Frame of the positions written above (blob `pointsVar` points, polygon `centerXVar`/`centerYVar`, ArUco `firstCenterXVar`/`firstCenterYVar`): `"pixel"`, `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Unset keeps the original mix: blob points in pixels, polygon/ArUco centers normalized. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
+| `waitTimeoutMs` | Max time to wait for a fresh vision result (default 30 000 ms; `0` or less waits forever). Expiry ends the program with an error. |
 
 Each `*Var` names a program variable that receives that result (counts, points,
 booleans, angles, coordinates).
+
+If an inspection throws while processing a frame, the vision result carries an
+`errors` entry (`"<inspectionId>: <message>"`) and that inspection reports no
+detections for the frame; check the vision program's editor card or the
+controller log when an output stays at zero unexpectedly.
 
 #### Zone grids
 

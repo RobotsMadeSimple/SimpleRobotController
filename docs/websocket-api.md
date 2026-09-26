@@ -32,6 +32,15 @@ Every command receives an ACK. Commands that return data merge it into the ACK:
 { "type": "ack", "command": "<CommandName>", "id": "any-correlation-id", "ok": true, "<data>": ... }
 ```
 
+A command that fails (unknown name, missing or malformed `params`, or an
+exception while handling it) still gets an ACK, with `ok: false` and a message:
+
+```json
+{ "type": "ack", "command": "<CommandName>", "id": "any-correlation-id", "ok": false, "error": "unknownCommand" }
+```
+
+The socket stays open; only that one command is rejected.
+
 The controller also **broadcasts** `GetStatus`-style state to all clients on a
 timer, so most UIs poll `GetStatus` rather than reacting to individual ACKs.
 
@@ -101,7 +110,12 @@ stack cell reference).
 `localX/Y/Z/RZ` (in the active local frame); `targetX…targetRZ`; joint readouts
 `joint1Angle, joint2X, joint2Z, joint4Angle`; visual `poseX…poseRZ`; motion
 defaults `speedS/accelS/decelS`, `speedJ/accelJ/decelJ`; STB `input1–4` /
-`output1–4`; `programs` summary; `activeTool`, `activeLocal`;
+`output1–4`; `programs` summary (per program: `name, status, currentStepNumber,
+maxStepCount, currentStepDescription, errorDescription, warningDescription`,
+the current point/offsets, the action flags, plus `runCount` and
+`lastStartedUnixMs` — these two change on every start, so a client polling
+status can detect a run that started and finished between two polls even
+though `status` reads `Complete` both times); `activeTool`, `activeLocal`;
 `backgroundPrograms`; repository update timestamps; `speedOverridePercent`; fault
 state `faulted, faultJoint, faultDirection, faultMessage, limitBypass`;
 `jointLimitsEnabled`, `robotType`, `version`, `isLinux`.
@@ -171,6 +185,38 @@ move targets (a `MoveL`/`MoveJ` `name` can be a grid/stack cell reference).
 | `StopBuiltProgram` | — | Stop/pause the running built program (frame stack kept for resume). |
 | `GetProgramVariables` | program name | Returns the program's current variable values, plus its display images as name + revision. |
 | `GetProgramVariableImage` | `name` (program) + `variable` | Returns the base64 bytes of one display image variable in `image`. |
+| `GetBuiltProgramRevisions` | `name` | Returns saved snapshots for a program, newest first, in `revisions`. |
+| `GetBuiltProgramRevision` | `name, id` | Returns one saved snapshot as JSON in `program`. |
+| `RestoreBuiltProgramRevision` | `name, id` | Makes that snapshot the current content and returns it as JSON in `program`. |
+
+### Revision history
+
+`SaveBuiltProgram` archives a revision of the program's **previous** on-disk
+content whenever the new save's serialized JSON differs from what is already
+there — an unchanged save creates nothing. Up to 30 revisions are kept per
+program, oldest dropped first; deleting a program deletes its history, and
+renaming a program (same id, new name) carries its history over to the new
+name. `RestoreBuiltProgramRevision` restores by saving the chosen snapshot as
+the current content — which itself archives the pre-restore state as a new
+revision — and keeps the program's current id/name even if the snapshot
+predates a rename.
+
+```json
+// GetBuiltProgramRevisions { "name": "PickAndPlace" }
+{ "revisions": [
+  { "id": "1758556800000", "savedUnixMs": 1758556800000, "stepCount": 42, "variableCount": 6, "note": null },
+  { "id": "1758553200000", "savedUnixMs": 1758553200000, "stepCount": 40, "variableCount": 6, "note": null }
+] }
+
+// GetBuiltProgramRevision { "name": "PickAndPlace", "id": "1758556800000" }
+{ "program": "{...}" }   // same JSON-string shape as GetBuiltPrograms' programs entries
+
+// RestoreBuiltProgramRevision { "name": "PickAndPlace", "id": "1758556800000" }
+{ "program": "{...}" }
+```
+
+An unknown `name` or `id` answers `{ "ok": false, "error": "unknownProgram" }`
+or `{ "ok": false, "error": "unknownRevision" }` instead of the normal payload.
 
 ### Display images
 
@@ -257,14 +303,135 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 
 | Command | Params | Description |
 |---|---|---|
-| `GetCameras` | — | Returns camera states. |
-| `AddCamera` | `name, deviceIndex, enabled, width=640, height=480, targetFps=15` | Add a USB camera. |
+| `GetCameras` | — | Returns camera states (each with `calibrated` and `calibratedUnixMs`, see below). |
+| `AddCamera` | `name, deviceIndex, enabled, width=640, height=480, targetFps=15`, optional `sourceType="usb"`, `url`, `username`, `password`, `transport="tcp"`, and for Sofia `host`, `port=34567`, `stream="Main"`, `codec="h264"`, `decoder="opencv"`, `ffmpegPath="ffmpeg"`, `hwaccel=""` | Add a USB, network or Sofia camera (a Sofia camera without `username` logs in as `admin`). |
 | `RemoveCamera` | `id` | Remove a camera. |
-| `SetCameraConfig` | `id, name, deviceIndex, enabled, width, height, targetFps` | Update a camera's config. |
-| `GetCameraResolutions` | `deviceIndex` | Probe supported resolutions for a device index. |
+| `SetCameraConfig` | `id, name, deviceIndex, enabled, width, height, targetFps`, optional `sourceType, url, username, password, transport, host, port, stream, codec, decoder, ffmpegPath, hwaccel` | Update a camera's config. An absent network or Sofia field keeps the camera's current value. The capture restarts only when a capture-affecting field changed (device index, size, fps, enabled, or any source field). |
+| `GetCameraResolutions` | `deviceIndex`, optional `id` | Probe supported resolutions for a device index. Returns `[]` for a network or Sofia camera (`id` of one); those never match a `deviceIndex`. |
+| `TestCameraSource` | `url`, optional `username`, `password`, `transport` (`tcp`/`udp`), `timeoutMs` (8000); or `sourceType: "sofia"` with `host`, optional `port`, `username`, `password`, `stream`, `codec`, `decoder`, `ffmpegPath`, `hwaccel`, `timeoutMs` | Opens a network stream once on a worker thread, reads one frame and closes it. Returns `ok, width, height, openMs, firstFrameMs, error` (`error` null on success). For Sofia see [Sofia cameras](#sofia--dvrip-xmeye-cameras). |
 
 Camera frames are streamed separately over `GET /camera/{id}/ws` (base64 MJPEG
 text frames) with a `GET /camera/{id}/snapshot` still image.
+
+### Network cameras
+
+A camera with `sourceType: "network"` is an RTSP (`rtsp://`, `rtsps://`) or HTTP
+MJPEG/snapshot (`http://`, `https://`) stream opened through OpenCV's FFmpeg
+backend — see [network-cameras.md](network-cameras.md). `url` is stored without
+credentials; `username`/`password` are injected (URL-encoded) at open time and are
+returned by `GetCameras`, but logs only ever show the password as `***`.
+`deviceIndex` is ignored, and `width`/`height`/`supportedResolutions` are
+informational: the stream's own size is used.
+
+Extra `GetCameras` state fields (all cameras):
+
+| Field | Meaning |
+|---|---|
+| `sourceType` | `"usb"` (also when absent in an old `camera_config.json`) or `"network"`. |
+| `url`, `username`, `password`, `transport` | Network source settings (`""` / `"tcp"` for USB cameras). |
+| `streamWidth`, `streamHeight` | Size of the frames actually delivered; 0 until the first frame. |
+| `latencyMs` | Best-effort network decode latency estimate (wall clock vs the stream's presentation clock); 0 when unknown. |
+
+`TestCameraSource` errors:
+
+| `error` | Meaning |
+|---|---|
+| `invalidUrl` | Not an absolute `rtsp`/`rtsps`/`http`/`https` URL with a host. |
+| `openFailed` | FFmpeg could not open the stream (wrong address, port or credentials, host unreachable), or the controller's OpenCV build has no FFmpeg. |
+| `noFrame` | The stream opened but no frame could be read. |
+| `timeout` | The open or first read took longer than `timeoutMs` (+1 s margin); the worker closes the stream when the call returns. |
+
+RTSP transport is passed to FFmpeg through the process-wide
+`OPENCV_FFMPEG_CAPTURE_OPTIONS` environment variable, set just before each network
+open (last writer wins), so two network opens racing with different transports may
+pick up each other's setting.
+
+### Sofia / DVRIP (XMeye) cameras
+
+A camera with `sourceType: "sofia"` is pulled over the vendor Sofia protocol (DVRIP,
+TCP 34567), which buffers far less than those cameras' RTSP server — see
+[network-cameras.md](network-cameras.md#sofia--dvrip-xmeye-cameras--sourcetype-sofia).
+`url`/`transport`/`deviceIndex` are unused; `username`/`password` are the Sofia login
+(may differ from RTSP; never logged). The first video frame's codec is detected and
+wins over `codec` when they differ.
+
+Extra `GetCameras` state fields (all cameras; defaults shown for non-Sofia cameras):
+
+| Field | Meaning |
+|---|---|
+| `host` | Camera IP / hostname (`""`). |
+| `port` | DVRIP port (`34567`). |
+| `stream` | `"Main"` or `"Extra1"` (sub-stream). |
+| `codec` | `"h264"` or `"hevc"`. |
+| `decoder` | `"opencv"` (in-process: loopback socket into OpenCV's FFmpeg backend) or `"ffmpeg"` (external process). |
+| `ffmpegPath` | Executable for the `ffmpeg` decoder (`"ffmpeg"`). |
+| `hwaccel` | `ffmpeg` decoder only: `""`, `"auto"`, `"d3d11va"`, … |
+
+`streamWidth`/`streamHeight` come from the first decoded picture; `latencyMs` is the
+best-effort time from a frame's arrival to its decoded picture.
+
+`TestCameraSource` with `sourceType: "sofia"` connects, logs in, claims the stream and
+waits for the first video frame within `timeoutMs`; if time remains it decodes one
+picture with the chosen decoder. Response:
+
+| Field | Meaning |
+|---|---|
+| `ok` | Handshake and first frame succeeded (the decode is optional). |
+| `loginMs` | Time to finish the handshake (connect, login, claim/start). |
+| `firstFrameMs` | Time until the first video frame arrived. |
+| `detectedCodec` | `"h264"`, `"hevc"` or `"unknown"` (from the first frame's NAL headers). |
+| `firstFrameBytes` | Size of the first video frame. |
+| `width`, `height` | Decoded size; 0 when the decoder could not be exercised within the budget. |
+| `error` | null, or `connectFailed` (host/port unreachable), `loginFailed` (credentials; the camera's `Ret` code is in `message`), `claimFailed`, `noFrame` (logged in but no video — try the other stream), `timeout`, `decoderUnavailable` (`ffmpeg` not found at `ffmpegPath`, or no FFmpeg backend for the in-process decoder). |
+| `message` | Error detail, e.g. `DVRIP login failed (Ret=203)`; never contains the password. |
+
+---
+
+## Camera calibration
+
+Camera-to-robot calibration with a dot sheet — the method, the stored model and
+the grid rules are in [camera-calibration.md](camera-calibration.md). Image
+positions are normalized `u, v` (0–1). A wizard run is a **session** held in
+memory for 30 minutes after its last use.
+
+| Command | Params | Response (merged into the ack) |
+|---|---|---|
+| `GetCameraCalibration` | `cameraId` | `calibration` (the stored object) or `calibration: null`. |
+| `DeleteCameraCalibration` | `cameraId` | — |
+| `CalibrationStart` | `cameraId`, `dotPitchMm` (> 0), optional `minDotAreaPx` (30), `maxDotAreaPx` (20 000), `darkDots` (true) | `sessionId, cameraId, dotPitchMm, imageWidth, imageHeight, dots: [{ index, i, j, u, v, areaPx }], gridRows, gridCols, gridRmsPx, warnings: [string], imageUrl, taught: []` |
+| `CalibrationRedetect` | `sessionId`, optional detector params as above and `dotPitchMm` | Same as `CalibrationStart`, from a new frame. Taught dots with a dot still within 0.3 spacings of where they were are kept (re-indexed); others are dropped with a warning. |
+| `CalibrationTeachDot` | `sessionId`, `dotIndex` | `taught: [{ dotIndex, i, j, u, v, robot: {x,y,z}, tool }]` — records the current TCP position and active tool; replaces an earlier teach of the same dot. |
+| `CalibrationUnteachDot` | `sessionId`, `dotIndex` | `taught: […]` |
+| `CalibrationSolve` | `sessionId`, optional `save` (true) | `calibration, taughtRmsMm, taughtMaxMm, pitchScaleEstimate, mirrored, residuals: [{ dotIndex, i, j, errorMm }], warnings, saved` |
+| `CalibrationPredict` | `u`, `v`, and `sessionId` (its solved result, saved or not) or `cameraId` (the saved calibration) | `robot: {x, y, z}`, `source: "session"\|"saved"` |
+| `CalibrationDiscard` | `sessionId` | — |
+
+A failure answers `{ "ok": false, "error": "<code>", "message": "…" }`:
+
+| Code | When |
+|---|---|
+| `invalidParams` | A required parameter is missing or out of range (`dotPitchMm ≤ 0`, `minDotAreaPx ≥ maxDotAreaPx`, no `u`/`v`, …). |
+| `unknownCamera` | No camera with that id. |
+| `cameraNotConnected` | The camera exists but has no frame. |
+| `noDotsFound` | No blob passed the area/circularity filter. |
+| `gridNotFound` | Fewer than 4 dots fit a lattice, or the fit RMS exceeds 2 % of the dot spacing. |
+| `unknownSession` | Unknown or expired `sessionId`. |
+| `unknownDot` | `dotIndex` is not in the detected grid. |
+| `notEnoughTaught` | Solve with fewer than 2 taught dots (or before any grid was detected). |
+| `taughtCollinear` | Solve with 3+ taught dots that all lie on one grid line. With exactly 2 dots the solve succeeds with a warning, and the handedness of a camera looking down at the sheet is assumed. |
+| `notCalibrated` | Predict against a camera with no saved calibration, or a session not yet solved. |
+
+When `CalibrationStart` fails with `noDotsFound` or `gridNotFound` the session is
+still created: the error also carries `sessionId` and `imageUrl` (showing the raw
+frame) so the wizard can show what the camera saw and call `CalibrationRedetect`
+with other detector parameters.
+
+`GET /calibration/{sessionId}/image` returns the session's annotated JPEG: every
+dot circled and numbered, taught dots highlighted, and `i`/`j` arrows at dot
+(0, 0). 404 for an unknown or expired session, 204 when it has no image.
+
+`GetCameras` states carry `calibrated` (true/false) and `calibratedUnixMs` (null
+when not calibrated). Programs read `$camera.<id>.calibrated` (1/0).
 
 ---
 
