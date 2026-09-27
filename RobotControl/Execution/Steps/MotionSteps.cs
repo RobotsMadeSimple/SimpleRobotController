@@ -292,6 +292,11 @@ namespace Controller.RobotControl.Execution
                 double pitch = ev.EvalField(step, "threadPitch",     step.ThreadPitch     ?? 1);
                 bool   peck  = step.ThreadPeck ?? false;
                 double peckD = ev.OptionalField(step, "threadPeckDepth", step.ThreadPeckDepth) ?? Math.Abs(dist);
+                // Retract per peck: null = full retract back to the start each peck; a value
+                // is a fixed partial retract (chip-break) that may sit above the start.
+                double? peckUp = ev.OptionalField(step, "threadPeckRetract", step.ThreadPeckRetract);
+                // How far past the start to finish on the way out (exit higher than we began).
+                double exitH = Math.Abs(ev.OptionalField(step, "threadExitHeight", step.ThreadExitHeight) ?? 0);
                 bool   rev   = step.ThreadReverseOut ?? true;
 
                 if (Math.Abs(pitch) < 0.0001) pitch = 1.0;
@@ -315,27 +320,34 @@ namespace Controller.RobotControl.Execution
                 var queue = new Queue<RobotCommand>();
                 state.Queue = queue;
 
+                // A move to a signed depth along the thread axis (measured from the start),
+                // with RZ following the pitch so the helix stays consistent.
+                void QueueToDepth(double depth) =>
+                    queue.Enqueue(Move(sign * depth, (sign * depth / pitch) * 360.0));
+
                 if (peck && peckD > 0)
                 {
-                    // 2x down, 1x up: advance 2*peckD each cycle, retract 1*peckD between cycles
-                    double accumulated = 0;
-                    while (accumulated < absDist - 0.0001)
+                    // Each peck advances peckD deeper, then retracts. With a retract distance
+                    // set, we pull back that far (chip-break — can sit above the start); with
+                    // none, we fully retract to the start before the next, deeper plunge.
+                    double depth = 0;
+                    while (depth < absDist - 0.0001)
                     {
-                        double nextDepth = Math.Min(accumulated + peckD * 2, absDist);
-                        queue.Enqueue(Move(sign * nextDepth, (sign * nextDepth / pitch) * 360.0));
-                        if (nextDepth >= absDist - 0.0001) break;
-                        double retractTo = Math.Max(nextDepth - peckD, 0);
-                        queue.Enqueue(Move(sign * retractTo, (sign * retractTo / pitch) * 360.0));
-                        accumulated = retractTo;
+                        depth = Math.Min(depth + peckD, absDist);
+                        QueueToDepth(depth);                       // plunge to the new depth
+                        if (depth >= absDist - 0.0001) break;      // full depth reached
+                        QueueToDepth(peckUp.HasValue ? depth - peckUp.Value : 0); // retract
                     }
                 }
                 else
                 {
-                    queue.Enqueue(Move(dist, (dist / pitch) * 360.0));
+                    QueueToDepth(absDist);
                 }
 
+                // Reverse out to the start, or past it by exitH so the move can end higher
+                // than it began. exitH measured opposite the thread direction (i.e. "up").
                 if (rev)
-                    queue.Enqueue(Move(0, 0)); // reverse back to start
+                    QueueToDepth(-exitH);
 
                 state.SubStep = 1;
                 ctx.Progress.StepStarted(step);

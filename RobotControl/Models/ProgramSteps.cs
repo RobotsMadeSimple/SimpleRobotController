@@ -374,6 +374,12 @@ public class ProgramStep
     [JsonPropertyName("threadPitch")]      public double? ThreadPitch      { get; set; }
     [JsonPropertyName("threadPeck")]       public bool?   ThreadPeck       { get; set; }
     [JsonPropertyName("threadPeckDepth")]  public double? ThreadPeckDepth  { get; set; }
+    /// <summary>How far to retract (toward the start) after each peck. Null = full retract
+    /// to the start each peck; a value gives a fixed partial retract (chip-break style).</summary>
+    [JsonPropertyName("threadPeckRetract")] public double? ThreadPeckRetract { get; set; }
+    /// <summary>Extra distance past the start to end at on the way out, so the move can exit
+    /// higher than it began (null/0 = exit at the start). Applied to the reverse-out move.</summary>
+    [JsonPropertyName("threadExitHeight")]  public double? ThreadExitHeight  { get; set; }
     [JsonPropertyName("threadReverseOut")] public bool?   ThreadReverseOut { get; set; }
 
     // CncProgram — toolpath spec built by the CNC builder. Steps are generated
