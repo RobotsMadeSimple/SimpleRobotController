@@ -297,6 +297,7 @@ namespace Controller.RobotControl.Execution
             HttpSteps.Register(r);
             BackgroundSteps.Register(r);
             CncSteps.Register(r);
+            GcodeSteps.Register(r);
             // Steps the controller does not recognise (from a newer app) are skipped.
             r[StepType.Unknown] = NoOpStep.Instance;
             return r;

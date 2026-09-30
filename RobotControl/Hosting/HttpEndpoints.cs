@@ -12,12 +12,14 @@ namespace Controller.RobotControl.Hosting
     /// </summary>
     internal static class HttpEndpoints
     {
-        public static void MapRobotEndpoints(this WebApplication app, RobotController robot, string vectorFileDir)
+        public static void MapRobotEndpoints(this WebApplication app, RobotController robot, string vectorFileDir, string gcodeFileDir)
         {
             MapWebhook(app, robot);
             MapCamera(app, robot);
             MapVision(app, robot);
             MapVectorFiles(app, vectorFileDir);
+            MapGcodeFiles(app, gcodeFileDir);
+            MapGcodeStream(app, robot);
         }
 
         // ── Webhook ───────────────────────────────────────────────────────────
@@ -163,6 +165,129 @@ namespace Controller.RobotControl.Hosting
                 File.Delete(path);
                 context.Response.StatusCode = 200;
             });
+        }
+
+        // ── G-code files ──────────────────────────────────────────────────────
+        // Same shape as /dxf: text upload/list/get/delete, stored per-robot in the data dir.
+        private static readonly string[] GcodeExts = { ".nc", ".gcode", ".tap", ".ngc", ".txt" };
+
+        private static void MapGcodeFiles(WebApplication app, string dir)
+        {
+            Directory.CreateDirectory(dir);
+
+            app.MapPost("/gcode", async (HttpContext context) =>
+            {
+                var name = context.Request.Query["name"].ToString();
+                bool validExt = GcodeExts.Any(e => name.EndsWith(e, StringComparison.OrdinalIgnoreCase));
+                if (string.IsNullOrWhiteSpace(name) || !validExt)
+                {
+                    context.Response.StatusCode = 400;
+                    await context.Response.WriteAsync("Missing or invalid ?name= (.nc .gcode .tap .ngc .txt).");
+                    return;
+                }
+                name = Path.GetFileName(name);
+                using (var fs = File.Create(Path.Combine(dir, name)))
+                    await context.Request.Body.CopyToAsync(fs);
+                context.Response.StatusCode = 200;
+                await context.Response.WriteAsync(name);
+            });
+
+            app.MapGet("/gcode", (HttpContext context) =>
+            {
+                var files = GcodeExts
+                    .SelectMany(e => Directory.GetFiles(dir, "*" + e))
+                    .Select(Path.GetFileName)
+                    .OrderBy(f => f)
+                    .ToArray();
+                AllowAnyOrigin(context);
+                return Results.Json(files);
+            });
+
+            app.MapGet("/gcode/{name}", async (string name, HttpContext context) =>
+            {
+                var path = Path.Combine(dir, Path.GetFileName(name));
+                if (!File.Exists(path)) { context.Response.StatusCode = 404; return; }
+                context.Response.ContentType = "text/plain";
+                AllowAnyOrigin(context);
+                context.Response.Headers["Cache-Control"] = "no-cache";
+                await context.Response.SendFileAsync(path);
+            });
+
+            app.MapDelete("/gcode/{name}", (string name, HttpContext context) =>
+            {
+                var path = Path.Combine(dir, Path.GetFileName(name));
+                if (!File.Exists(path)) { context.Response.StatusCode = 404; return; }
+                File.Delete(path);
+                context.Response.StatusCode = 200;
+            });
+        }
+
+        // ── G-code streaming (WebSocket) ──────────────────────────────────────
+        // Text frames in (one or more newline-separated lines), a reply line per G-code
+        // line ("ok" / "error:…"). Single-char realtime frames: '?' status, '!' / 0x18 stop.
+        private static void MapGcodeStream(WebApplication app, RobotController robot)
+        {
+            app.Map("/gcode/stream", async context =>
+            {
+                if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 426; return; }
+                using var ws = await context.WebSockets.AcceptWebSocketAsync();
+
+                if (!Gcode.GcodeStreamSession.TryCreate(robot, out var session, out var err))
+                {
+                    await SendWsText(ws, "error:" + err);
+                    try { await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, err, CancellationToken.None); } catch { }
+                    return;
+                }
+
+                var ct = context.RequestAborted;
+                using (var s = session!)
+                {
+                    await SendWsText(ws, Gcode.GcodeStreamSession.Banner);
+                    var buffer = new byte[4096];
+                    var pending = new System.Text.StringBuilder();
+                    try
+                    {
+                        while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
+                        {
+                            var result = await ws.ReceiveAsync(buffer, ct);
+                            if (result.MessageType == WebSocketMessageType.Close) break;
+                            var chunk = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+                            // Whole-frame realtime controls.
+                            if (chunk.Length == 1)
+                            {
+                                if (chunk[0] == '?') { await SendWsText(ws, s.Status()); continue; }
+                                if (chunk[0] == '!' || chunk[0] == '\x18') { s.Stop(); await SendWsText(ws, "ok"); continue; }
+                            }
+
+                            pending.Append(chunk);
+                            int nl;
+                            while ((nl = IndexOfNewline(pending)) >= 0)
+                            {
+                                var line = pending.ToString(0, nl);
+                                pending.Remove(0, nl + 1);
+                                await SendWsText(ws, s.Feed(line, ct));
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (WebSocketException) { }
+                }
+            });
+        }
+
+        private static int IndexOfNewline(System.Text.StringBuilder sb)
+        {
+            for (int i = 0; i < sb.Length; i++) if (sb[i] == '\n') return i;
+            return -1;
+        }
+
+        private static async Task SendWsText(WebSocket ws, string text)
+        {
+            if (ws.State != WebSocketState.Open) return;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\n");
+            try { await ws.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None); }
+            catch { /* client went away */ }
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────

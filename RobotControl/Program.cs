@@ -57,7 +57,18 @@ class Program
         wsServer.SetShutdownToken(lifetime.ApplicationStopping);
         wsServer.Map(app);
 
-        app.MapRobotEndpoints(robot, vectorFileDir: "dxf");
+        app.MapRobotEndpoints(robot, vectorFileDir: "dxf",
+            gcodeFileDir: Controller.RobotControl.Execution.GcodeSteps.FileDir);
+
+        // ── G-code raw-TCP stream ─────────────────────────────────────────────
+        // GRBL-style line protocol for standard senders. WebSocket streaming lives on
+        // /gcode/stream (mapped above). Toggle/port in robot-config.json.
+        if (config.GcodeStreamTcpEnabled && config.GcodeStreamTcpPort > 0)
+        {
+            var gcodeTcp = new Controller.RobotControl.Hosting.GcodeTcpServer(robot, config.GcodeStreamTcpPort);
+            gcodeTcp.Start();
+            lifetime.ApplicationStopping.Register(gcodeTcp.Stop);
+        }
 
         // ── mDNS discovery ────────────────────────────────────────────────────
         // Optional: set "enableMdns": false in robot-config.json to run without

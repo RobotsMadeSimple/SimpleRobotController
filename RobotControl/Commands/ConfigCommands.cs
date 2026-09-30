@@ -72,6 +72,13 @@ internal sealed class ConfigCommands
             cncXHomingDirection       = c.CncXHomingDirection,
             cncYHomingDirection       = c.CncYHomingDirection,
             cncZHomingDirection       = c.CncZHomingDirection,
+            gcodeSpindleOutputType    = c.GcodeSpindleOutputType,
+            gcodeSpindleOutputPin     = c.GcodeSpindleOutputPin,
+            gcodeRapidSpeed           = c.GcodeRapidSpeed,
+            gcodeDefaultFeed          = c.GcodeDefaultFeed,
+            gcodeArcToleranceMm       = c.GcodeArcToleranceMm,
+            gcodeStreamTcpPort        = c.GcodeStreamTcpPort,
+            gcodeStreamTcpEnabled     = c.GcodeStreamTcpEnabled,
             jointLimitsEnabled        = c.JointLimitsEnabled,
             joint1Min                 = c.Joint1Min,
             joint1Max                 = c.Joint1Max,
@@ -153,6 +160,13 @@ internal sealed class ConfigCommands
         if (p.CncXHomingDirection.HasValue)       c.CncXHomingDirection       = p.CncXHomingDirection.Value;
         if (p.CncYHomingDirection.HasValue)       c.CncYHomingDirection       = p.CncYHomingDirection.Value;
         if (p.CncZHomingDirection.HasValue)       c.CncZHomingDirection       = p.CncZHomingDirection.Value;
+        if (p.GcodeSpindleOutputType != null)     c.GcodeSpindleOutputType    = p.GcodeSpindleOutputType;
+        if (p.GcodeSpindleOutputPin.HasValue)     c.GcodeSpindleOutputPin     = p.GcodeSpindleOutputPin.Value;
+        if (p.GcodeRapidSpeed.HasValue)           c.GcodeRapidSpeed           = p.GcodeRapidSpeed.Value;
+        if (p.GcodeDefaultFeed.HasValue)          c.GcodeDefaultFeed          = p.GcodeDefaultFeed.Value;
+        if (p.GcodeArcToleranceMm.HasValue)       c.GcodeArcToleranceMm       = p.GcodeArcToleranceMm.Value;
+        if (p.GcodeStreamTcpPort.HasValue)        c.GcodeStreamTcpPort        = p.GcodeStreamTcpPort.Value;
+        if (p.GcodeStreamTcpEnabled.HasValue)     c.GcodeStreamTcpEnabled     = p.GcodeStreamTcpEnabled.Value;
         if (p.JointLimitsEnabled.HasValue)        c.JointLimitsEnabled        = p.JointLimitsEnabled.Value;
         // Joint-limit bounds: a property present in the patch is
         // authoritative, INCLUDING an explicit null which clears the

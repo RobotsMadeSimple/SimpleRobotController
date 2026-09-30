@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, GcodeProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -389,6 +389,11 @@ public class ProgramStep
     [JsonPropertyName("cncSafeZ")]      public double?           CncSafeZ      { get; set; }
     [JsonPropertyName("cncProgramSteps")] public List<ProgramStep>? CncProgramSteps { get; set; }
     [JsonPropertyName("cncSpec")]       public CncSpec?          CncSpec       { get; set; }
+
+    // GcodeProgram — runs G-code expanded to moves at runtime. GcodeFile names a stored file
+    // (uploaded via /gcode); GcodeText is inline G-code. GcodeFile wins when both are set.
+    [JsonPropertyName("gcodeFile")] public string? GcodeFile { get; set; }
+    [JsonPropertyName("gcodeText")] public string? GcodeText { get; set; }
 
     // JsonExchange — POST a JSON body to a URL; optionally load numeric values from the response
     [JsonPropertyName("jsonUrl")]             public string?                   JsonUrl             { get; set; }

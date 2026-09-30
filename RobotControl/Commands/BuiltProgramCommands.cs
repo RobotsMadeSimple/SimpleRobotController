@@ -87,6 +87,7 @@ internal sealed class BuiltProgramCommands
     private void ExecuteBuiltProgram(CommandMessage msg)
     {
         var p    = CommandJson.LoadParams<BuiltProgramNameParams>(msg);
+        if (_robot.GcodeStreamActive) return; // a live G-code stream owns the motion queue
         var prog = _robot.builtProgramRepo.Get(p.Name);
         if (prog != null)
         {

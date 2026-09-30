@@ -59,6 +59,13 @@ public class SetRobotConfigParams
     [JsonPropertyName("cncYHomePosition")]          public double? CncYHomePosition          { get; set; }
     [JsonPropertyName("cncZHomePosition")]          public double? CncZHomePosition          { get; set; }
     [JsonPropertyName("cncRzHomePosition")]         public double? CncRzHomePosition         { get; set; }
+    [JsonPropertyName("gcodeSpindleOutputType")]    public string? GcodeSpindleOutputType    { get; set; }
+    [JsonPropertyName("gcodeSpindleOutputPin")]     public int?    GcodeSpindleOutputPin     { get; set; }
+    [JsonPropertyName("gcodeRapidSpeed")]           public double? GcodeRapidSpeed           { get; set; }
+    [JsonPropertyName("gcodeDefaultFeed")]          public double? GcodeDefaultFeed          { get; set; }
+    [JsonPropertyName("gcodeArcToleranceMm")]       public double? GcodeArcToleranceMm       { get; set; }
+    [JsonPropertyName("gcodeStreamTcpPort")]        public int?    GcodeStreamTcpPort        { get; set; }
+    [JsonPropertyName("gcodeStreamTcpEnabled")]     public bool?   GcodeStreamTcpEnabled     { get; set; }
     [JsonPropertyName("cncXHomingDirection")]       public int?    CncXHomingDirection       { get; set; }
     [JsonPropertyName("cncYHomingDirection")]       public int?    CncYHomingDirection       { get; set; }
     [JsonPropertyName("cncZHomingDirection")]       public int?    CncZHomingDirection       { get; set; }

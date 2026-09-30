@@ -207,6 +207,24 @@ namespace Controller.RobotControl
         [JsonPropertyName("cncZHomingDirection")]
         public int CncZHomingDirection { get; set; } = 1;
 
+        // ── G-code ────────────────────────────────────────────────────────────────
+        // Settings for running G-code (files, the GcodeProgram step, and the TCP/WS streams).
+
+        /// <summary>Where M3/M4/M5 spindle/laser on-off is routed: "none", "stb", or "relay".</summary>
+        [JsonPropertyName("gcodeSpindleOutputType")] public string GcodeSpindleOutputType { get; set; } = "none";
+        /// <summary>Output pin/number for the spindle/laser (1-based).</summary>
+        [JsonPropertyName("gcodeSpindleOutputPin")]  public int    GcodeSpindleOutputPin  { get; set; } = 1;
+        /// <summary>Speed used for G0 rapids (mm/s). G1 feeds come from the F word.</summary>
+        [JsonPropertyName("gcodeRapidSpeed")]        public double GcodeRapidSpeed        { get; set; } = 100.0;
+        /// <summary>Feed used when a G1 has no F word yet (mm/s).</summary>
+        [JsonPropertyName("gcodeDefaultFeed")]       public double GcodeDefaultFeed       { get; set; } = 50.0;
+        /// <summary>Max chord error (mm) when flattening G2/G3 arcs into segments.</summary>
+        [JsonPropertyName("gcodeArcToleranceMm")]    public double GcodeArcToleranceMm    { get; set; } = 0.1;
+        /// <summary>TCP port for the GRBL-style G-code stream. Requires a restart to change.</summary>
+        [JsonPropertyName("gcodeStreamTcpPort")]     public int    GcodeStreamTcpPort     { get; set; } = 8500;
+        /// <summary>Enable the raw-TCP G-code stream listener. Requires a restart to change.</summary>
+        [JsonPropertyName("gcodeStreamTcpEnabled")]  public bool   GcodeStreamTcpEnabled  { get; set; } = true;
+
         // ── Joint soft limits ───────────────────────────────────────────────────
         // Applied to the joint-space target vector: joint1 = X component
         // (ASTRO J1 base rotation °, CNC X mm), joint2 = Y (ASTRO radial reach mm,
@@ -229,6 +247,19 @@ namespace Controller.RobotControl
         [JsonPropertyName("joint3Max")] public double? Joint3Max { get; set; }
         [JsonPropertyName("joint4Min")] public double? Joint4Min { get; set; }
         [JsonPropertyName("joint4Max")] public double? Joint4Max { get; set; }
+
+        // ── G-code helpers ──────────────────────────────────────────────────────
+
+        /// <summary>The interpreter tuning (rapid/feed/arc tolerance) from this config.</summary>
+        public Gcode.GcodeOptions GcodeOptions() => new()
+        {
+            RapidSpeedMmPerSec  = GcodeRapidSpeed,
+            DefaultFeedMmPerSec = GcodeDefaultFeed,
+            ArcToleranceMm      = GcodeArcToleranceMm,
+        };
+
+        /// <summary>Where spindle/laser on-off is routed (type + pin) from this config.</summary>
+        public Gcode.SpindleOutput GcodeSpindle() => new(GcodeSpindleOutputType, GcodeSpindleOutputPin);
     }
 
     public static class RobotConfigService

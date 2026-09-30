@@ -860,6 +860,14 @@ namespace Controller.RobotControl
         internal RobotIdentity     Identity           => _identity;
         internal RobotConfig       Config             => _config;
         internal IRobotKinematics  Kinematics         => _kinematics;
+
+        // A live G-code stream owns the motion queue: program runs refuse while it is set,
+        // and it refuses to start while a program runs. Set by GcodeStreamSession owners.
+        private volatile bool _gcodeStreamActive;
+        internal bool GcodeStreamActive { get => _gcodeStreamActive; set => _gcodeStreamActive = value; }
+
+        /// <summary>True while the foreground program executor is running a program.</summary>
+        internal bool ProgramRunning => programExecutor?.IsRunning == true;
         internal Vector6           LivePosition       => CurrentPosition;
         internal Vector6           LiveTargetPosition => TargetPosition;
         internal bool              Homed              => homed;
