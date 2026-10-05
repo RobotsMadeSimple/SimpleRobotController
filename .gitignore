@@ -445,3 +445,4 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 examples/dotnet/DemoScale/dist/
+plugins-sdk/python/build/
