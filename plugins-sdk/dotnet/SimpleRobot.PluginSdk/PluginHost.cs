@@ -48,6 +48,7 @@ public sealed class PluginHost
             PluginId = E("SRC_PLUGIN_ID") ?? "",
             PluginDir = E("SRC_PLUGIN_DIR"),
             DataDir = E("SRC_DATA_DIR"),
+            ParentPid = int.TryParse(E("SRC_PARENT_PID"), out var pp) && pp > 0 ? pp : null,
         };
     }
 
@@ -201,12 +202,62 @@ public sealed class PluginHost
 
     /// <summary>
     /// Connects, sends <c>plugin.ready</c>, serves requests concurrently and reconnects with exponential backoff
-    /// (1 s → 30 s) when the connection is lost. Returns after replying to <c>shutdown</c> (or when <paramref name="cancellationToken"/> is cancelled).
+    /// (1 s → 30 s) when the connection is lost.
+    /// When <see cref="PluginHostOptions.ParentPid"/> (default <c>SRC_PARENT_PID</c>) is set and that process disappears, returns normally. Returns after replying to <c>shutdown</c> (or when <paramref name="cancellationToken"/> is cancelled).
     /// Throws <see cref="PluginAuthException"/> when the controller rejects the token and <see cref="PluginReplacedException"/> when another connection took over.
     /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         _running = true;
+        if (!Options.WatchParent || Options.ParentPid is not int parentPid || parentPid <= 0)
+        {
+            await RunLoopAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // Watchdog: when the controller process is gone (e.g. force-killed) stop reconnecting and return.
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var watchdog = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    if (!ParentAlive(parentPid))
+                    {
+                        Console.Error.WriteLine($"[SimpleRobot.PluginSdk] parent process {parentPid} exited; shutting down");
+                        cts.Cancel();
+                        return;
+                    }
+                    await Task.Delay(ParentPollInterval, cts.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+        try { await RunLoopAsync(cts.Token).ConfigureAwait(false); }
+        finally
+        {
+            cts.Cancel();
+            await watchdog.ConfigureAwait(false);
+        }
+    }
+
+    private static readonly TimeSpan ParentPollInterval = TimeSpan.FromSeconds(2);
+
+    private static bool ParentAlive(int pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch (ArgumentException) { return false; }      // no such process
+        catch (InvalidOperationException) { return false; }
+        catch { return true; }                            // cannot tell: assume alive
+    }
+
+    private async Task RunLoopAsync(CancellationToken cancellationToken)
+    {
         var delay = Options.MinReconnectDelay;
         while (!cancellationToken.IsCancellationRequested)
         {

@@ -69,6 +69,11 @@ reconnects with exponential backoff (1 s up to 30 s) when the socket drops, and 
 replied to `shutdown`. It throws `PluginAuthException` if the controller rejects the token (close
 code 4401) and `PluginReplacedException` if another connection took over (4409).
 
+Orphan protection: the controller sets `SRC_PARENT_PID`. The host checks every 2 s that this process
+still exists and, once it is gone (the controller was force-killed), logs to stderr and `RunAsync`
+returns normally (so the example's `Main` exits 0). Set `PluginHostOptions.WatchParent = false` to
+disable, or `ParentPid` to override the pid.
+
 Notes:
 
 - `On(...)` events are subscribed automatically at ready (globs such as `program.*` work). Use
