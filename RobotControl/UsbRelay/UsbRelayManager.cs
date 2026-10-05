@@ -151,11 +151,12 @@ namespace Controller.RobotControl.UsbRelay
                     }
                 }
 
-                // Poll ~1s while connected; back off to 3s while searching.
+                // Poll ~1s while connected; back off to 3s while searching. Waiting on the
+                // cancellation handle directly (instead of Task.Delay(...).Wait()) avoids
+                // blocking this thread inside a wrapped AggregateException/OCE on Stop().
                 bool connected;
                 lock (_lock) connected = _device != null;
-                try { Task.Delay(connected ? 1000 : 3000, _cts.Token).Wait(); }
-                catch (OperationCanceledException) { break; }
+                if (_cts.Token.WaitHandle.WaitOne(connected ? 1000 : 3000)) break;
             }
         }
     }

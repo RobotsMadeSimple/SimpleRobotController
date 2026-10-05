@@ -427,3 +427,14 @@ RobotControl/builtPrograms.json.migrated
 RobotControl/builtPrograms/
 RobotControl/identity.json
 RobotControl/programImages/*
+# Per-machine robot configuration and local runtime data
+robot-config.json
+local-data/
+
+# Claude Code agent worktrees
+.claude/worktrees/
+
+# Restart helper artefacts written next to the data files
+restart-controller.cmd
+restart-controller.sh
+restart-controller.log

@@ -14,6 +14,20 @@ namespace Controller.RobotControl
     /// in normal operation. Turn it on for a debugging session by setting the
     /// environment variable RMS_DIAG=1 before launching, or flip Diag.Enabled at
     /// runtime.
+    ///
+    /// Thread ownership: this class has no locks — it relies on each mutable field
+    /// being written and read from exactly one thread. Two threads touch it:
+    ///   - The motion/control-loop thread (RobotController.ControlLoop), which owns
+    ///     <see cref="LoopSw"/> and the heartbeat fields (_hbMaxTickMs, _hbTs,
+    ///     _hbGc0, _hbGc2, _hbMotion) via <see cref="Tick"/> and <see cref="Log"/>.
+    ///   - The program-executor thread (ProgramExecutor), which owns the step-trace
+    ///     fields (_stepStartTs, _lastIdx, _lastType, _auxStartTs) via
+    ///     <see cref="StepStart"/>, <see cref="StepDone"/>, <see cref="StepExec"/>,
+    ///     <see cref="AuxDispatch"/> and <see cref="AuxWaitDone"/>.
+    /// Neither thread reads the other's fields, so no synchronization is needed;
+    /// <see cref="Enabled"/> is the one field genuinely shared (read on both
+    /// threads, written rarely from wherever a debugging session flips it), and is
+    /// `volatile` for that reason. Do not add a field here that both threads write.
     /// </summary>
     internal static class Diag
     {
@@ -29,9 +43,11 @@ namespace Controller.RobotControl
         // longer than this.
         public const double SlowStepMs = 40.0;
 
-        // Single reusable stopwatch for motion-loop phase timing (one thread only).
+        // Single reusable stopwatch for motion-loop phase timing. Owned by the
+        // motion/control-loop thread only.
         public static readonly Stopwatch LoopSw = new();
 
+        // Step-trace fields — owned by the program-executor thread only.
         private static long _stepStartTs;
         private static long _auxStartTs;
         private static int    _lastIdx = int.MinValue;
@@ -53,13 +69,12 @@ namespace Controller.RobotControl
         // ── Continuous heartbeat ──────────────────────────────────────────────
         // Tracks the worst tick and GC cadence and emits one line every ~5s, so
         // steady-state smoothness and gen-2 GC frequency are visible even when
-        // nothing crosses the stall threshold.
+        // nothing crosses the stall threshold. Owned by the motion/control-loop
+        // thread only (same thread that calls Tick()).
         private static double _hbMaxTickMs;
         private static long   _hbTs;
         private static int    _hbGc0, _hbGc2;
         private static string _hbMotion = "";
-
-        public static void Tick(double tickMs) => Tick(tickMs, "");
 
         public static void Tick(double tickMs, string motionState)
         {

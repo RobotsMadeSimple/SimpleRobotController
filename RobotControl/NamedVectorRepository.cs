@@ -5,6 +5,8 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 
+namespace Controller.RobotControl.Persistence;
+
 /// <summary>
 /// Generic base repository for any named Vector6-derived entity (Point, Tool, …).
 /// Handles JSON persistence, full CRUD, and a rolling 10-entry history per item.
@@ -83,9 +85,10 @@ public abstract class NamedVectorRepository<TItem, TEntry>
                 .Where(i => !string.IsNullOrWhiteSpace(i.Name))
                 .ToDictionary(i => i.Name!, i => i);
         }
-        catch
+        catch (Exception ex)
         {
-            // File exists but is corrupt or invalid — start fresh
+            // File exists but is corrupt or invalid — keep it aside for recovery, start fresh
+            JsonFiles.QuarantineCorrupt(_itemsFile, ex, GetType().Name);
             _items = new();
             SaveItems();
         }
@@ -95,7 +98,7 @@ public abstract class NamedVectorRepository<TItem, TEntry>
     {
         LastUpdatedUnixMs = NowUnixMs();
         ItemsJson         = JsonSerializer.Serialize(_items.Values.ToList(), _jsonOptions);
-        File.WriteAllText(_itemsFile, ItemsJson);
+        AtomicFile.WriteAllText(_itemsFile, ItemsJson);
     }
 
     private void LoadHistory()
@@ -107,16 +110,17 @@ public abstract class NamedVectorRepository<TItem, TEntry>
             var json = File.ReadAllText(_historyFile);
             _history = JsonSerializer.Deserialize<Dictionary<string, List<TEntry>>>(json, _jsonOptions) ?? new();
         }
-        catch
+        catch (Exception ex)
         {
-            // File exists but is corrupt or invalid — start fresh
+            // File exists but is corrupt or invalid — keep it aside for recovery, start fresh
+            JsonFiles.QuarantineCorrupt(_historyFile, ex, GetType().Name);
             _history = new();
             SaveHistory();
         }
     }
 
     private void SaveHistory()
-        => File.WriteAllText(_historyFile, JsonSerializer.Serialize(_history, _jsonOptions));
+        => AtomicFile.WriteAllText(_historyFile, JsonSerializer.Serialize(_history, _jsonOptions));
 
     // ── CRUD ─────────────────────────────────────────────────────────────────
 

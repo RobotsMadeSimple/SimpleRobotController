@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using OpenCvSharp;
 
 namespace Controller.RobotControl.Camera
@@ -14,17 +12,29 @@ namespace Controller.RobotControl.Camera
         private readonly string              _configPath;
         private CameraManagerConfig          _config;
         private readonly List<CameraDevice>  _devices = new();
-
-        private static readonly JsonSerializerOptions _json = new()
-        {
-            PropertyNameCaseInsensitive = true,
-            WriteIndented               = true,
-        };
+        // Guards _devices: Add/Remove/Update run from the API/config thread while GetState()
+        // and lookups can be called concurrently from status-broadcast threads.
+        private readonly object              _devicesLock = new();
 
         public CameraManager(string configPath)
         {
             _configPath = configPath;
             _config     = Load();
+
+            // Network (RTSP/HTTP) cameras need OpenCV's FFmpeg backend (docs/network-cameras.md).
+            bool ffmpeg = NetworkCameraSource.FfmpegAvailable;
+            Console.WriteLine($"[Camera] Video backends: FFmpeg={(ffmpeg ? "yes" : "no")}");
+            if (!ffmpeg)
+            {
+                foreach (var c in _config.Cameras.Where(c => c.Enabled
+                             && NetworkCameraSource.NormalizeSourceType(c.SourceType) == NetworkCameraSource.SourceNetwork))
+                    Console.WriteLine($"[Camera] ERROR: network camera {c.Id} cannot be opened: this OpenCV build has no FFmpeg backend; it stays disconnected");
+                // The in-process Sofia decoder goes through the same backend (decoder "ffmpeg" does not).
+                foreach (var c in _config.Cameras.Where(c => c.Enabled
+                             && NetworkCameraSource.NormalizeSourceType(c.SourceType) == NetworkCameraSource.SourceSofia
+                             && Sofia.SofiaCameraSource.NormalizeDecoder(c.Decoder) == Sofia.SofiaDecoder.DecoderOpenCv))
+                    Console.WriteLine($"[Camera] ERROR: Sofia camera {c.Id} uses the in-process decoder, which needs OpenCV's FFmpeg backend; set decoder \"ffmpeg\" or it stays disconnected");
+            }
         }
 
         // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -35,7 +45,7 @@ namespace Controller.RobotControl.Camera
             {
                 var device = new CameraDevice(cfg);
                 WireDevice(device);
-                _devices.Add(device);
+                lock (_devicesLock) _devices.Add(device);
                 device.Start();
             }
         }
@@ -56,21 +66,29 @@ namespace Controller.RobotControl.Camera
 
         public void Stop()
         {
-            foreach (var d in _devices) d.Stop();
+            List<CameraDevice> snapshot;
+            lock (_devicesLock) snapshot = new List<CameraDevice>(_devices);
+            foreach (var d in snapshot) d.Stop();
         }
 
         // ── Device lookup ─────────────────────────────────────────────────────
 
-        public CameraDevice? GetCamera(string id) =>
-            _devices.FirstOrDefault(d => d.Id == id);
+        public CameraDevice? GetCamera(string id)
+        {
+            lock (_devicesLock) return _devices.FirstOrDefault(d => d.Id == id);
+        }
 
-        public CameraDevice? GetFirstCamera() =>
-            _devices.FirstOrDefault();
+        public CameraDevice? GetFirstCamera()
+        {
+            lock (_devicesLock) return _devices.FirstOrDefault();
+        }
 
         // ── State query ───────────────────────────────────────────────────────
 
-        public List<CameraState> GetState() =>
-            _devices.Select(d => d.GetState()).ToList();
+        public List<CameraState> GetState()
+        {
+            lock (_devicesLock) return _devices.Select(d => d.GetState()).ToList();
+        }
 
         // ── Config mutations ──────────────────────────────────────────────────
 
@@ -84,18 +102,19 @@ namespace Controller.RobotControl.Camera
 
             var device = new CameraDevice(cfg);
             WireDevice(device);
-            _devices.Add(device);
+            lock (_devicesLock) _devices.Add(device);
             device.Start();
         }
 
         public void RemoveCamera(string id)
         {
-            var device = _devices.FirstOrDefault(d => d.Id == id);
-            if (device != null)
+            CameraDevice? device;
+            lock (_devicesLock)
             {
-                device.Stop();
-                _devices.Remove(device);
+                device = _devices.FirstOrDefault(d => d.Id == id);
+                if (device != null) _devices.Remove(device);
             }
+            device?.Stop();
 
             _config.Cameras.RemoveAll(c => c.Id == id);
             Save();
@@ -112,15 +131,25 @@ namespace Controller.RobotControl.Camera
                 _config.Cameras[idx] = patch;
             }
 
-            var device = _devices.FirstOrDefault(d => d.Id == id);
+            CameraDevice? device;
+            lock (_devicesLock) device = _devices.FirstOrDefault(d => d.Id == id);
             if (device != null)
             {
-                bool wasEnabled = device.Enabled;
+                // Only a change that affects capture needs the device reopened; a rename
+                // must not drop the stream (and on some drivers a reopen takes seconds).
+                bool needsRestart = device.DeviceIndex != patch.DeviceIndex
+                                 || device.Width       != patch.Width
+                                 || device.Height      != patch.Height
+                                 || device.TargetFps   != patch.TargetFps
+                                 || device.Enabled     != patch.Enabled
+                                 || device.SourceDiffers(patch);   // incl. the Sofia fields
                 device.ApplyConfig(patch);
 
-                // Restart capture thread to pick up resolution / device index changes
-                device.Stop();
-                device.Start();
+                if (needsRestart)
+                {
+                    device.Stop();
+                    device.Start();
+                }
             }
 
             Save();
@@ -138,7 +167,9 @@ namespace Controller.RobotControl.Camera
         /// </summary>
         public List<CameraResolution> ProbeResolutionsForIndex(int deviceIndex)
         {
-            var device = _devices.FirstOrDefault(d => d.DeviceIndex == deviceIndex);
+            CameraDevice? device;
+            // Network and Sofia cameras have no device index (theirs is ignored), so they never match.
+            lock (_devicesLock) device = _devices.FirstOrDefault(d => d.IsUsb && d.DeviceIndex == deviceIndex);
             List<CameraResolution> resolutions;
 
             if (device != null)
@@ -268,25 +299,13 @@ namespace Controller.RobotControl.Camera
 
         private CameraManagerConfig Load()
         {
-            try
-            {
-                if (File.Exists(_configPath))
-                {
-                    var text = File.ReadAllText(_configPath);
-                    return JsonSerializer.Deserialize<CameraManagerConfig>(text, _json)
-                           ?? new CameraManagerConfig();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[CameraManager] Failed to load config: {ex.Message}");
-            }
-            return new CameraManagerConfig();
+            return Persistence.JsonFiles.Load<CameraManagerConfig>(_configPath, logTag: "CameraManager")
+                   ?? new CameraManagerConfig();
         }
 
         private void Save()
         {
-            try { File.WriteAllText(_configPath, JsonSerializer.Serialize(_config, _json)); }
+            try { Persistence.JsonFiles.Save(_configPath, _config); }
             catch (Exception ex) { Console.WriteLine($"[CameraManager] Failed to save config: {ex.Message}"); }
         }
     }

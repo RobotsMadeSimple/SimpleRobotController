@@ -58,7 +58,7 @@ namespace Controller.RobotControl.Vision
                 program.LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _programs[program.Id] = program;
                 Directory.CreateDirectory(_dir);
-                File.WriteAllText(FilePath(program.Id), JsonSerializer.Serialize(program, _opts));
+                Persistence.AtomicFile.WriteAllText(FilePath(program.Id), JsonSerializer.Serialize(program, _opts));
                 LastUpdatedUnixMs = program.LastUpdatedUnixMs;
             }
         }

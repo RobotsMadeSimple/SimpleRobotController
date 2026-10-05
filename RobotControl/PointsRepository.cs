@@ -1,3 +1,4 @@
+namespace Controller.RobotControl.Persistence;
 /// <summary>
 /// Persists named robot positions (Point).
 /// All CRUD and history logic lives in NamedVectorRepository&lt;Point, PointHistoryEntry&gt;.

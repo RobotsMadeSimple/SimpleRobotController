@@ -1,7 +1,8 @@
+namespace Controller.RobotControl.Controllers.STB4100;
 public class StepperMotor
 {
     public int StepsPerRev { get; private set; }
-    public double GearRatio { get; }
+    public double GearRatio { get; private set; }
     public int Pin { get; }
     public double StartingAngle { get; }
 
@@ -27,6 +28,14 @@ public class StepperMotor
     public void Reconfigure(int stepsPerRev)
     {
         StepsPerRev = stepsPerRev;
+    }
+
+    /// <summary>Resets both the microstep resolution and the gear ratio (motor turns per
+    /// output turn). Guards against non-positive values so AngleToSteps stays finite.</summary>
+    public void Reconfigure(int stepsPerRev, double gearRatio)
+    {
+        StepsPerRev = stepsPerRev > 0 ? stepsPerRev : StepsPerRev;
+        GearRatio   = gearRatio   > 0 ? gearRatio   : GearRatio;
     }
 
     public double CurrentAngle => CurrentSteps * StepsToAngle;

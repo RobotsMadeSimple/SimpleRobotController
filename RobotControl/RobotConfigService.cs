@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Controller.RobotControl
@@ -69,6 +67,12 @@ namespace Controller.RobotControl
         [JsonPropertyName("m4Direction")]
         public int M4Direction { get; set; } = -1;
 
+        // ── Network discovery ─────────────────────────────────────────────────
+
+        /// <summary>Advertise this robot on the network via mDNS. Requires a restart to take effect.</summary>
+        [JsonPropertyName("enableMdns")]
+        public bool EnableMdns { get; set; } = true;
+
         // ── IO card visibility ────────────────────────────────────────────────
 
         /// <summary>Show Arduino Nano IO cards in the app.</summary>
@@ -100,6 +104,42 @@ namespace Controller.RobotControl
         /// <summary>Fast jog speed (mm/s or deg/s).</summary>
         [JsonPropertyName("jogFastSpeed")]
         public double JogFastSpeed { get; set; } = 300;
+
+        // ── ASTRO motor configuration ─────────────────────────────────────────────────
+        // Microstep resolution and gear ratio (motor turns per output turn) per motor.
+        // Defaults mirror the values STB4100 has always constructed its motors with, so an
+        // existing robot behaves identically until these are deliberately changed.
+        // M1 = J1 base rotation, M2/M3 = CoreXY pair, M4 = J4 EOAT rotation.
+
+        /// <summary>Steps per revolution for M1 (J1 base rotation).</summary>
+        [JsonPropertyName("astroStepsPerRevM1")] public int AstroStepsPerRevM1 { get; set; } = 1600;
+        /// <summary>Steps per revolution for M2 (CoreXY motor A).</summary>
+        [JsonPropertyName("astroStepsPerRevM2")] public int AstroStepsPerRevM2 { get; set; } = 1600;
+        /// <summary>Steps per revolution for M3 (CoreXY motor B).</summary>
+        [JsonPropertyName("astroStepsPerRevM3")] public int AstroStepsPerRevM3 { get; set; } = 1600;
+        /// <summary>Steps per revolution for M4 (J4 EOAT rotation).</summary>
+        [JsonPropertyName("astroStepsPerRevM4")] public int AstroStepsPerRevM4 { get; set; } = 400;
+
+        /// <summary>Gear ratio (motor turns per output turn) for M1.</summary>
+        [JsonPropertyName("astroGearRatioM1")] public double AstroGearRatioM1 { get; set; } = 1.0;
+        /// <summary>Gear ratio for M2.</summary>
+        [JsonPropertyName("astroGearRatioM2")] public double AstroGearRatioM2 { get; set; } = 1.0;
+        /// <summary>Gear ratio for M3.</summary>
+        [JsonPropertyName("astroGearRatioM3")] public double AstroGearRatioM3 { get; set; } = 1.0;
+        /// <summary>Gear ratio for M4.</summary>
+        [JsonPropertyName("astroGearRatioM4")] public double AstroGearRatioM4 { get; set; } = 1.0;
+
+        // ── ASTRO joint gearing ───────────────────────────────────────────────────────
+        // The drivetrain reduction the kinematics uses to turn joint motion into motor
+        // motion, separate from the per-motor gear ratio above. Defaults mirror the values
+        // ASTROKinematics has always constructed its joints with.
+
+        /// <summary>J1 base rotation gear ratio (motor turns per joint turn). Default 120t/30t.</summary>
+        [JsonPropertyName("astroJoint1GearRatio")] public double AstroJoint1GearRatio { get; set; } = 120.0 / 30.0;
+        /// <summary>J4 EOAT rotation gear ratio (motor turns per joint turn).</summary>
+        [JsonPropertyName("astroJoint4GearRatio")] public double AstroJoint4GearRatio { get; set; } = 10.0;
+        /// <summary>CoreXY belt pulley pitch diameter (mm). Linear travel per motor rev = π·PCD.</summary>
+        [JsonPropertyName("astroCoreXyPulleyPcdMm")] public double AstroCoreXyPulleyPcdMm { get; set; } = 19.099;
 
         // ── CNC4Axis motor configuration ──────────────────────────────────────────────
 
@@ -195,29 +235,13 @@ namespace Controller.RobotControl
     {
         private static readonly string ConfigFilePath = "robot-config.json";
 
-        private static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            WriteIndented = true
-        };
-
         public static RobotConfig Load()
         {
-            if (File.Exists(ConfigFilePath))
+            var config = Persistence.JsonFiles.Load<RobotConfig>(ConfigFilePath, logTag: "Config");
+            if (config != null)
             {
-                try
-                {
-                    string json = File.ReadAllText(ConfigFilePath);
-                    var config = JsonSerializer.Deserialize<RobotConfig>(json, JsonOptions);
-                    if (config != null)
-                    {
-                        Console.WriteLine("[Config] Loaded robot-config.json");
-                        return config;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Config] Failed to read robot-config.json: {ex.Message}. Using defaults.");
-                }
+                Console.WriteLine("[Config] Loaded robot-config.json");
+                return config;
             }
 
             var defaults = new RobotConfig();
@@ -230,8 +254,7 @@ namespace Controller.RobotControl
         {
             try
             {
-                string json = JsonSerializer.Serialize(config, JsonOptions);
-                File.WriteAllText(ConfigFilePath, json);
+                Persistence.JsonFiles.Save(ConfigFilePath, config);
             }
             catch (Exception ex)
             {

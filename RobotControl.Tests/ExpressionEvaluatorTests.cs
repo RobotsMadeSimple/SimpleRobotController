@@ -4,7 +4,7 @@ namespace RobotControl.Tests;
 
 public class ExpressionEvaluatorTests
 {
-    // Matches ProgramExecutor.MergedVars() - case-insensitive keys.
+    // Matches VariableScope.MergedVars() - case-insensitive keys.
     private static Dictionary<string, double> Vars(params (string k, double v)[] entries)
     {
         var d = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);

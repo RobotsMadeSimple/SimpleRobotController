@@ -7,8 +7,13 @@ on:
 
 jobs:
   build-test:
-    name: Build and test
-    runs-on: windows-latest
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is the deployment target (systemd service); Windows is the dev box.
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Checkout

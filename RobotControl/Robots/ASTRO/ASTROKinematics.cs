@@ -1,3 +1,4 @@
+using Controller.RobotControl.Joints;
 using System;
 using System.Numerics;
 using Controller.RobotControl.Robots;
@@ -18,18 +19,36 @@ namespace Controller.RobotControl.Robots.ASTRO
         );
 
         // ======= Interpolated Joints =======
-        public RotaryJoint InterpolatedJoint1 { get; } = new RotaryJoint(120.0 / 30.0);
-        public CoreXYStage InterpolatedJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
-        public RotaryJoint InterpolatedJoint4 { get; } = new RotaryJoint(10.0);
+        public RotaryJoint InterpolatedJoint1 { get; }
+        public CoreXYStage InterpolatedJoint2 { get; }
+        public RotaryJoint InterpolatedJoint4 { get; }
 
         // ======= Current Joints =======
-        public RotaryJoint CurrentJoint1 { get; } = new RotaryJoint(120.0 / 30.0);
-        public CoreXYStage CurrentJoint2 { get; } = new CoreXYStage(pulley30tPcd, pulley30tPcd);
-        public RotaryJoint CurrentJoint4 { get; } = new RotaryJoint(10.0);
+        public RotaryJoint CurrentJoint1 { get; }
+        public CoreXYStage CurrentJoint2 { get; }
+        public RotaryJoint CurrentJoint4 { get; }
 
         public string RobotTypeName => "ASTRO";
 
-        public ASTROKinematics() { }
+        /// <summary>Joint gearing is configurable; defaults are the ASTRO drivetrain values
+        /// (J1 120t/30t, J4 10:1, CoreXY 30T pulley PCD). Non-positive values fall back to
+        /// the default so the kinematics math stays finite.</summary>
+        public ASTROKinematics(
+            double j1GearRatio    = 120.0 / 30.0,
+            double j4GearRatio    = 10.0,
+            double coreXyPulleyPcd = 19.099)
+        {
+            if (j1GearRatio     <= 0) j1GearRatio     = 120.0 / 30.0;
+            if (j4GearRatio     <= 0) j4GearRatio     = 10.0;
+            if (coreXyPulleyPcd <= 0) coreXyPulleyPcd = pulley30tPcd;
+
+            InterpolatedJoint1 = new RotaryJoint(j1GearRatio);
+            InterpolatedJoint2 = new CoreXYStage(coreXyPulleyPcd, coreXyPulleyPcd);
+            InterpolatedJoint4 = new RotaryJoint(j4GearRatio);
+            CurrentJoint1      = new RotaryJoint(j1GearRatio);
+            CurrentJoint2      = new CoreXYStage(coreXyPulleyPcd, coreXyPulleyPcd);
+            CurrentJoint4      = new RotaryJoint(j4GearRatio);
+        }
 
         // ============================================================
         // FORWARD KINEMATICS
