@@ -201,7 +201,9 @@ public sealed class PluginProcessLauncher : IPluginProcessLauncher
         if (code != 0 || venvPy == null)
         {
             TryDelete(venvDir);
-            throw new PluginLaunchException("venvFailed", $"python -m venv failed (exit {code})");
+            // Debian/Ubuntu ship python3 without ensurepip; the venv module then exits 1.
+            string hint = OperatingSystem.IsWindows() ? "" : " — on Debian/Ubuntu install the python3-venv package";
+            throw new PluginLaunchException("venvFailed", $"python -m venv failed (exit {code}){hint}");
         }
         log.Append("info", $"Installing {requirements}…");
         (code, _) = await RunToLogAsync(venvPy, ["-m", "pip", "install", "-r", requirements], dir, log, ct);

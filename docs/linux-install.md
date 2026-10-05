@@ -9,6 +9,9 @@ This guide walks you through installing SimpleRobotController on a Linux compute
 - Ubuntu 18.04 or newer (or any modern Linux distro with systemd)
 - Internet connection for the initial download
 - `sudo` access
+- For Python plugins (see `docs/plugins.md`): `python3` and the `python3-venv`
+  package (`sudo apt install python3 python3-venv`), so the controller can
+  create each plugin's virtual environment
 
 ---
 
