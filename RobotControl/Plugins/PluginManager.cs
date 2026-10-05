@@ -230,6 +230,7 @@ public sealed class PluginManager
 
     internal void OnPluginDisconnected(PluginHost host)
     {
+        RefreshSubscribedPatterns();
         if (!_stopping)
             PublishEvent(PluginEvents.PluginStopped, new { pluginId = host.Id }, excludePluginId: host.Id);
     }
@@ -272,8 +273,33 @@ public sealed class PluginManager
         }
     }
 
+    // Every pattern some live session subscribes to; rebuilt when a subscription or a
+    // connection changes, so HasSubscribers is a lock-free scan of (usually) nothing.
+    private volatile string[] _subscribedPatterns = Array.Empty<string>();
+
+    /// <summary>
+    /// True when a connected plugin may want <paramref name="eventName"/> — the cheap gate the
+    /// executor checks before building a program/step event payload (false with no plugins).
+    /// </summary>
+    public bool HasSubscribers(string eventName)
+    {
+        var patterns = _subscribedPatterns;
+        foreach (var p in patterns)
+            if (PluginEvents.Matches(p, eventName)) return true;
+        return false;
+    }
+
+    private void RefreshSubscribedPatterns() =>
+        _subscribedPatterns = _hosts.Values
+            .Select(h => h.Session)
+            .Where(s => s is { IsClosed: false })
+            .SelectMany(s => s!.Subscription.Patterns)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     internal void OnSubscriptionChanged()
     {
+        RefreshSubscribedPatterns();
         if (_options.RunPollThread && _pollThread == null && AnyPeriodicSubscriber())
         {
             lock (_pollLock)

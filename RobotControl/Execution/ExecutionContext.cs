@@ -61,14 +61,22 @@ namespace Controller.RobotControl.Execution
             IsBackground      = isBackground;
             Background        = backgroundManager;
             Frames            = new FrameStack();
-            Progress          = new ProgressReporter(programManager, Frames, vars);
+            Progress          = new ProgressReporter(programManager, Frames, vars)
+            {
+                IsBackground = isBackground,
+                Plugins      = () => controller.PluginManager,
+            };
             Motion            = new MotionDispatcher(controller);
             LivePosition      = controller.GetCurrentPosition;
             _finish           = finish;
             _pause            = pause;
-            // $robot.* / $program.* / $time.* / $aux.* — read live at lookup time.
+            // $robot.* / $program.* / $time.* / $aux.* and the plugins' $<id>.* — read live at
+            // lookup time (plugin properties via the controller's PluginManager).
             vars.Properties   = new RobotPropertySource(controller, this);
         }
+
+        /// <summary>The controller's plugin manager (read live, so tests can swap it); may be null.</summary>
+        public global::Controller.RobotControl.Plugins.PluginManager? Plugins => Controller.PluginManager;
 
         // ── $program.* properties ─────────────────────────────────────────────
 
@@ -128,6 +136,7 @@ namespace Controller.RobotControl.Execution
         public HomingState Homing { get; } = new();
         public VisionState Vision { get; } = new();
         public HttpState   Http   { get; } = new();
+        public PluginStepState PluginState { get; } = new();
 
         // ── Control ───────────────────────────────────────────────────────────
 
@@ -246,11 +255,15 @@ namespace Controller.RobotControl.Execution
         /// <summary>
         /// Resets every per-run field to its idle value and releases anything a run may still
         /// hold (vision processor, webhook subscription, pending async work, output pulses).
-        /// Variables are not touched.
+        /// Variables are not touched. An outstanding plugin step is cancelled with
+        /// <paramref name="pluginCancelReason"/> (<c>reset</c>, or <c>stopped</c> when a user Stop ended the run).
         /// </summary>
-        public void ResetRunState()
+        public void ResetRunState(string pluginCancelReason = "reset")
         {
             RunGeneration++;
+
+            // Plugin step — step.cancel, so the plugin can stop and a late reply is discarded
+            PluginState.Reset(pluginCancelReason);
 
             Frames.Clear();
             Progress.Reset();
@@ -295,6 +308,7 @@ namespace Controller.RobotControl.Execution
             AuxSteps.Register(r);
             VisionSteps.Register(r);
             HttpSteps.Register(r);
+            PluginSteps.Register(r);
             BackgroundSteps.Register(r);
             CncSteps.Register(r);
             // Steps the controller does not recognise (from a newer app) are skipped.

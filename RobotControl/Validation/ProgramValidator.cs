@@ -78,6 +78,34 @@ namespace Controller.RobotControl.Validation
         public const string CameraNotCalibrated  = "cameraNotCalibrated";
         /// <summary>RunVision outputFrame that is not pixel, normalized or robot.</summary>
         public const string BadOutputFrame       = "badOutputFrame";
+
+        // Plugins (docs/plugins.md §6):
+        /// <summary>A Plugin step whose pluginId is not installed.</summary>
+        public const string UnknownPlugin         = "unknownPlugin";
+        /// <summary>A Plugin step whose plugin has no such step.</summary>
+        public const string UnknownPluginStep     = "unknownPluginStep";
+        /// <summary>Plugin installed but not running (step, function or property reference) — warning.</summary>
+        public const string PluginNotRunning      = "pluginNotRunning";
+        /// <summary>A required plugin step param with no text and no default.</summary>
+        public const string PluginParamMissing    = "pluginParamMissing";
+        /// <summary>An enum plugin step param whose text is not one of its options.</summary>
+        public const string PluginParamEnum       = "pluginParamEnum";
+        /// <summary>A plugin step output mapped to a variable of a kind that cannot hold it.</summary>
+        public const string PluginOutputType      = "pluginOutputType";
+        /// <summary><c>x.y(…)</c> where x is a plugin but y is not one of its functions.</summary>
+        public const string UnknownPluginFunction = "unknownPluginFunction";
+    }
+
+    /// <summary>What the validator knows about one installed plugin (docs/plugins.md §6).</summary>
+    /// <param name="LiveProperties">Property names the plugin has set (declared or not).</param>
+    internal sealed record ValidationPlugin(
+        string Id, string Name, bool Running, Plugins.PluginManifest Manifest, IReadOnlyCollection<string> LiveProperties)
+    {
+        /// <summary>From a host; null when it is not installed with a valid manifest.</summary>
+        public static ValidationPlugin? From(Plugins.PluginHost? host) =>
+            host is { Problems.Count: 0, Manifest: { } m }
+                ? new ValidationPlugin(host.Id, host.Name, host.IsRunning, m, host.Properties.Keys.ToList())
+                : null;
     }
 
     /// <summary>
@@ -109,6 +137,15 @@ namespace Controller.RobotControl.Validation
 
         /// <summary>The expression function table.</summary>
         public IReadOnlyList<ExpressionFunction> Functions { get; init; } = ExpressionEvaluator.Functions;
+
+        /// <summary>An installed (valid) plugin by id, or null — Plugin steps, <c>id.fn(…)</c> calls and
+        /// <c>$id.prop</c> references are checked against it. Null predicate: not checked.</summary>
+        public Func<string, ValidationPlugin?>? PluginLookup { get; init; }
+
+        /// <summary>By grid name (a Plugin step's <c>grid:&lt;name&gt;[…]</c> point param).</summary>
+        public Func<string, bool>? GridNameExists  { get; init; }
+        /// <summary>By stack name (a Plugin step's <c>stack:&lt;name&gt;[…]</c> point param).</summary>
+        public Func<string, bool>? StackNameExists { get; init; }
 
         /// <summary>No repositories: names of points/tools/… are not checked.</summary>
         public static ValidationContext Offline() => new();
@@ -338,6 +375,11 @@ namespace Controller.RobotControl.Validation
                     Implicit(o.FirstIdVar, SymKind.Number); Implicit(o.FirstCenterXVar, SymKind.Number);
                     Implicit(o.FirstCenterYVar, SymKind.Number);
                 }
+                // A Plugin step's number/boolean outputs create their variable like Set Variable does.
+                if (s.Type == StepType.Plugin && PluginStepDef(s) is { } pdef)
+                    foreach (var m in s.PluginOutputs ?? [])
+                        if (m != null && pdef.Outputs.FirstOrDefault(o => o.Key == m.Key) is { Type: "number" or "boolean" } o)
+                            Implicit(m.VariableName, o.Type == "boolean" ? SymKind.Boolean : SymKind.Number);
                 foreach (var m in s.JsonInbound ?? [])        Implicit(m.VariableName, SymKind.Number);
                 foreach (var m in s.HttpReceiveInbound ?? []) Implicit(m.VariableName, SymKind.Number);
             }
@@ -779,6 +821,10 @@ namespace Controller.RobotControl.Validation
                                     CheckExpr(expr, at, $"cncSpec.expressions.{key}");
                         break;
 
+                    case StepType.Plugin:
+                        ValidatePluginStep(s, at);
+                        break;
+
                     case StepType.Unknown:
                         Add(at, ValidationCodes.UnknownStepType,
                             $"Step type '{s.UnknownStepType ?? "?"}' is not known to this controller; it will be skipped",
@@ -1039,6 +1085,204 @@ namespace Controller.RobotControl.Validation
                     Add(at, ValidationCodes.UnknownVariable, $"'${name}' is a {sym.ElementType} list, not a points list", field);
             }
 
+            // ── Plugins (docs/plugins.md §6) ──────────────────────────────────
+
+            private ValidationPlugin? Plugin(string id) =>
+                string.IsNullOrEmpty(id) ? null : _ctx.PluginLookup?.Invoke(id);
+
+            private Plugins.PluginStepDef? PluginStepDef(ProgramStep s) =>
+                Plugin(s.PluginId ?? "")?.Manifest.Steps.FirstOrDefault(d => string.Equals(d.Id, s.PluginStepId, StringComparison.Ordinal));
+
+            private void ValidatePluginStep(ProgramStep s, At at)
+            {
+                if (string.IsNullOrWhiteSpace(s.PluginId))
+                {
+                    Add(at, ValidationCodes.MissingField, "No plugin is selected", "pluginId");
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(s.PluginStepId))
+                {
+                    Add(at, ValidationCodes.MissingField, "No plugin step is selected", "pluginStepId");
+                    return;
+                }
+                if (_ctx.PluginLookup == null) return; // cannot check
+                var plugin = Plugin(s.PluginId);
+                if (plugin == null)
+                {
+                    Add(at, ValidationCodes.UnknownPlugin, $"Plugin '{s.PluginId}' is not installed", "pluginId");
+                    return;
+                }
+                var def = PluginStepDef(s);
+                if (def == null)
+                {
+                    Add(at, ValidationCodes.UnknownPluginStep, $"Plugin '{plugin.Name}' has no step '{s.PluginStepId}'", "pluginStepId");
+                    return;
+                }
+                if (!plugin.Running)
+                    Add(at, ValidationCodes.PluginNotRunning,
+                        $"Plugin '{plugin.Name}' is not running — the step fails unless it is started", "pluginId",
+                        ValidationSeverity.Warning);
+
+                foreach (var p in def.Params)
+                {
+                    string field = $"pluginParams.{p.Key}";
+                    string? text = s.PluginParams != null && s.PluginParams.TryGetValue(p.Key, out var t) ? t : null;
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        bool hasDefault = p.Default is { } d && d.ValueKind is not (System.Text.Json.JsonValueKind.Null or System.Text.Json.JsonValueKind.Undefined);
+                        if (p.Required && !hasDefault)
+                            Add(at, ValidationCodes.PluginParamMissing, $"'{p.Label ?? p.Key}' needs a value", field);
+                        continue;
+                    }
+                    switch (p.Type)
+                    {
+                        case "number": case "boolean":
+                            CheckExpr(text, at, field);
+                            break;
+                        case "string":
+                            CheckTemplate(text, at, field, ValidationSeverity.Warning);
+                            break;
+                        case "enum":
+                            if (p.Options != null && !p.Options.Contains(text.Trim(), StringComparer.Ordinal))
+                                Add(at, ValidationCodes.PluginParamEnum,
+                                    $"'{text.Trim()}' is not an option of '{p.Label ?? p.Key}' ({string.Join(", ", p.Options)})", field);
+                            break;
+                        case "point":
+                            CheckPluginPoint(text, at, field);
+                            break;
+                        case "list":
+                        {
+                            var name = text.Trim().TrimStart('$');
+                            Use(name);
+                            if (!IsList(name))
+                                Add(at, ValidationCodes.UnknownVariable,
+                                    Lookup(name) != null ? $"'${name}' is not a list" : $"Unknown list variable '${name}'", field);
+                            break;
+                        }
+                        case "image":
+                        {
+                            var name = text.Trim().TrimStart('$');
+                            Use(name);
+                            if (Lookup(name) is not { Kind: SymKind.Image })
+                                Add(at, ValidationCodes.UnknownVariable,
+                                    Lookup(name) != null ? $"'${name}' is not an image variable" : $"Unknown image variable '${name}'", field);
+                            break;
+                        }
+                        case "variable":
+                            Use(text.Trim().TrimStart('$'));
+                            break;
+                    }
+                }
+
+                for (int j = 0; j < (s.PluginOutputs?.Count ?? 0); j++)
+                {
+                    var map = s.PluginOutputs![j];
+                    if (map == null || string.IsNullOrWhiteSpace(map.VariableName)) continue;
+                    string field = $"pluginOutputs[{j}].variableName";
+                    var output = def.Outputs.FirstOrDefault(o => o.Key == map.Key);
+                    if (output == null)
+                    {
+                        Add(at, ValidationCodes.PluginOutputType, $"Step '{def.Label ?? def.Id}' has no output '{map.Key}' — it is never written",
+                            $"pluginOutputs[{j}].key", ValidationSeverity.Warning);
+                        continue;
+                    }
+                    var name = map.VariableName.Trim().TrimStart('$');
+                    if (!CheckTarget(name, at, field, requireDeclared: false)) continue;
+                    var sym = Lookup(name);
+                    string? problem = output.Type switch
+                    {
+                        "number" or "boolean" => sym is null or { Kind: SymKind.Number or SymKind.Boolean } ? null
+                                                 : $"'${name}' is {Describe(sym)} — a {output.Type} output needs a number or boolean variable",
+                        "string" => sym is { Kind: SymKind.String } ? null
+                                    : $"'${name}' is {Describe(sym)} — a string output needs a text variable",
+                        "point"  => sym is { Kind: SymKind.List, ElementType: ListElementType.Point } ? null
+                                    : $"'${name}' is {Describe(sym)} — a point output needs a points list variable",
+                        "list"   => sym is null or { Kind: SymKind.List } ? null
+                                    : $"'${name}' is {Describe(sym)} — a list output needs a list variable",
+                        "image"  => sym is null or { Kind: SymKind.Image } ? null
+                                    : $"'${name}' is {Describe(sym)} — an image output needs an image variable",
+                        _ => null,
+                    };
+                    if (problem != null) Add(at, ValidationCodes.PluginOutputType, problem, field);
+                }
+            }
+
+            private static string Describe(Sym? sym) => sym switch
+            {
+                null => "not declared",
+                { Kind: SymKind.List } => $"a {sym.ElementType} list",
+                { Kind: SymKind.String } => "a text variable",
+                { Kind: SymKind.Image } => "an image variable",
+                { Kind: SymKind.Boolean } => "a boolean variable",
+                { Kind: SymKind.Stopwatch } => "a stopwatch",
+                _ => "a number variable",
+            };
+
+            /// <summary>A point param: grid:/stack: refs, a points-variable element or a saved point name.</summary>
+            private void CheckPluginPoint(string text, At at, string field)
+            {
+                var t = text.Trim();
+                var m = PluginSteps.GridStackRef.Match(t);
+                if (m.Success)
+                {
+                    bool grid = m.Groups["kind"].Value.Equals("grid", StringComparison.OrdinalIgnoreCase);
+                    var name = m.Groups["name"].Value.Trim();
+                    var exists = grid ? _ctx.GridNameExists : _ctx.StackNameExists;
+                    if (exists != null && !exists(name))
+                        Add(at, grid ? ValidationCodes.UnknownGrid : ValidationCodes.UnknownStack,
+                            $"{(grid ? "Grid" : "Stack")} '{name}' does not exist", field);
+                    var idx = PluginSteps.SplitArgs(m.Groups["idx"].Value);
+                    if (idx.Count == 0 || idx.Count > (grid ? 2 : 1) || idx.Any(string.IsNullOrWhiteSpace))
+                        Add(at, ValidationCodes.ExpressionSyntax,
+                            grid ? $"'{t}' takes [index] or [row, col]" : $"'{t}' takes one index", field);
+                    else
+                        foreach (var e in idx) CheckExpr(e, at, field);
+                    return;
+                }
+                if (MoveTargetResolver.TryParsePointsRef(t, out var refName, out var idxExpr) && IsList(refName))
+                {
+                    CheckPointList(refName, at, field);
+                    if (!string.IsNullOrWhiteSpace(idxExpr)) CheckExpr(idxExpr, at, field);
+                }
+                else if (t.Contains('$') || t.Contains('{'))
+                    CheckTemplate(t, at, field, ValidationSeverity.Error);
+                else if (_ctx.PointExists != null && !_ctx.PointExists(t))
+                    Add(at, ValidationCodes.UnknownPoint, $"Point '{t}' does not exist", field);
+            }
+
+            /// <summary><c>x.y(…)</c>: x must be an installed plugin with a function y of the right arity.</summary>
+            private void CheckPluginFunction(ExprRef r, At at, string field, string severity)
+            {
+                if (_ctx.PluginLookup == null) return; // cannot check
+                var parts = r.Name.Split('.');
+                var plugin = Plugin(parts[0]);
+                if (plugin == null)
+                {
+                    Add(at, ValidationCodes.UnknownFunction, $"Unknown function '{r.Name}'", field, severity);
+                    return;
+                }
+                var fn = parts.Length == 2
+                    ? plugin.Manifest.Functions.FirstOrDefault(f => string.Equals(f.Name, parts[1], StringComparison.OrdinalIgnoreCase))
+                    : null;
+                if (fn == null)
+                {
+                    Add(at, ValidationCodes.UnknownPluginFunction,
+                        $"Plugin '{plugin.Name}' has no function '{string.Join(".", parts.Skip(1))}'", field, severity);
+                    return;
+                }
+                int min = fn.MinArgs, max = fn.EffectiveMaxArgs;
+                if (r.ArgCount < min || r.ArgCount > max)
+                {
+                    string want = min == max ? $"{min}" : $"{min} to {max}";
+                    Add(at, ValidationCodes.BadArity,
+                        $"{plugin.Id}.{fn.Name}() takes {want} argument{(want == "1" ? "" : "s")}, got {r.ArgCount}", field, severity);
+                }
+                if (!plugin.Running)
+                    Add(at, ValidationCodes.PluginNotRunning,
+                        $"{plugin.Id}.{fn.Name}(): plugin '{plugin.Name}' is not running — the call fails until it is", field,
+                        ValidationSeverity.Warning);
+            }
+
             // ── Names written ─────────────────────────────────────────────────
 
             /// <summary>
@@ -1103,6 +1347,11 @@ namespace Controller.RobotControl.Validation
                 switch (r.Kind)
                 {
                     case ExprRefKind.Function:
+                        if (r.Name.Contains('.'))
+                        {
+                            CheckPluginFunction(r, at, field, severity);
+                            return;
+                        }
                         if (!_functionNames.Contains(r.Name))
                             Add(at, ValidationCodes.UnknownFunction, $"Unknown function '{r.Name}'", field, severity);
                         return;
@@ -1145,6 +1394,21 @@ namespace Controller.RobotControl.Validation
                             Add(at, ValidationCodes.UnknownVariable,
                                 $"'${name}' — '${parts[0]}' is a list: use ${parts[0]}[i].{parts[^1]} or ${parts[0]}.length",
                                 field, severity);
+                            return;
+                        }
+
+                        if (parts.Length > 1 && Lookup(parts[0]) == null && Plugin(parts[0]) is { } plugin)
+                        {
+                            var prop = string.Join(".", parts.Skip(1));
+                            bool known = plugin.Manifest.Properties.Any(p => string.Equals(p.Name, prop, StringComparison.OrdinalIgnoreCase))
+                                         || plugin.LiveProperties.Contains(prop, StringComparer.OrdinalIgnoreCase);
+                            if (!known)
+                                Add(at, ValidationCodes.UnknownProperty,
+                                    $"Unknown property '${name}' — plugin '{plugin.Name}' has no property '{prop}'", field, severity);
+                            else if (!plugin.Running)
+                                Add(at, ValidationCodes.PluginNotRunning,
+                                    $"'${name}': plugin '{plugin.Name}' is not running — the value is unknown until it is", field,
+                                    ValidationSeverity.Warning);
                             return;
                         }
 

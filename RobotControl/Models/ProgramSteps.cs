@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -48,6 +48,13 @@ public class JsonKeyValue
 
 /// <summary>Maps one response JSON key to a program variable for a JsonExchange step.</summary>
 public class JsonInboundMapping
+{
+    [JsonPropertyName("key")]          public string Key          { get; set; } = "";
+    [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
+}
+
+/// <summary>Writes one output of a Plugin step into a program variable (docs/plugins.md §6).</summary>
+public class PluginOutputMapping
 {
     [JsonPropertyName("key")]          public string Key          { get; set; } = "";
     [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
@@ -404,6 +411,18 @@ public class ProgramStep
     [JsonPropertyName("httpReceiveName")]      public string?                   HttpReceiveName      { get; set; }
     [JsonPropertyName("httpReceiveTimeoutMs")] public int?                      HttpReceiveTimeoutMs { get; set; }
     [JsonPropertyName("httpReceiveInbound")]   public List<JsonInboundMapping>? HttpReceiveInbound   { get; set; }
+
+    // Plugin — a step a plugin provides (docs/plugins.md §6)
+    /// <summary>The plugin's manifest id.</summary>
+    [JsonPropertyName("pluginId")]        public string?                     PluginId        { get; set; }
+    /// <summary>The manifest's <c>steps[].id</c>.</summary>
+    [JsonPropertyName("pluginStepId")]    public string?                     PluginStepId    { get; set; }
+    /// <summary>One text per declared param, interpreted by the param's type; absent → the manifest default.</summary>
+    [JsonPropertyName("pluginParams")]    public Dictionary<string, string>? PluginParams    { get; set; }
+    /// <summary>Which outputs to write, and into which variables.</summary>
+    [JsonPropertyName("pluginOutputs")]   public List<PluginOutputMapping>?  PluginOutputs   { get; set; }
+    /// <summary>Overrides the manifest step's timeoutMs (0 = none).</summary>
+    [JsonPropertyName("pluginTimeoutMs")] public int?                        PluginTimeoutMs { get; set; }
 
     // Unknown — placeholder for steps whose type string could not be parsed
     [JsonPropertyName("unknownStepType")]
