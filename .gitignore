@@ -438,3 +438,9 @@ local-data/
 restart-controller.cmd
 restart-controller.sh
 restart-controller.log
+
+# Python SDK dev venv / caches
+.venv-sdk/
+__pycache__/
+*.egg-info/
+.pytest_cache/
