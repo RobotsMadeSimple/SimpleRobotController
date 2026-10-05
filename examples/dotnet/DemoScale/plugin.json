@@ -1,0 +1,51 @@
+{
+  "id": "scale",
+  "name": "Demo Scale",
+  "version": "1.0.0",
+  "description": "Simulated bench scale (sine wave + noise) written with the C# SDK.",
+  "author": "SimpleRobot",
+  "protocolVersion": 1,
+
+  "runtime": "exe",
+  "entry": "DemoScale.exe",
+  "args": [],
+
+  "autoStart": true,
+  "restart": { "mode": "always", "maxRestarts": 5, "backoffMs": 2000 },
+  "readyTimeoutMs": 15000,
+
+  "configSchema": [
+    { "key": "noise", "label": "Noise (g)", "type": "number", "default": 0.2, "min": 0, "max": 50, "step": 0.1, "help": "Peak noise added to the simulated reading" }
+  ],
+
+  "steps": [
+    {
+      "id": "weigh",
+      "label": "Weigh item",
+      "description": "Averages N readings and returns the weight.",
+      "params": [
+        { "key": "samples", "label": "Samples",         "type": "number",  "default": 5, "min": 1, "required": true },
+        { "key": "unit",    "label": "Unit",            "type": "enum",    "default": "g", "options": ["g", "oz"] },
+        { "key": "stable",  "label": "Wait for stable", "type": "boolean", "default": true }
+      ],
+      "outputs": [
+        { "key": "grams",  "label": "Weight (g)",   "type": "number" },
+        { "key": "stable", "label": "Was stable",   "type": "boolean" },
+        { "key": "text",   "label": "Display text", "type": "string" }
+      ],
+      "timeoutMs": 0,
+      "cancellable": true
+    }
+  ],
+
+  "functions": [
+    { "name": "tare", "signature": "scale.tare()",      "description": "Zero the scale; returns 1 on success", "minArgs": 0, "maxArgs": 0, "timeoutMs": 250 },
+    { "name": "toOz", "signature": "scale.toOz(grams)", "description": "Grams to ounces",                      "minArgs": 1, "maxArgs": 1 }
+  ],
+
+  "properties": [
+    { "name": "weight",    "description": "Live weight (g)",               "type": "number" },
+    { "name": "stable",    "description": "1 while the reading is stable", "type": "boolean" },
+    { "name": "connected", "description": "1 while the scale answers",     "type": "boolean" }
+  ]
+}
