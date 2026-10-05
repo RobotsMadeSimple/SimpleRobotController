@@ -288,18 +288,54 @@ Controller behaviour details (as implemented):
 
 The step handler never blocks: it sends `step.execute`, records the
 `invocationId` in `ctx.PluginState`, returns `Yield`; the reply is enqueued on
-`ctx.PendingActions` (checked against `RunGeneration`) and the handler applies
-outputs on its next tick. `ResetRunState` cancels any outstanding invocation
-(`step.cancel reason:"reset"|"stopped"`). Function calls are the one
+`ctx.PendingActions` (checked against `RunGeneration` and the invocation id) and
+the handler applies outputs on its next tick. `ResetRunState` cancels any
+outstanding invocation with `step.cancel reason:"reset"` — or `"stopped"` when a
+user Stop ended the run (a background program's Stop finishes it). A foreground
+Stop is a pause: the outstanding step is cancelled (`"stopped"`) and sent again
+(a new invocation) when Continue reaches it. Function calls are the one
 synchronous path: the loop thread blocks up to `timeoutMs` (default 250 ms);
 the docs tell plugin authors to prefer properties for anything live.
 
 Expression integration: the parser accepts dotted call names
-(`scale.tare(1)`); `ExpressionEvaluator` consults a dynamic function registry
-after the static table. Registering/unregistering a plugin's functions clears
-the parse cache. A call to a function whose plugin is not running throws
-`pluginNotRunning` (program error). `ReferencedNames`/`References` report
-functions as `pluginId.name`.
+(`scale.tare(1)` — `ident(.ident)+` followed by `(`) and builds a call node that
+is **resolved at evaluation** through `ExpressionEvaluator.SetDynamicFunctions`
+(`Execution/PluginExpressionFunctions` over the live `PluginManager`, installed in
+`Program.cs`). Nothing in the parse cache therefore depends on which plugins are
+installed, so no invalidation is needed when contributions change
+(`ExpressionEvaluator.InvalidateCache()` exists and `SetDynamicFunctions` calls it).
+At evaluation an unknown plugin is `unknownFunction`, an unknown function of a
+known plugin `unknownPluginFunction`, a wrong argument count `badArity`; a
+`PluginFunctionException` (`pluginNotRunning`, `pluginFunctionTimeout`,
+`pluginFunctionFailed`) is rethrown as `PluginFunctionCallException`, an
+`ExpressionParseException`, so every evaluation path turns it into a program
+error with the plugin's message. `ReferencedNames`/`References` report functions
+as `pluginId.name` (kind Function, with the argument count). Plugin properties
+are resolved by `RobotPropertySource` after its own roots (equivalent to
+computed → plugin → robot, since a plugin id can never be a robot root).
+
+Events: `ProgressReporter` (one per executor, foreground and background)
+publishes `program.started` (Start), `program.resumed` (Continue),
+`program.paused` (PauseProgram step), `program.stopped` (a user Stop — the
+foreground pause — or a background program's Stop), `program.finished`,
+`program.error` (with `error`), `step.started` (multi-tick steps: moves, waits on
+devices/HTTP, Plugin steps), `step.completed` (every executed step; instant
+steps report only this) and `step.skipped` (disabled steps, motion steps in a
+background program — instead of `step.completed`). `stepIndex` is the count of
+completed top-level steps at that moment; `stepName` is omitted when the step has
+no name. Payloads are built only when `PluginManager.HasSubscribers(name)` is true
+(a lock-free scan of the patterns live sessions subscribed to).
+
+`variables.get` / `variables.set` (wired in `RobotController`): the foreground
+executor when it holds the program (running, paused or finished and not reset),
+else a running background executor, else `unknownProgram`; without `programName`,
+the global store (numbers only; anything else → `badValue`). `get` returns
+scalars (computed variables evaluated; no `time_ms`), lists as JSON values and
+strings. `set` validates every value first (`computedVariable`, `badValue` — then
+nothing is written): numbers/booleans → `Set`, strings → `SetString`, arrays →
+`SetList` (a declared list keeps its element type), a point object → a
+one-element points list; writes are queued on the loop thread while the program
+runs, applied directly otherwise.
 
 ## 6. The `Plugin` step
 
@@ -341,6 +377,29 @@ A missing output key is skipped silently. A type mismatch (string into a number
 variable) fails the program with `pluginOutputType`. The step's monitor
 description is `"<plugin name>: <step label>"` plus any `step.progress` text.
 
+As implemented:
+
+- `point` param text forms: a saved point name (`P1`); `grid:<grid name>[<row>, <col>]`
+  or `grid:<grid name>[<index>]` (needs the grid's `colCount`); `stack:<stack name>[<index>]`
+  (names, not ids — an id is accepted as a fallback; each index is an expression);
+  `$pts[$i]` (a points variable element); anything else is a template naming a saved point.
+- An absent or blank param uses the manifest `default` (sent as written in the
+  manifest); no default and `required` → program error
+  `<plugin name>: <step label>: parameter '<label>' has no value and no default`;
+  no default and not required → the key is not sent. `list`/`image`/`variable`
+  names are accepted with or without `$`. An enum text outside `options`, an
+  unknown list/image variable or an unresolvable point also error the program.
+- Outputs: `number`/`boolean` accept a JSON number or boolean and go to a scalar
+  (created when undeclared); `string` needs a declared text variable; `image` an
+  image variable (created when undeclared); `list` a list (a declared list keeps
+  its element type; a new one is Number/Boolean/Point/Record from the data; an
+  array mixing numbers and objects is a mismatch). A mismatch error reads
+  `<plugin name>: <step label>: output '<label>' → '$var': <what> (pluginOutputType)`.
+- `ok:false` reply → program error `<plugin name>: <step label>: <message>`; a
+  plugin that disconnects while the step is outstanding → `pluginDisconnected`.
+- `step.progress` → `"<plugin name>: <step label>: <message>"`, with ` (<percent>%)`
+  appended when a percent is given (just the percent when there is no message).
+
 A timeout (`pluginTimeoutMs`/manifest) fails the program with
 `Plugin step '<label>' timed out after N ms` and sends `step.cancel reason:"timeout"`.
 A plugin that is not running when the step executes fails the program with
@@ -363,7 +422,20 @@ functions are checked against the manifest's `minArgs`/`maxArgs`.
 `GetExpressionSymbols` gains `plugins: [{ id, name, running, functions: [...], properties: [...] }]`
 and also lists plugin functions in `functions` (name `scale.tare`) and properties
 in `properties` (name `scale.weight`, with `pluginId`), so the existing expression
-assist shows them without changes.
+assist shows them without changes. In `plugins[]`, `functions` entries are
+`{ name, fullName, signature, description, minArgs, maxArgs, timeoutMs }` and
+`properties` entries `{ name, fullName, description, type, value }` (bare manifest
+names; `value` null until known). In the flat lists, functions carry
+`{ name, signature, description, pluginId }` and properties
+`{ name, description, type, pluginId, value }`.
+
+Validation details: the plugin checks run only when the controller has a plugin
+manager (`ValidationContext.PluginLookup`); a plugin whose manifest is invalid
+counts as not installed. `$id.prop` of an installed plugin that neither declares
+nor has set `prop` is `unknownProperty`; `x.y()` where `x` is not a plugin is
+`unknownFunction`. `pluginOutputType` is also a **warning** for a mapping to an
+output key the step does not declare. `grid:`/`stack:` point params naming a
+missing grid/stack report `unknownGrid`/`unknownStack`.
 
 ## 7. WebSocket commands (additive)
 

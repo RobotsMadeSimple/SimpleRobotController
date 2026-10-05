@@ -252,6 +252,9 @@ internal sealed class BuiltProgramCommands
             FindProgram         = (id, name) =>
                 (!string.IsNullOrEmpty(id) ? repo.GetById(id) : null)
                 ?? (!string.IsNullOrEmpty(name) ? repo.Get(name) : null),
+            GridNameExists  = n => _robot.gridRepo.GetAll().Any(g => string.Equals(g.Name, n, StringComparison.OrdinalIgnoreCase)) || _robot.gridRepo.Get(n) != null,
+            StackNameExists = n => _robot.stackRepo.GetAll().Any(s => string.Equals(s.Name, n, StringComparison.OrdinalIgnoreCase)) || _robot.stackRepo.Get(n) != null,
+            PluginLookup  = _robot.PluginManager is { } plugins ? id => ValidationPlugin.From(plugins.Get(id)) : null,
             IoNames       = new HashSet<string>(IoSymbols().Select(i => i.Name), StringComparer.OrdinalIgnoreCase),
             PropertyNames = new HashSet<string>(new RobotPropertySource(_robot, null).List().Select(p => p.Name),
                                                 StringComparer.OrdinalIgnoreCase),
@@ -326,18 +329,70 @@ internal sealed class BuiltProgramCommands
             io => ProgramExecutor.AddIoVariables(_robot, io), new RobotPropertySource(_robot, null));
         var variables = VariableSymbols(program, live, _background.GlobalVars, globalProps);
 
+        // RobotPropertySource.List() never includes plugin properties; PluginSymbols adds them with pluginId.
         var properties = new RobotPropertySource(_robot, null).List()
-            .Select(p => new { name = p.Name, description = p.Description, type = p.Type })
+            .Select(p => (object)new { name = p.Name, description = p.Description, type = p.Type })
             .Append(new { name = "time_ms", description = "Unix time in milliseconds (built-in variable; same as $time.now)", type = "number" })
             .ToList();
 
         var functions = ExpressionEvaluator.Functions
-            .Select(f => new { name = f.Name, signature = f.Signature, description = f.Description })
+            .Select(f => (object)new { name = f.Name, signature = f.Signature, description = f.Description })
             .ToList();
 
         var io = IoSymbols().Select(i => new { name = i.Name, description = i.Description }).ToList();
 
-        return new { variables, properties, functions, io };
+        var plugins = PluginSymbols(_robot.PluginManager, functions, properties);
+
+        return new { variables, properties, functions, io, plugins };
+    }
+
+    /// <summary>
+    /// GetExpressionSymbols' plugin parts (docs/plugins.md §6): appends every installed plugin's
+    /// functions (<c>scale.tare</c>, with <c>pluginId</c>) to <paramref name="functions"/> and its
+    /// properties (<c>scale.weight</c>, with <c>pluginId</c> and the live <c>value</c> when known) to
+    /// <paramref name="properties"/>, and returns <c>plugins: [{ id, name, running, functions, properties }]</c>
+    /// whose entries are the manifest objects (bare names) plus <c>fullName</c>.
+    /// </summary>
+    internal static List<object> PluginSymbols(Plugins.PluginManager? manager, List<object> functions, List<object> properties)
+    {
+        var plugins = new List<object>();
+        if (manager == null) return plugins;
+        foreach (var host in manager.Plugins)
+        {
+            if (host.Problems.Count > 0 || host.Manifest is not { } m) continue;
+            bool running = host.IsRunning;
+            var fns = new List<object>();
+            foreach (var f in m.Functions)
+            {
+                string full = $"{host.Id}.{f.Name}";
+                string sig  = string.IsNullOrWhiteSpace(f.Signature) ? $"{full}(…)" : f.Signature!;
+                functions.Add(new { name = full, signature = sig, description = f.Description ?? "", pluginId = host.Id });
+                fns.Add(new
+                {
+                    name = f.Name, fullName = full, signature = sig, description = f.Description ?? "",
+                    minArgs = f.MinArgs, maxArgs = f.EffectiveMaxArgs, timeoutMs = f.EffectiveTimeoutMs,
+                });
+            }
+            var props = new List<object>();
+            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void AddProperty(string name, string description, string type)
+            {
+                string full = $"{host.Id}.{name}";
+                double? value = running && host.Properties.TryGetValue(name, out var v) ? v : null;
+                properties.Add(new { name = full, description, type, pluginId = host.Id, value });
+                props.Add(new { name, fullName = full, description, type, value });
+            }
+            foreach (var p in m.Properties)
+            {
+                declared.Add(p.Name);
+                AddProperty(p.Name, p.Description ?? "", p.Type);
+            }
+            foreach (var name in host.Properties.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase))
+                if (!declared.Contains(name))
+                    AddProperty(name, Plugins.PluginPropertySource.Undocumented, "number");
+            plugins.Add(new { id = host.Id, name = host.Name, running, functions = fns, properties = props });
+        }
+        return plugins;
     }
 
     /// <summary>

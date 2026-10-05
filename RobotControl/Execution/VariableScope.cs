@@ -412,6 +412,28 @@ namespace Controller.RobotControl.Execution
         }
 
         /// <summary>
+        /// A plugin's <c>variables.get</c>: scalars (globals winning, computed variables evaluated —
+        /// left out when their formula fails; no <c>time_ms</c>), lists as JSON-ready values, and
+        /// strings. Images are left out.
+        /// </summary>
+        public Plugins.VariablesSnapshot PluginSnapshot()
+        {
+            var snap = new Plugins.VariablesSnapshot();
+            foreach (var kv in MergedVars())
+                if (!kv.Key.Equals("time_ms", StringComparison.OrdinalIgnoreCase)) snap.Variables[kv.Key] = kv.Value;
+            var computedNames = new HashSet<string>(_computed.Keys, StringComparer.OrdinalIgnoreCase);
+            computedNames.UnionWith(_globalComputedNames);
+            foreach (var name in computedNames)
+            {
+                double v = EvaluateComputedOrNaN(name);
+                if (double.IsFinite(v)) snap.Variables[name] = v;
+            }
+            foreach (var kv in _listVariables) snap.Lists[kv.Key] = JsonVariableCodec.ListToJson(kv.Value);
+            foreach (var kv in _stringVariables) snap.Strings[kv.Key] = kv.Value;
+            return snap;
+        }
+
+        /// <summary>
         /// Every variable's current value for the expression symbol list: scalars (globals
         /// winning) as numbers, strings as text, lists as their element count. Images are
         /// left out — their value is a camera frame.

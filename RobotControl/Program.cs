@@ -63,6 +63,8 @@ class Program
         // Discovered now, launched once Kestrel is listening (they connect back to
         // ws://127.0.0.1:<port>/plugin), stopped before the server shuts down.
         app.MapPluginEndpoints(robot.PluginManager, lifetime.ApplicationStopping);
+        // Plugin expression functions (scale.tare()) — resolved through the live manager at evaluation.
+        ExpressionEvaluator.SetDynamicFunctions(new Controller.RobotControl.Execution.PluginExpressionFunctions(() => robot.PluginManager));
         try { robot.PluginManager.Discover(); }
         catch (Exception ex) { Console.WriteLine($"[Plugins] Discovery failed: {ex.Message}"); }
         lifetime.ApplicationStarted.Register(() => robot.PluginManager.StartAll(ListeningPort(app, port)));

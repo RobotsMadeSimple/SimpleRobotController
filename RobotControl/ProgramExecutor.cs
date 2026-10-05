@@ -110,6 +110,49 @@ namespace Controller.RobotControl
             lock (_controlLock) return _vars.SnapshotValues();
         }
 
+        // ── Plugin variables.get / variables.set (docs/plugins.md §4.3) ──────
+
+        /// <summary>Scalars (computed ones evaluated), lists as JSON-ready values, and strings.</summary>
+        internal Plugins.VariablesSnapshot PluginSnapshot()
+        {
+            lock (_controlLock) return _vars.PluginSnapshot();
+        }
+
+        /// <summary>
+        /// Validates every value, then applies the writes: queued onto the loop thread
+        /// (<see cref="ExecutionContext.PendingActions"/>, dropped if the run ends first) while
+        /// running, directly under the control lock otherwise. Returns <c>computedVariable</c>
+        /// or <c>badValue</c> (nothing is written then), or null.
+        /// </summary>
+        internal string? PluginSetVariables(Dictionary<string, JsonElement> values)
+        {
+            lock (_controlLock)
+            {
+                var writes = new List<Action<VariableScope>>();
+                foreach (var (name, value) in values)
+                {
+                    if (string.IsNullOrWhiteSpace(name)) return "badValue";
+                    if (_vars.IsComputed(name)) return "computedVariable";
+                    if (PluginVariables.Write(name, value) is not { } write) return "badValue";
+                    writes.Add(write);
+                }
+                if (!_running)
+                {
+                    foreach (var w in writes) w(_vars);
+                    return null;
+                }
+                int gen = _ctx.RunGeneration;
+                foreach (var w in writes)
+                    _ctx.PendingActions.Enqueue(() =>
+                    {
+                        if (gen != _ctx.RunGeneration) return;
+                        try { w(_vars); }
+                        catch (Exception ex) { Console.WriteLine($"[ProgramExecutor] Plugin variable write failed: {ex.Message}"); }
+                    });
+                return null;
+            }
+        }
+
         // ── Public control ───────────────────────────────────────────────────
 
         // Start/Stop/Resume/Reset are called from WebSocket threads (and Stop from the
@@ -238,6 +281,10 @@ namespace Controller.RobotControl
             // Snapshot the interrupted motion for Resume() and drop the move wait.
             _ctx.Motion.CaptureResumeSnapshot();
 
+            // An outstanding plugin step is cancelled (step.cancel reason "stopped"; a late
+            // reply is discarded) and re-sent when Continue reaches it again.
+            _ctx.PluginState.Reset("stopped");
+
             _vars.SavePersistent();
             _running  = false;
             _isPaused = true;
@@ -264,11 +311,12 @@ namespace Controller.RobotControl
         /// still hold (vision processor, webhook subscription, pending async work, output
         /// pulses). Called from Start(), Reset() and Finish(). Variables are not touched.
         /// </summary>
-        private void ResetRunState()
+        /// <param name="pluginCancelReason">The <c>step.cancel</c> reason for an outstanding plugin step.</param>
+        private void ResetRunState(string pluginCancelReason = "reset")
         {
             _running  = false;
             _isPaused = false;
-            _ctx.ResetRunState();
+            _ctx.ResetRunState(pluginCancelReason);
         }
 
         /// <summary>Fires the reverting flip of every output pulse that is due (all of them
@@ -476,6 +524,12 @@ namespace Controller.RobotControl
                 Finish(ProgramStatus.Error,
                     $"Cannot assign computed variable '${ex.VariableName}' in step: {ProgressReporter.StepDescription(step)}");
             }
+            catch (PluginFunctionCallException ex)
+            {
+                // A plugin function failed (not running, timed out, returned an error) — the
+                // plugin's message, not a syntax-error framing.
+                Finish(ProgramStatus.Error, $"{_ctx.Progress.Describe(step)}: {ex.Message}");
+            }
             catch (ExpressionParseException ex)
             {
                 // A syntax error the validator would have reported — a clear message rather
@@ -546,7 +600,7 @@ namespace Controller.RobotControl
                 else keptFlips = new(_ctx.OutputFlips);
             }
 
-            ResetRunState();
+            ResetRunState(status == ProgramStatus.Stopped ? "stopped" : "reset");
             if (keptFlips != null) _ctx.OutputFlips.AddRange(keptFlips);
 
             // Main program finishing: optionally kill all background programs

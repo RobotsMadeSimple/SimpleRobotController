@@ -153,6 +153,7 @@ Names are case-insensitive. Angles are in **degrees**, in and out.
 | `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | over a list variable; `len` works on any list, the others on number/boolean lists (an empty list gives 0). The argument must be a bare list reference. |
 | `rand()` `rand(lo, hi)` | uniform random number in [0, 1) or [lo, hi) |
 | `map(x, inLo, inHi, outLo, outHi)` `lerp(a, b, t)` | range re-mapping and linear interpolation |
+| `<pluginId>.<name>(…)` | a plugin's function, e.g. `scale.tare()` — see [Plugin](#plugin--a-step-a-plugin-provides). Blocks the program up to the function's timeout (default 250 ms); a failure (not running, timeout, error) stops the program with the plugin's message. |
 
 #### Properties
 
@@ -172,6 +173,7 @@ loop, vision or HTTP target named like one (`readOnlyProperty`).
 | `$program.runCount` `stepIndex` `stepCount` `elapsedMs` `loopDepth` | the current run |
 | `$time.now` (unix ms) `hour` `minute` `second` `dayOfWeek` (0 = Sunday) `dayOfYear` | local wall clock |
 | `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes (steps, 1/0) |
+| `$<pluginId>.<name>` | a running plugin's live property, e.g. `$scale.weight` (unknown until the plugin sets it) |
 
 A name that is a variable or IO value wins over a property of the same name.
 
@@ -570,6 +572,53 @@ Pushes a message to the program monitor / logs.
 | `statusWarning` | Warning text. |
 | `statusError` | Error text. |
 | `statusSeverity` | `"Info"`, `"Warning"`, or `"Error"` hint. |
+
+---
+
+## Plugins
+
+### Plugin — a step a plugin provides
+
+Runs one of the steps an installed plugin declares in its manifest
+([plugins.md](plugins.md) §6). The program waits (without blocking anything else)
+until the plugin answers, then writes the mapped outputs and moves on.
+
+| Field | Meaning |
+|---|---|
+| `pluginId` | The plugin's manifest `id` (e.g. `"scale"`). |
+| `pluginStepId` | The manifest step `id` (e.g. `"weigh"`). |
+| `pluginParams` | `{ key: text }`, one entry per param; how the text is read depends on the param's type (below). A missing or blank entry uses the manifest default; a `required` param without a default stops the program. |
+| `pluginOutputs` | `[{ key, variableName }]` — which outputs to write, and where. |
+| `pluginTimeoutMs` | Overrides the manifest step's `timeoutMs` (0 = no timeout). |
+
+| Param type | Text | Sent to the plugin |
+|---|---|---|
+| `number` | an expression (`5`, `$count * 2`) | number |
+| `boolean` | an expression (`true`, `$a > 3`); non-zero is true | boolean |
+| `string` | a template (`Bin {$i}`) | string |
+| `enum` | one of the param's `options`, taken literally | string |
+| `point` | a saved point name (`P1`), `grid:<grid name>[row, col]` or `grid:<grid name>[index]`, `stack:<stack name>[index]` (indices are expressions), `$pts[$i]`, or a template naming a point — like a move's `pointNameExpr`; the local frame is **not** applied | `{x,y,z,rx,ry,rz}` |
+| `list` | a list variable name (`history` or `$history`) | array (numbers, or objects for points/records) |
+| `image` | an image variable name | base64 JPEG string |
+| `variable` | a variable name | the name itself |
+
+| Output type | Written to |
+|---|---|
+| `number` / `boolean` | a number or boolean variable (created when undeclared) |
+| `string` | a text variable |
+| `point` | a points list variable — replaced by a one-element list, read as `$var[0].x` |
+| `list` | a list variable (a declared list keeps its element type; a new one takes numbers / points / records from the data) |
+| `image` | an image variable |
+
+An output the plugin does not return is skipped. A value that does not fit its
+variable stops the program (`pluginOutputType`). While the step runs the monitor
+shows `<plugin name>: <step label>`, followed by `: <message>` (and `(n%)`) when
+the plugin reports progress. The program stops with an error when the plugin is
+not running (`Plugin '<id>' is not running`), when it answers with an error
+(`<plugin name>: <step label>: <message>`), or on timeout
+(`Plugin step '<label>' timed out after N ms`; the plugin gets `step.cancel`).
+A Stop while the step is outstanding cancels it (`step.cancel`, reason
+`stopped`); Continue sends it again. Background programs run Plugin steps too.
 
 ---
 

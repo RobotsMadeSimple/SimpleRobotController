@@ -277,7 +277,7 @@ namespace Controller.RobotControl
         /// current directory at construction). Constructed side-effect free; Program.cs
         /// discovers plugins and starts them once the web host is listening.
         /// </summary>
-        public Plugins.PluginManager PluginManager { get; private set; } = null!;
+        public Plugins.PluginManager PluginManager { get; internal set; } = null!;
 
         // ── Program vision snapshots ──────────────────────────────────────────
         private readonly Dictionary<string, byte[]> _programVisionSnapshots = new();
@@ -344,6 +344,11 @@ namespace Controller.RobotControl
                 globalImages: backgroundProgramManager.GlobalImages, backgroundManager: backgroundProgramManager);
 
             PluginManager = CreatePluginManager();
+            // variables.get / variables.set: the program's executor (foreground or background), or the globals.
+            PluginManager.VariablesGetter = name =>
+                Execution.PluginVariables.Get(name, programExecutor, backgroundProgramManager);
+            PluginManager.VariablesSetter = (name, values) =>
+                Execution.PluginVariables.Set(name, values, programExecutor, backgroundProgramManager);
 
             _commands = CommandDispatcher.Create(this, programManager, programExecutor, backgroundProgramManager);
         }
