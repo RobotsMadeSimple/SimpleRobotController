@@ -73,8 +73,21 @@ namespace Controller.RobotControl
         /// <summary>True for the list functions (len/sum/avg/minOf/maxOf), whose one argument is a list variable.</summary>
         public bool   TakesList   { get; }
 
+        /// <summary>The plugin that provides this function (dotted <c>id.name</c>), or null for a built-in.</summary>
+        public string? PluginId   { get; }
+
         internal NumericFn?          Numeric { get; }
         internal Func<ListVar, double>? OverList { get; }
+
+        /// <summary>A function resolved through <see cref="IDynamicFunctionProvider"/> (a plugin's <c>id.name</c>).
+        /// Evaluated by the provider, not by a delegate.</summary>
+        internal static ExpressionFunction Dynamic(string fullName, int min, int max, string signature, string description, string? pluginId) =>
+            new(fullName, min, max, signature, description, pluginId);
+
+        private ExpressionFunction(string name, int min, int max, string signature, string description, string? pluginId)
+        {
+            Name = name; MinArgs = min; MaxArgs = max; Signature = signature; Description = description; PluginId = pluginId;
+        }
 
         internal ExpressionFunction(string name, int min, int max, string signature, string description,
                                     NumericFn? numeric = null, Func<ListVar, double>? overList = null)
@@ -99,8 +112,28 @@ namespace Controller.RobotControl
         Function,
     }
 
-    /// <summary>One reference found in an expression.</summary>
-    internal readonly record struct ExprRef(ExprRefKind Kind, string Name, string[] Parts, int Position);
+    /// <summary>One reference found in an expression. <paramref name="ArgCount"/> is the number of
+    /// arguments of a <see cref="ExprRefKind.Function"/> call (0 otherwise).</summary>
+    internal readonly record struct ExprRef(ExprRefKind Kind, string Name, string[] Parts, int Position, int ArgCount = 0);
+
+    /// <summary>
+    /// Functions outside the static table, called with a dotted name (<c>scale.tare(1)</c>) —
+    /// plugin functions (docs/plugins.md §5). Resolved when the call is evaluated, so the
+    /// parse cache never holds anything that depends on which plugins are installed.
+    /// </summary>
+    internal interface IDynamicFunctionProvider
+    {
+        /// <summary>The function named <paramref name="fullName"/> (<c>id.name</c>, case-insensitive), or null.</summary>
+        ExpressionFunction? Resolve(string fullName);
+
+        /// <summary>Whether <paramref name="root"/> is a namespace this provider owns (a plugin id) —
+        /// decides between <c>unknownPluginFunction</c> and <c>unknownFunction</c>.</summary>
+        bool IsNamespace(string root);
+
+        /// <summary>Calls <paramref name="fn"/> (arity already checked). Failures throw an
+        /// <see cref="ExpressionParseException"/> subclass so every evaluation path reports them.</summary>
+        double Call(ExpressionFunction fn, ReadOnlySpan<double> args);
+    }
 
     /// <summary>
     /// Evaluates numeric expressions that may reference program variables, IO and properties.
@@ -232,8 +265,39 @@ namespace Controller.RobotControl
             };
         }
 
-        /// <summary>Whether <paramref name="name"/> is a function in <see cref="Functions"/> (case-insensitive).</summary>
-        public static bool IsFunctionName(string name) => FunctionsByName.ContainsKey(name);
+        /// <summary>Whether <paramref name="name"/> is a function in <see cref="Functions"/> or a dotted
+        /// dynamic (plugin) function the current provider resolves (case-insensitive). A plugin id
+        /// has no dot, so manifest id validation only ever matches the static table.</summary>
+        public static bool IsFunctionName(string name) => ResolveFunction(name) != null;
+
+        /// <summary>A built-in function, or a dotted one from the dynamic provider; null when unknown.</summary>
+        public static ExpressionFunction? ResolveFunction(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            if (FunctionsByName.TryGetValue(name, out var fn)) return fn;
+            return name.IndexOf('.') > 0 ? _dynamic?.Resolve(name) : null;
+        }
+
+        // ── Dynamic (plugin) functions ────────────────────────────────────────
+
+        private static volatile IDynamicFunctionProvider? _dynamic;
+
+        /// <summary>The provider dotted calls are resolved through (null: every dotted call is unknown).</summary>
+        public static IDynamicFunctionProvider? DynamicFunctions => _dynamic;
+
+        /// <summary>
+        /// Installs the provider for dotted calls (<c>scale.tare()</c>). Dotted calls are resolved
+        /// at evaluation, so nothing cached depends on it; the cache is still cleared so a
+        /// change of provider can never be observed half-way.
+        /// </summary>
+        public static void SetDynamicFunctions(IDynamicFunctionProvider? provider)
+        {
+            _dynamic = provider;
+            InvalidateCache();
+        }
+
+        /// <summary>Drops every cached parse (called when plugin contributions change).</summary>
+        public static void InvalidateCache() => Cache.Clear();
 
         // ── Parse cache ───────────────────────────────────────────────────────
 
@@ -546,9 +610,57 @@ namespace Controller.RobotControl
 
             public override void Collect(List<ExprRef> refs)
             {
-                refs.Add(new ExprRef(ExprRefKind.Function, _fn.Name, [_fn.Name], Pos));
+                refs.Add(new ExprRef(ExprRefKind.Function, _fn.Name, [_fn.Name], Pos, _args.Length));
                 foreach (var a in _args) a.Collect(refs);
             }
+        }
+
+        /// <summary>
+        /// A dotted call (<c>scale.tare(1)</c>): resolved through the dynamic provider each time it
+        /// is evaluated. Unknown name / wrong arity throw like a parse error would; the provider's
+        /// own failures (plugin not running, timeout) propagate as its exception.
+        /// </summary>
+        private sealed class DynamicCallNode : Node
+        {
+            private readonly string _name;
+            private readonly Node[] _args;
+            private readonly string _src;
+            public DynamicCallNode(string name, Node[] args, int pos, string src) { _name = name; _args = args; Pos = pos; _src = src; }
+
+            public override double Eval(in Env e)
+            {
+                var provider = _dynamic;
+                var fn = provider?.Resolve(_name);
+                if (fn == null)
+                {
+                    int dot = _name.IndexOf('.');
+                    bool ns = provider != null && provider.IsNamespace(_name[..dot]);
+                    throw new ExpressionParseException(
+                        ns ? $"Plugin '{_name[..dot]}' has no function '{_name[(dot + 1)..]}'" : $"Unknown function '{_name}'",
+                        Pos, ns ? "unknownPluginFunction" : "unknownFunction", _src);
+                }
+                int n = _args.Length;
+                if (n < fn.MinArgs || n > fn.MaxArgs)
+                    throw new ExpressionParseException(ArityMessage(fn, n), Pos, "badArity", _src);
+                Span<double> buf = n <= 8 ? stackalloc double[8] : new double[n];
+                buf = buf[..n];
+                for (int i = 0; i < n; i++) buf[i] = _args[i].Eval(e);
+                return provider!.Call(fn, buf);
+            }
+
+            public override void Collect(List<ExprRef> refs)
+            {
+                refs.Add(new ExprRef(ExprRefKind.Function, _name, _name.Split('.'), Pos, _args.Length));
+                foreach (var a in _args) a.Collect(refs);
+            }
+        }
+
+        private static string ArityMessage(ExpressionFunction fn, int got)
+        {
+            string want = fn.MaxArgs == int.MaxValue ? $"at least {fn.MinArgs}"
+                        : fn.MinArgs == fn.MaxArgs  ? $"{fn.MinArgs}"
+                        : $"{fn.MinArgs} to {fn.MaxArgs}";
+            return $"{fn.Name}() takes {want} argument{(want == "1" ? "" : "s")}, got {got} — {fn.Signature}";
         }
 
         private sealed class ListCallNode : Node
@@ -884,6 +996,10 @@ namespace Controller.RobotControl
                     {
                         _i++;
                         if (Cur.Type == TokType.LParen) return ParseCall(tok);
+                        // A dotted call: ident(.ident)+ followed by '(' — a plugin function
+                        // (scale.tare()). Anything else keeps its old meaning.
+                        if (Cur.Type == TokType.Dot && TryDottedCallName(tok, out var dotted))
+                            return ParseDottedCall(dotted, tok.Pos);
                         if (tok.Value.Equals("true",  StringComparison.OrdinalIgnoreCase)) return new NumNode(1, tok.Pos);
                         if (tok.Value.Equals("false", StringComparison.OrdinalIgnoreCase)) return new NumNode(0, tok.Pos);
                         // Legacy: a bare word is 0. The validator flags it.
@@ -929,14 +1045,33 @@ namespace Controller.RobotControl
                 return new IndexNode(name, index, field, posIdx, tok.Pos);
             }
 
-            private Node ParseCall(Token nameTok)
+            /// <summary>At a '.' after a word: when the words and dots that follow end in '(',
+            /// consumes them and returns the joined name (left positioned on the '(').</summary>
+            private bool TryDottedCallName(Token first, out string name)
             {
-                if (!FunctionsByName.TryGetValue(nameTok.Value, out var fn))
-                    throw Error($"Unknown function '{nameTok.Value}'", nameTok.Pos, "unknownFunction");
+                name = "";
+                int j = _i;
+                var parts = new List<string> { first.Value };
+                while (_t[j].Type == TokType.Dot && _t[j + 1].Type == TokType.Word)
+                {
+                    parts.Add(_t[j + 1].Value);
+                    j += 2;
+                }
+                if (parts.Count < 2 || _t[j].Type != TokType.LParen) return false;
+                _i = j;
+                name = string.Join(".", parts);
+                return true;
+            }
 
+            private Node ParseDottedCall(string name, int pos) =>
+                new DynamicCallNode(name, ParseArgs(name, out _).ToArray(), pos, _src);
+
+            /// <summary>Parses "(a, b, …)" starting at the '('.</summary>
+            private List<Node> ParseArgs(string fnName, out List<Token> argTokens)
+            {
                 _i++; // '('
                 var args = new List<Node>();
-                var argTokens = new List<Token>();
+                argTokens = new List<Token>();
                 if (Cur.Type != TokType.RParen)
                 {
                     while (true)
@@ -949,9 +1084,18 @@ namespace Controller.RobotControl
                 }
                 if (Cur.Type != TokType.RParen)
                     throw Error(Cur.Type == TokType.End
-                        ? $"Missing ')' after the arguments of {fn.Name}()"
-                        : $"Expected ',' or ')' in {fn.Name}() but found {Describe(Cur)}", Cur.Pos);
+                        ? $"Missing ')' after the arguments of {fnName}()"
+                        : $"Expected ',' or ')' in {fnName}() but found {Describe(Cur)}", Cur.Pos);
                 _i++;
+                return args;
+            }
+
+            private Node ParseCall(Token nameTok)
+            {
+                if (!FunctionsByName.TryGetValue(nameTok.Value, out var fn))
+                    throw Error($"Unknown function '{nameTok.Value}'", nameTok.Pos, "unknownFunction");
+
+                var args = ParseArgs(fn.Name, out var argTokens);
 
                 // rand() takes none or two — one bound on its own means nothing.
                 bool badRand = fn.Name == "rand" && args.Count == 1;
@@ -959,11 +1103,7 @@ namespace Controller.RobotControl
                 {
                     if (badRand)
                         throw Error($"rand() takes 0 or 2 arguments, got 1 — {fn.Signature}", nameTok.Pos, "badArity");
-                    string want = fn.MaxArgs == int.MaxValue ? $"at least {fn.MinArgs}"
-                                : fn.MinArgs == fn.MaxArgs  ? $"{fn.MinArgs}"
-                                : $"{fn.MinArgs} to {fn.MaxArgs}";
-                    throw Error($"{fn.Name}() takes {want} argument{(want == "1" ? "" : "s")}, got {args.Count} — {fn.Signature}",
-                                nameTok.Pos, "badArity");
+                    throw Error(ArityMessage(fn, args.Count), nameTok.Pos, "badArity");
                 }
 
                 if (fn.TakesList)

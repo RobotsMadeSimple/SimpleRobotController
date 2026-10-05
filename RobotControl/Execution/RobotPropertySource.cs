@@ -28,14 +28,21 @@ namespace Controller.RobotControl.Execution
     {
         private readonly RobotController? _robot;
         private readonly IProgramRunInfo? _run;
+        private readonly IPropertySource? _plugins;
 
         /// <param name="robot">Null in tests / offline: <c>$robot.*</c> and <c>$aux.*</c> are then unknown.</param>
         /// <param name="run">Null when evaluating outside a program: <c>$program.*</c> reads 0.</param>
-        public RobotPropertySource(RobotController? robot, IProgramRunInfo? run)
+        /// <param name="plugins">Plugin properties (<c>$scale.weight</c>), consulted first — the chain
+        /// is computed → plugin → robot. Null: the robot's <see cref="RobotController.PluginManager"/>
+        /// (read at lookup time), or none without a robot.</param>
+        public RobotPropertySource(RobotController? robot, IProgramRunInfo? run, IPropertySource? plugins = null)
         {
-            _robot = robot;
-            _run   = run;
+            _robot   = robot;
+            _run     = run;
+            _plugins = plugins;
         }
+
+        private IPropertySource? Plugins => _plugins ?? _robot?.PluginManager?.Properties;
 
         private enum Group { Robot, Program, Time }
 
@@ -126,6 +133,11 @@ namespace Controller.RobotControl.Execution
 
             if (name.StartsWith("camera.", StringComparison.OrdinalIgnoreCase))
                 return TryGetCamera(name, out value);
+
+            // $<pluginId>.<name>. Plugin ids can never be one of the roots above (manifest
+            // rule), so asking after them is the documented computed → plugin → robot order
+            // without a plugin lookup on every $robot.x read.
+            if (Plugins is { } plugins) return plugins.TryGet(name, out value);
 
             value = 0;
             return false;
