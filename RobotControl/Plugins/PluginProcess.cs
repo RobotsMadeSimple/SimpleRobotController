@@ -72,14 +72,14 @@ public sealed class PluginProcessLauncher : IPluginProcessLauncher
                 string? venvPy = VenvPython(dir);
                 if (venvPy == null && File.Exists(reqPath))
                 {
-                    string basePy = FindOnPath("python3", "python")
-                        ?? throw new PluginLaunchException("runtimeMissing", "Python was not found on PATH (python3 / python)");
+                    string basePy = FindPython()
+                        ?? throw new PluginLaunchException("runtimeMissing", PythonMissingMessage);
                     await CheckPythonVersionAsync(basePy, m.Python?.MinVersion, context.Log, ct);
                     context.OnInstalling?.Invoke();
                     venvPy = await BootstrapVenvAsync(basePy, dir, reqRel, context.Log, ct);
                 }
-                fileName = venvPy ?? FindOnPath("python3", "python")
-                    ?? throw new PluginLaunchException("runtimeMissing", "Python was not found on PATH (python3 / python)");
+                fileName = venvPy ?? FindPython()
+                    ?? throw new PluginLaunchException("runtimeMissing", PythonMissingMessage);
                 await CheckPythonVersionAsync(fileName, m.Python?.MinVersion, context.Log, ct);
                 args.Add(m.Entry!);
                 break;
@@ -151,6 +151,76 @@ public sealed class PluginProcessLauncher : IPluginProcessLauncher
             ? Path.Combine(pluginDir, ".venv", "Scripts", "python.exe")
             : Path.Combine(pluginDir, ".venv", "bin", "python");
         return File.Exists(p) ? p : null;
+    }
+
+    private const string PythonMissingMessage =
+        "Python was not found (set SRC_PYTHON, put python3/python on PATH, or install python.org Python)";
+
+    /// <summary>
+    /// The base interpreter used to create venvs and run plugins without one: <c>SRC_PYTHON</c>
+    /// when set, else <c>python3</c>/<c>python</c> on PATH, else the usual install folders —
+    /// a service (systemd, a hidden launch) often runs with a stripped PATH.
+    /// </summary>
+    public static string? FindPython()
+    {
+        var env = Environment.GetEnvironmentVariable("SRC_PYTHON");
+        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
+        return FindOnPath("python3", "python") ?? FindPythonInStandardFolders(StandardPythonRoots());
+    }
+
+    /// <summary>Where python.org (Windows) and distro (Unix) interpreters usually live.</summary>
+    private static IEnumerable<string> StandardPythonRoots()
+    {
+        if (IsWindows)
+        {
+            yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Python");
+            yield return Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            yield return Path.GetPathRoot(Environment.SystemDirectory) ?? "C:\\";
+        }
+        else
+        {
+            yield return "/usr/local/bin";
+            yield return "/usr/bin";
+            yield return "/opt/homebrew/bin";
+        }
+    }
+
+    /// <summary>
+    /// Scans <paramref name="roots"/> for an interpreter: on Windows a <c>Python3*</c>
+    /// sub-folder holding <c>python.exe</c> (highest version first), on Unix a
+    /// <c>python3</c> file directly in the root.
+    /// </summary>
+    internal static string? FindPythonInStandardFolders(IEnumerable<string> roots)
+    {
+        foreach (var root in roots)
+        {
+            try
+            {
+                if (!Directory.Exists(root)) continue;
+                if (!IsWindows)
+                {
+                    string p = Path.Combine(root, "python3");
+                    if (File.Exists(p)) return p;
+                    continue;
+                }
+                var candidates = Directory.GetDirectories(root, "Python3*")
+                    .Select(d => (Dir: d, Ver: PythonFolderVersion(Path.GetFileName(d))))
+                    .Where(x => x.Ver != null)
+                    .OrderByDescending(x => x.Ver)
+                    .Select(x => Path.Combine(x.Dir, "python.exe"));
+                foreach (var c in candidates)
+                    if (File.Exists(c)) return c;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return null;
+    }
+
+    /// <summary>"Python312" → 3.12, "Python3.11" → 3.11; null when the name is not a Python folder.</summary>
+    internal static Version? PythonFolderVersion(string folderName)
+    {
+        var m = Regex.Match(folderName, @"^Python(\d)\.?(\d+)(?:-32|-arm64)?$", RegexOptions.IgnoreCase);
+        return m.Success ? new Version(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)) : null;
     }
 
     /// <summary>The first of <paramref name="names"/> found on PATH (with PATHEXT on Windows).</summary>
