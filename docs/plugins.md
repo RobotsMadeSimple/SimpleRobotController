@@ -170,6 +170,7 @@ The controller launches the process with these environment variables:
 | `SRC_PLUGIN_DIR` | absolute plugin folder |
 | `SRC_DATA_DIR` | absolute data directory |
 | `SRC_CONTROLLER_VERSION` | controller version string |
+| `SRC_PARENT_PID` | the controller's own process id. The SDKs poll it every 2 s and exit when it is gone (Python exit code 4, C# `RunAsync` returns), so a force-killed controller never leaves plugins running. On Windows the controller also puts every launched plugin in a kill-on-close Job Object. |
 
 Working directory is the plugin folder. The plugin opens a WebSocket to
 `SRC_PLUGIN_URL` and sends `plugin.ready` first (§4.4). The endpoint accepts a

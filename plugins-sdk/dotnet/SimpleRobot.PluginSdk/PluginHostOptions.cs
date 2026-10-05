@@ -17,4 +17,8 @@ public sealed class PluginHostOptions
     /// <summary>First reconnect delay (default 1 s); doubles up to <see cref="MaxReconnectDelay"/>.</summary>
     public TimeSpan MinReconnectDelay { get; set; } = TimeSpan.FromSeconds(1);
     public TimeSpan MaxReconnectDelay { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>Stop (RunAsync returns) when <see cref="ParentPid"/> exits. Default true.</summary>
+    public bool WatchParent { get; set; } = true;
+    /// <summary>The controller's pid; defaults to <c>SRC_PARENT_PID</c> when constructed from the environment. Null = no watchdog.</summary>
+    public int? ParentPid { get; set; }
 }

@@ -428,3 +428,20 @@ async def test_demo_counter_end_to_end(fc: FakeController) -> None:
         assert (await fc.request("function.call", {"name": "double", "args": [21]}))["result"] == {"value": 42.0}
         await fc.event("program.started", {"programName": "P"})
         await wait_until(lambda: any("program.started: P" in f["data"].get("message", "") for f in fc.frames(event="log")))
+
+
+def test_exits_4_when_parent_is_gone() -> None:
+    import subprocess
+
+    parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
+    plugin = Plugin(
+        url="ws://127.0.0.1:1/plugin", token=TOKEN, plugin_id="t",
+        reconnect_min=0.05, reconnect_max=0.2, parent_pid=parent.pid,
+    )
+
+    async def go() -> int:
+        task = asyncio.create_task(plugin.run_async())
+        await asyncio.to_thread(parent.wait)  # also reaps it so POSIX kill(pid, 0) fails
+        return await asyncio.wait_for(task, 6)
+
+    assert asyncio.run(go()) == 4

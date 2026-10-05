@@ -47,6 +47,26 @@ internal sealed class Harness : IAsyncDisposable
 
 public class PluginHostTests
 {
+    [Fact]
+    public async Task RunAsync_returns_when_the_parent_process_is_gone()
+    {
+        var psi = OperatingSystem.IsWindows()
+            ? new System.Diagnostics.ProcessStartInfo("ping", "-n 2 127.0.0.1")
+            : new System.Diagnostics.ProcessStartInfo("sleep", "1");
+        psi.RedirectStandardOutput = true;
+        psi.CreateNoWindow = true;
+        using var parent = System.Diagnostics.Process.Start(psi)!;
+        _ = parent.StandardOutput.ReadToEndAsync();
+        var host = new PluginHost(new PluginHostOptions
+        {
+            Url = "ws://127.0.0.1:1/plugin", Token = "t", PluginId = "demo",
+            MinReconnectDelay = TimeSpan.FromMilliseconds(50), MaxReconnectDelay = TimeSpan.FromMilliseconds(200),
+            ParentPid = parent.Id,
+        });
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(8));
+        Assert.True(parent.WaitForExit(5000));
+    }
+
     private static JsonElement J(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     [Fact]
