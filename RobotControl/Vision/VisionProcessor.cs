@@ -160,8 +160,40 @@ namespace Controller.RobotControl.Vision
             }
         }
 
-        /// <summary>Runs every step of the plan on one decoded frame.</summary>
-        private VisionResult ProcessFrame(InspectionPlan plan, Mat src, out byte[] annotatedJpeg)
+        /// <summary>Runs every step of the plan on one decoded frame (live loop: logs + records failures).</summary>
+        private VisionResult ProcessFrame(InspectionPlan plan, Mat src, out byte[] annotatedJpeg) =>
+            RunPlan(plan, src, out annotatedJpeg, LogInspectionError);
+
+        /// <summary>
+        /// Runs a saved program's inspections against a single supplied image — no camera and no
+        /// processing thread, just the same per-frame pipeline the live loop uses. For the
+        /// RunVisionOnImage API / testing: decode an image, get back the VisionResult (including
+        /// per-cell color coverage) that a camera frame would have produced. Builds a throwaway
+        /// plan and releases its ArUco detectors; a failing inspection is recorded on the result's
+        /// Errors rather than logged.
+        /// </summary>
+        public static VisionResult RunProgramOnce(VisionProgram program, Mat src, out byte[] annotatedJpeg)
+        {
+            var aruco = new ArucoStrategy();
+            try
+            {
+                var plan = InspectionPlan.Build(program, aruco);
+                return RunPlan(plan, src, out annotatedJpeg,
+                    (r, id, ex) => r.Errors.Add($"{id}: {ex.Message}"));
+            }
+            finally
+            {
+                aruco.ReleaseDetectors();
+            }
+        }
+
+        /// <summary>
+        /// Runs every step of a plan on one decoded frame: shared by the live loop and the
+        /// one-shot <see cref="RunProgramOnce"/> path. <paramref name="onError"/> handles a step
+        /// that throws (the loop logs and records; the one-shot only records on the result).
+        /// </summary>
+        private static VisionResult RunPlan(InspectionPlan plan, Mat src, out byte[] annotatedJpeg,
+                                            Action<VisionResult, string, Exception>? onError)
         {
             var result = new VisionResult
             {
@@ -194,7 +226,7 @@ namespace Controller.RobotControl.Vision
                 catch (Exception ex)
                 {
                     step.RecordFailure(result);
-                    LogInspectionError(result, step.Id, ex);
+                    onError?.Invoke(result, step.Id, ex);
                 }
                 result.Timings[step.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
             }
