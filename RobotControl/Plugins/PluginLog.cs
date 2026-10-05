@@ -24,7 +24,7 @@ public sealed class PluginLog
     private string? _filePath;
 
     // console rate limit (per second window)
-    private long _windowStartMs = long.MinValue;
+    private long _windowStartMs = long.MinValue / 2; // far past, without overflow in now - start
     private int  _windowCount;
     private int  _suppressed;
 

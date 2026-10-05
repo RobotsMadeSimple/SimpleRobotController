@@ -452,8 +452,8 @@ public sealed class PluginHost : IPluginSessionHandler
         bool restart = policy.Mode == "always" || (policy.Mode == "onFailure" && failure);
         if (!restart)
         {
-            State   = PluginState.Stopped;
             Message = reason;
+            State   = PluginState.Stopped;
             return;
         }
 
@@ -461,8 +461,8 @@ public sealed class PluginHost : IPluginSessionHandler
         while (_crashTimes.Count > 0 && now - _crashTimes.Peek() > CrashWindowMs) _crashTimes.Dequeue();
         if (_crashTimes.Count >= policy.MaxRestarts)
         {
-            State   = PluginState.Crashed;
             Message = $"{reason}; gave up after {_crashTimes.Count} restart(s) in 10 minutes";
+            State   = PluginState.Crashed;
             Log.Append("error", Message);
             return;
         }
@@ -472,8 +472,8 @@ public sealed class PluginHost : IPluginSessionHandler
         _consecutiveCrashes++;
         long delay = Math.Min((long)Math.Max(0, policy.BackoffMs) << Math.Min(_consecutiveCrashes - 1, 20), MaxBackoffMs);
         _crashTimes.Enqueue(now);
-        State   = PluginState.Crashed;
         Message = $"{reason}; restarting in {delay} ms";
+        State   = PluginState.Crashed;
         Log.Append("warn", Message);
         _backoffTimer = _manager.Clock.Schedule((int)delay, () => OnBackoffElapsed(gen));
     }

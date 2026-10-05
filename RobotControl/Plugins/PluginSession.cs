@@ -186,16 +186,17 @@ public sealed class PluginSession
         {
             if (_queue.Count >= OutboundCapacity)
             {
-                if (item.Droppable)
+                // Make room by dropping the oldest periodic event (position/status/io) …
+                var oldest = FirstDroppable();
+                if (oldest != null)
                 {
-                    var oldest = FirstDroppable();
-                    if (oldest is null) { Interlocked.Increment(ref _dropped); return false; }
                     _queue.Remove(oldest);
                     Interlocked.Increment(ref _dropped);
                     _queue.AddLast(item);
                     return true; // count unchanged: no new signal
                 }
-                // A program/step event or a request/reply cannot be dropped: the plugin is too slow.
+                if (item.Droppable) { Interlocked.Increment(ref _dropped); return false; }
+                // … but a program/step event or a request/reply cannot be dropped: the plugin is too slow.
                 _ = Task.Run(() => CloseAsync(SlowCloseCode, "slow"));
                 _log?.Append("warn", "Outbound queue full (plugin too slow) — disconnecting");
                 return false;
