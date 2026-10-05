@@ -50,6 +50,26 @@ place above comparison (`not $a > 5` is `not ($a > 5)`, as it always was); a
 
 Unknown function → parse error `unknownFunction`. Wrong arity → `badArity`.
 
+**Plugin functions** ([plugins.md](plugins.md) §5): a running plugin's functions
+are called with a dotted name, `<pluginId>.<name>(…)` — `scale.tare()`,
+`scale.toOz($g)` (case-insensitive, numeric arguments, numeric result; booleans
+come back as 1/0). A dotted name is any `ident(.ident)+` immediately followed by
+`(`; it always parses, and is resolved when it is evaluated, so the parse cache
+never depends on which plugins are installed. At evaluation:
+
+- no such plugin → `unknownFunction`; the plugin exists but has no such function →
+  `unknownPluginFunction`; wrong argument count (the manifest's `minArgs`/`maxArgs`) → `badArity`;
+- the plugin is not running → `pluginNotRunning`; no reply within the function's
+  `timeoutMs` (default 250, max 5000) → `pluginFunctionTimeout`; the plugin answered
+  `ok:false` → `pluginFunctionFailed`.
+
+All of these error the program with the plugin's message (they are
+`ExpressionParseException`s — `PluginFunctionCallException` for the last three —
+so every path that reports an expression error reports them). The call blocks the
+program loop up to the timeout: prefer a plugin **property** for anything read
+every tick. `References`/`ReferencedNames` report the call as a function named
+`pluginId.name`.
+
 ### Errors
 
 `UnknownVariableException` (exists) stays fatal at run time. Syntax errors now
@@ -77,6 +97,12 @@ Resolved live at evaluation time; never assignable. Names are case-insensitive.
 | `$time.now` (unix ms) `$time.hour` `$time.minute` `$time.second` `$time.dayOfWeek` (0=Sun) `$time.dayOfYear` | wall clock |
 | `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes |
 | `$camera.<cameraId>.calibrated` | 1 when the camera has a camera-to-robot calibration ([camera-calibration.md](camera-calibration.md)) |
+| `$<pluginId>.<name>` | a running plugin's live property, e.g. `$scale.weight` ([plugins.md](plugins.md)) |
+
+Plugin properties sit in the chain computed variables → plugin properties →
+system properties (a plugin id can never be one of the roots above). A property
+the plugin has not set, or of a plugin that is not connected, is unknown
+(`UnknownVariableException` at run time). They work in computed variables too.
 
 Commands (section 4) expose the list so the app can offer them in pickers.
 
@@ -86,7 +112,7 @@ Commands (section 4) expose the list so the app can offer them in pickers.
 |---|---|---|
 | `ValidateBuiltProgram` | `program` (full BuiltProgram object, may be unsaved) | `problems: [{ stepId, stepPath, field?, severity: "error"\|"warning", code, message }]` |
 | `EvaluateExpression` | `expression`, `programName?` | `ok`, `value` (number), `error?`, `isBoolean?` — evaluated against the named running program's variables (or globals + IO + properties when none) |
-| `GetExpressionSymbols` | `programName?` | `variables: [{name, kind: "number"\|"boolean"\|"string"\|"image"\|"list", elementType?, isGlobal, isPersistent, value?}]`, `properties: [{name, description, type}]`, `functions: [{name, signature, description}]`, `io: [{name, description}]` |
+| `GetExpressionSymbols` | `programName?` | `variables: [{name, kind: "number"\|"boolean"\|"string"\|"image"\|"list", elementType?, isGlobal, isPersistent, value?}]`, `properties: [{name, description, type, pluginId?, value?}]`, `functions: [{name, signature, description, pluginId?}]`, `io: [{name, description}]`, `plugins: [{id, name, running, functions: [{name, fullName, signature, description, minArgs, maxArgs, timeoutMs}], properties: [{name, fullName, description, type, value}]}]` — plugin functions/properties also appear in `functions`/`properties` under their full name (`scale.tare`, `scale.weight`) with `pluginId` |
 | `GetBuiltProgramRevisions` | `name` | `revisions: [{ id, savedUnixMs, stepCount, variableCount, note? }]` newest first |
 | `GetBuiltProgramRevision` | `name`, `id` | `program` (BuiltProgram JSON) |
 | `RestoreBuiltProgramRevision` | `name`, `id` | saves that revision as current (which itself creates a new revision); returns `program` |
@@ -110,6 +136,21 @@ loop/vision/HTTP output variables — or declared as a variable), `unknownProgra
 `cameraNotCalibrated` (RunVision `outputFrame: "robot"` for a vision program whose
 camera has no calibration) and `badOutputFrame` (an `outputFrame` other than
 `pixel`, `normalized` or `robot`).
+
+Plugins ([plugins.md](plugins.md) §6), checked when the controller has a plugin
+manager: `unknownPlugin` (Plugin step `pluginId` not installed),
+`unknownPluginStep` (no such `pluginStepId`), `pluginNotRunning(warning)` (the
+plugin is installed but not running — for a Plugin step, an `id.fn(…)` call or a
+`$id.prop` reference), `pluginParamMissing` (a `required` param with no text and no
+default), `pluginParamEnum` (enum text not in `options`), `pluginOutputType` (an
+output mapped to a variable that cannot hold it: number/boolean → number or boolean
+variable, string → text variable, point → points list, list → a list, image → an
+image variable; undeclared targets are fine for number/boolean/list/image; also a
+warning for a mapping to an output the step does not have) and
+`unknownPluginFunction` (`x.y(…)` where `x` is a plugin without function `y`;
+`badArity` uses the manifest's `minArgs`/`maxArgs`). `$id.prop` for an installed
+plugin that neither declares nor has set `prop` is `unknownProperty`. A `grid:` /
+`stack:` point param naming a missing grid/stack is `unknownGrid`/`unknownStack`.
 Problems inside templates (`statusMessage`, `saveImagePath`, string Set Variable,
 text conditions) are warnings: at run time an unresolved reference there is left
 as written rather than failing. `stepPath` uses the JSON field names
@@ -118,8 +159,9 @@ checked once, under the first call that reaches it: `steps[4].routine(Pick).step
 Program-level problems (variables) have `stepId: null` and `stepPath: "variables[i]"`.
 
 `EvaluateExpression` failures also carry `code` (`expressionSyntax`,
-`unknownFunction`, `badArity`, `unknownVariable`) and `position` (-1 when not a
-syntax error). The named program's variables are used while the foreground
+`unknownFunction`, `badArity`, `unknownVariable`, and for plugin calls
+`unknownPluginFunction`, `pluginNotRunning`, `pluginFunctionTimeout`,
+`pluginFunctionFailed`) and `position` (-1 when not a syntax error). The named program's variables are used while the foreground
 executor holds it (running, paused, or finished and not yet reset).
 
 ## 5. Validation rules

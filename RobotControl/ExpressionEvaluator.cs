@@ -153,6 +153,7 @@ namespace Controller.RobotControl
     ///   Logic        : and  or  not   (also &amp;&amp;  ||  !)
     ///   Conditional  : cond ? a : b   (lowest precedence, right-associative)
     ///   Functions    : abs(x) min(a,b,…) round(x,2) sin(deg) len($list) … — see <see cref="Functions"/>
+    ///   Plugin fns   : scale.tare(1) — dotted names, resolved at evaluation (<see cref="IDynamicFunctionProvider"/>)
     ///   Grouping     : (expr)       Braces { } are ignored, so "{$x + 1}" works in numeric fields.
     ///
     /// Precedence, tightest first:

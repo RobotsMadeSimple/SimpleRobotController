@@ -189,6 +189,9 @@ move targets (a `MoveL`/`MoveJ` `name` can be a grid/stack cell reference).
 | `GetBuiltProgramRevisions` | `name` | Returns saved snapshots for a program, newest first, in `revisions`. |
 | `GetBuiltProgramRevision` | `name, id` | Returns one saved snapshot as JSON in `program`. |
 | `RestoreBuiltProgramRevision` | `name, id` | Makes that snapshot the current content and returns it as JSON in `program`. |
+| `ValidateBuiltProgram` | `program` | `{ problems: [{ stepId, stepPath, field?, severity, code, message }] }` — codes in [`expressions-and-variables.md`](expressions-and-variables.md) §4, including the plugin codes (`unknownPlugin`, `unknownPluginStep`, `pluginNotRunning`, `pluginParamMissing`, `pluginParamEnum`, `pluginOutputType`, `unknownPluginFunction`). |
+| `EvaluateExpression` | `expression, programName?` | `{ ok, value, error?, isBoolean, code?, position? }`. Plugin functions (`scale.tare()`) and properties (`$scale.weight`) evaluate live. |
+| `GetExpressionSymbols` | `programName?` | `{ variables, properties, functions, io, plugins }`. Plugin functions are listed in `functions` as `{ name: "scale.tare", signature, description, pluginId }` and plugin properties in `properties` as `{ name: "scale.weight", description, type, pluginId, value }` (`value` null until known). `plugins: [{ id, name, running, functions: [{ name, fullName, signature, description, minArgs, maxArgs, timeoutMs }], properties: [{ name, fullName, description, type, value }] }]` — bare manifest names plus `fullName`. Additive: older clients ignore it. |
 
 ### Revision history
 
@@ -490,6 +493,11 @@ crashed | error`; `statusState` is the plugin's own `ok | degraded | error`.
 override), `config` (schema defaults merged in; passwords returned as-is),
 `token` (`external` runtime only), `properties` (live values), `logTail` (last
 50 lines) and `problems` (manifest validation problems, `{ code, message, field }`).
+
+In programs: the `Plugin` step type (`pluginId`, `pluginStepId`, `pluginParams`,
+`pluginOutputs`, `pluginTimeoutMs` — see [`program-blocks.md`](program-blocks.md#plugins)),
+plugin functions `id.name(…)` and properties `$id.name` in expressions, and the
+plugin parts of `ValidateBuiltProgram` / `GetExpressionSymbols` (Built programs, above).
 
 HTTP:
 
