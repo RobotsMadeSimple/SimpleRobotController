@@ -347,10 +347,10 @@ assist shows them without changes.
 |---|---|---|
 | `GetPlugins` | — | `{ plugins: [PluginSummary] }` |
 | `GetPlugin` | `{ id }` | `{ plugin: PluginDetail }` |
-| `GetPluginContributions` | — | `{ steps: [{ pluginId, pluginName, running, step: <manifest step> }], functions: [...], properties: [...] }` — what the builder needs, in one call |
+| `GetPluginContributions` | — | `{ steps: [{ pluginId, pluginName, running, step: <manifest step> }], functions: [{ pluginId, pluginName, running, function: <manifest function> }], properties: [{ pluginId, pluginName, running, property: <manifest property>, value?: number }] }` — what the builder needs, in one call |
 | `SetPluginEnabled` | `{ id, enabled }` | `{ plugin }`. Disabling stops it. |
 | `StartPlugin` / `StopPlugin` / `RestartPlugin` | `{ id }` | `{ plugin }` (returns immediately; state follows) |
-| `SetPluginConfig` | `{ id, config: {…} }` | `{ plugin }`. Validated against `configSchema` (`badConfig` with `field`); persisted; `config.changed` sent to a running plugin. |
+| `SetPluginConfig` | `{ id, config: {…} }` | `{ plugin }`. Validated against `configSchema`; on failure the ACK is `ok:false, error:"badConfig", message, field:"<key>"` (`field` is a top-level ACK property); persisted; `config.changed` sent to a running plugin. |
 | `GetPluginLogs` | `{ id, start?, end? }` | `{ totalCount, start, logs: [string] }` (same shape as `GetProgramLogs`) |
 | `ClearPluginLogs` | `{ id }` | `{}` |
 | `UninstallPlugin` | `{ id }` | `{}`. Stops it, deletes `plugins/<id>` and `pluginConfigs/<id>.json`. |
