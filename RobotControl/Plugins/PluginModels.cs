@@ -64,7 +64,8 @@ public sealed record PluginStepContribution(string PluginId, string PluginName, 
 public sealed record PluginFunctionContribution(string PluginId, string PluginName, bool Running, PluginFunctionDef Function);
 
 /// <summary><c>GetPluginContributions</c> entry for a property (<c>value</c> while known).</summary>
-public sealed record PluginPropertyContribution(string PluginId, string PluginName, bool Running, PluginPropertyDef Property, double? Value);
+public sealed record PluginPropertyContribution(string PluginId, string PluginName, bool Running, PluginPropertyDef Property,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] double? Value);
 
 /// <summary>Everything the builder needs from plugins in one call (docs/plugins.md §7).</summary>
 public sealed record PluginContributions(

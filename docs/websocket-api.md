@@ -118,7 +118,8 @@ status can detect a run that started and finished between two polls even
 though `status` reads `Complete` both times); `activeTool`, `activeLocal`;
 `backgroundPrograms`; repository update timestamps; `speedOverridePercent`; fault
 state `faulted, faultJoint, faultDirection, faultMessage, limitBypass`;
-`jointLimitsEnabled`, `robotType`, `version`, `isLinux`.
+`jointLimitsEnabled`, `robotType`, `version`, `isLinux`; `plugins` — one
+`{ id, name, state, statusState }` per installed plugin (see **Plugins**).
 
 ---
 
@@ -455,6 +456,50 @@ Annotated vision frames stream over `GET /vision/{id}/ws`.
 | Command | Params | Description |
 |---|---|---|
 | `GetCncToolpath` | — | The resolved toolpath (anchor + variables applied) of the CNC block currently executing, or `null`. Returns `programName, paths, holes`. |
+
+---
+
+## Plugins
+
+External plugin processes the controller launches and supervises. The full
+contract (manifest, lifecycle, the plugin-side protocol, SDKs) is
+[`plugins.md`](plugins.md); this is the app-facing command set. Every command
+taking `id` answers `ok:false, error:"unknownPlugin"` for an id that is not
+installed.
+
+| Command | Params | Description |
+|---|---|---|
+| `GetPlugins` | — | `{ plugins: [PluginSummary] }`. |
+| `GetPlugin` | `id` | `{ plugin: PluginDetail }`. |
+| `GetPluginContributions` | — | `{ steps: [{ pluginId, pluginName, running, step }], functions: [{ pluginId, pluginName, running, function }], properties: [{ pluginId, pluginName, running, property, value? }] }` — the builder's step tiles and the expression assist in one call. |
+| `SetPluginEnabled` | `id, enabled` | `{ plugin }`. Disabling stops the plugin (state `disabled`); enabling an `autoStart` plugin starts it. Persisted. |
+| `StartPlugin` / `StopPlugin` / `RestartPlugin` | `id` | `{ plugin }`, returned immediately — poll for the state. A manual start resets the crash budget. `pluginDisabled` / `pluginError` when it cannot start. |
+| `SetPluginConfig` | `id, config` | `{ plugin }`. The whole config object, validated against the manifest's `configSchema`; on failure `ok:false, error:"badConfig", message, field` (the schema key). Persisted; a running plugin gets `config.changed`. |
+| `GetPluginLogs` | `id, start?, end?` | `{ totalCount, start, logs }` — same half-open absolute-index paging as `GetProgramLogs` (500-line ring). |
+| `ClearPluginLogs` | `id` | Empties the ring buffer (`plugin.log` on disk is kept). |
+| `UninstallPlugin` | `id` | Stops the plugin, deletes `plugins/<id>` and `pluginConfigs/<id>.json`. |
+| `ReloadPlugins` | — | `{ plugins }`. Rescans the plugins folder: new folders appear (and start), removed ones are stopped and vanish, manifests of inactive plugins reload. |
+| `RotatePluginToken` | `id` | `{ plugin }`. New connect token; an `external` plugin's live connection is closed and must reconnect with the new token. |
+
+`PluginSummary`: `id, name, version, description, author, runtime, state,
+message, enabled, connected, pid, startedUnixMs, restartCount, stepCount,
+functionCount, propertyCount, hasConfig, statusState, statusMessage`. `state` is
+one of `disabled | stopped | installing | starting | running | degraded |
+crashed | error`; `statusState` is the plugin's own `ok | degraded | error`.
+`PluginDetail` adds `manifest` (in effect, including a `plugin.ready`
+override), `config` (schema defaults merged in; passwords returned as-is),
+`token` (`external` runtime only), `properties` (live values), `logTail` (last
+50 lines) and `problems` (manifest validation problems, `{ code, message, field }`).
+
+HTTP:
+
+- `POST /plugins/install[?replace=true]` — body is the zip. `plugin.json` must
+  be at the root or inside a single top-level folder. `200 { id, plugin }`;
+  `400 { error: "badZip" | "badManifest" | "idExists", message }`;
+  `413 { error: "tooLarge" }` above 200 MB.
+- `GET /plugins/{id}/download` — the plugin folder as a zip (without `.venv`
+  and `plugin.log*`).
+- `GET /plugin` — the WebSocket plugins connect to (not for apps).
 
 ---
 

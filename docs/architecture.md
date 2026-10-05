@@ -55,6 +55,7 @@ maps `/control`, and `Hosting/MdnsAdvertiser` advertises `_robot._tcp`.
 | `Nano/`, `AuxAxis/`, `Serial/` | Arduino serial devices on the shared `SerialLineDevice` base (port scan, `ID?` probe, port claim registry, session loop). |
 | `Controllers/STB4100/` | The HID motion board: loops (timing-critical), `Stb4100Packets` (pure packet builders, byte-exact tests). |
 | `Camera/`, `UsbRelay/` | USB camera capture and the HID relay board. |
+| `Plugins/` | External plugin processes (`docs/plugins.md`). `PluginManager` (owned by `RobotController`) discovers `plugins/<id>/plugin.json`, installs/uninstalls zips, publishes events, serves plugin functions/properties/steps; `PluginHost` is one plugin's state machine (launch, ready timeout, restart backoff, stop); `PluginSession` is the JSON frame protocol over `IPluginTransport` (WebSocket in production, in-memory in tests); `PluginProcess` launches python (venv bootstrap)/dotnet/exe. `Hosting/PluginEndpoint` maps `GET /plugin` and the install/download routes; plugins are started once Kestrel listens and stopped on `ApplicationStopping`. |
 
 ## Conventions
 

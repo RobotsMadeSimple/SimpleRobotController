@@ -261,6 +261,30 @@ go into a `ConcurrentDictionary<string,double>` per plugin; reads are lock-free.
 `PublishEvent` is non-blocking: each session has a bounded outbound channel
 (1024, drop-oldest for `robot.position`/`status`/`io.changed`, never for
 program/step events — a full queue for those drops the connection as `slow`).
+When the queue is full, any new frame first evicts the oldest queued periodic
+event; only a queue holding nothing droppable disconnects (close code 4408,
+reason `slow`).
+
+Controller behaviour details (as implemented):
+
+- `state`/`message`: a manifest or launch problem leaves `message` as
+  `"<code>: <text>"` (e.g. `unsupportedProtocol: …`, `pythonTooOld: …`). A plugin
+  reporting `status` `degraded` **or** `error` shows state `degraded`
+  (`statusState` keeps the exact value); `ok` returns it to `running`.
+- `external` plugins: `StartPlugin` (or boot, when `autoStart`) puts them in
+  `starting` with message `waiting for connection`; a disconnect returns them
+  there (no crash/restart). While `stopped`/`disabled`/`crashed`/`error`, a
+  `plugin.ready` is refused with 4401. `RotatePluginToken` closes a live
+  external connection with 4401.
+- A launched plugin's lost socket counts as a crash: the process is killed and
+  the restart policy applies. The consecutive-crash backoff resets after the
+  plugin stayed ready for 60 s.
+- `io.changed`: the first poll after `events.subscribe` sends every IO key (the
+  plugin's initial snapshot); later events carry only changed keys.
+- Transition events are derived by the same poll: `robot.homed` `{ homed: true }`,
+  `robot.fault` `{ joint, message }`, `robot.faultCleared` `{}`.
+  `robot.estop` is reserved — the controller has no e-stop signal to report yet.
+- The connection must send `plugin.ready` within 10 s of opening.
 
 The step handler never blocks: it sends `step.execute`, records the
 `invocationId` in `ctx.PluginState`, returns `Yield`; the reply is enqueued on
@@ -369,7 +393,7 @@ HTTP: `POST /plugins/install` — body is the zip (`application/zip`), query
 `?replace=true` allows overwriting an existing id. The zip must contain
 `plugin.json` at its root or inside a single top-level folder. Responds
 `200 { "id": "...", "plugin": PluginSummary }`, `400 { "error": "badZip"|"badManifest"|"idExists", "message" }`.
-Max 200 MB. `GET /plugins/{id}/download` returns the folder as a zip (excluding `.venv`, `plugin.log`).
+Max 200 MB (`413 { "error": "tooLarge", "message" }` above it). `GET /plugins/{id}/download` returns the folder as a zip (excluding `.venv`, `plugin.log`).
 
 ## 8. SDKs
 
