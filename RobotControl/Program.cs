@@ -59,6 +59,15 @@ class Program
 
         app.MapRobotEndpoints(robot, vectorFileDir: "dxf");
 
+        // ── Plugins ───────────────────────────────────────────────────────────
+        // Discovered now, launched once Kestrel is listening (they connect back to
+        // ws://127.0.0.1:<port>/plugin), stopped before the server shuts down.
+        app.MapPluginEndpoints(robot.PluginManager, lifetime.ApplicationStopping);
+        try { robot.PluginManager.Discover(); }
+        catch (Exception ex) { Console.WriteLine($"[Plugins] Discovery failed: {ex.Message}"); }
+        lifetime.ApplicationStarted.Register(() => robot.PluginManager.StartAll(ListeningPort(app, port)));
+        lifetime.ApplicationStopping.Register(() => robot.PluginManager.StopAll());
+
         // ── mDNS discovery ────────────────────────────────────────────────────
         // Optional: set "enableMdns": false in robot-config.json to run without
         // network discovery (the robot is then only reachable by direct address).
@@ -74,5 +83,15 @@ class Program
         }
 
         app.Run($"http://0.0.0.0:{port}");
+    }
+
+    /// <summary>The port Kestrel actually bound (falls back to the requested one).</summary>
+    private static int ListeningPort(WebApplication app, int requested)
+    {
+        foreach (var url in app.Urls)
+            if (Uri.TryCreate(url.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").Replace("*", "localhost").Replace("+", "localhost"),
+                              UriKind.Absolute, out var uri) && uri.Port > 0)
+                return uri.Port;
+        return requested;
     }
 }

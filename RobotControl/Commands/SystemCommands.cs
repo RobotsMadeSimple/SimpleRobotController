@@ -182,6 +182,9 @@ internal sealed class SystemCommands
 
             version = RobotController.Version,
             isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
+
+            // Installed plugins — summary only (docs/plugins.md §7)
+            plugins = robot.PluginManager?.GetStatusSummary() ?? new List<object>(),
         };
     }
 
