@@ -37,7 +37,9 @@ plugin.run()
 requests concurrently (every inbound request runs in its own task), reconnects after socket loss with exponential
 backoff 1 s to 30 s, and returns after replying to `shutdown`. It exits non-zero when the controller rejects the token
 (close 4401, not retried; exit code 1), when another connection replaced it (4409, exit 3) or when the URL/token are
-missing (exit 2). `await plugin.run_async()` returns the exit code instead of exiting.
+missing (exit 2). When the controller process disappears (it was force-killed; the SDK watches
+`SRC_PARENT_PID` every 2 s) it cancels its background tasks and exits with code 4 ("parent exited");
+pass `watch_parent=False` to disable or `parent_pid=` to override. `await plugin.run_async()` returns the exit code instead of exiting.
 
 Handlers may be plain functions or coroutines. A plain function that blocks stalls the event loop, so use
 `await asyncio.to_thread(...)` for blocking I/O. Exceptions in event/background/ready handlers are logged (`ctx.log`

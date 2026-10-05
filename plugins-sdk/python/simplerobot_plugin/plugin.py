@@ -33,6 +33,45 @@ EXIT_OK = 0
 EXIT_REJECTED = 1  # controller refused us (bad token, close 4401 / ready error)
 EXIT_BAD_ENV = 2  # url or token missing
 EXIT_REPLACED = 3  # another connection replaced ours (close 4409)
+EXIT_PARENT_GONE = 4  # the controller process (SRC_PARENT_PID) no longer exists
+
+_PARENT_POLL_SECONDS = 2.0
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when process ``pid`` still exists (and, on Windows, has not exited)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False  # gone (or never existed); access-denied cannot happen for our own parent
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True  # cannot tell: assume alive
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
 
 
 class Event(dict):  # type: ignore[type-arg]
@@ -111,8 +150,10 @@ class Plugin:
     """A SimpleRobotController plugin.
 
     Environment (set by the controller): ``SRC_PLUGIN_ID``, ``SRC_PLUGIN_URL``,
-    ``SRC_PLUGIN_TOKEN``, ``SRC_PLUGIN_DIR``, ``SRC_DATA_DIR``, ``SRC_CONTROLLER_VERSION``.
-    Constructor keyword arguments override them (development mode).
+    ``SRC_PLUGIN_TOKEN``, ``SRC_PLUGIN_DIR``, ``SRC_DATA_DIR``, ``SRC_CONTROLLER_VERSION``,
+    ``SRC_PARENT_PID``. Constructor keyword arguments override them (development mode).
+    When a parent pid is known (and ``watch_parent`` is true) the plugin exits with code 4 as soon
+    as that process is gone, so a force-killed controller never leaves plugins running.
     """
 
     def __init__(
@@ -129,6 +170,8 @@ class Plugin:
         reconnect_min: float = 1.0,
         reconnect_max: float = 30.0,
         ready_timeout: float = 15.0,
+        watch_parent: bool = True,
+        parent_pid: Optional[int] = None,
     ) -> None:
         env = os.environ
         self.url: Optional[str] = url or env.get("SRC_PLUGIN_URL")
@@ -144,6 +187,11 @@ class Plugin:
         self.reconnect_min = reconnect_min
         self.reconnect_max = reconnect_max
         self.ready_timeout = ready_timeout
+        self.watch_parent = watch_parent
+        if parent_pid is None:
+            raw = env.get("SRC_PARENT_PID", "").strip()
+            parent_pid = int(raw) if raw.isdigit() else None
+        self.parent_pid: Optional[int] = parent_pid
 
         self._steps: Dict[str, Callable[..., Any]] = {}
         self._functions: Dict[str, Callable[..., Any]] = {}
@@ -226,6 +274,29 @@ class Plugin:
         if not self.url or not self.token:
             self._stderr("SRC_PLUGIN_URL / SRC_PLUGIN_TOKEN not set (or pass url= and token=)")
             return EXIT_BAD_ENV
+        if not self.watch_parent or not self.parent_pid:
+            return await self._serve()
+        main = asyncio.create_task(self._serve())
+        dog = asyncio.create_task(self._watch_parent(self.parent_pid))
+        try:
+            await asyncio.wait({main, dog}, return_when=asyncio.FIRST_COMPLETED)
+            if main.done():
+                return main.result()
+            self._stderr(f"parent process {self.parent_pid} exited; shutting down")
+            main.cancel()  # cancels background tasks via _connect_once's cleanup
+            await asyncio.gather(main, return_exceptions=True)
+            return EXIT_PARENT_GONE
+        finally:
+            for t in (main, dog):
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(main, dog, return_exceptions=True)
+
+    async def _watch_parent(self, pid: int) -> None:
+        while await asyncio.to_thread(_pid_alive, pid):
+            await asyncio.sleep(_PARENT_POLL_SECONDS)
+
+    async def _serve(self) -> int:
         backoff = self.reconnect_min
         while True:
             try:
