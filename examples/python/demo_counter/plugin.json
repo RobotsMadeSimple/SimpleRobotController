@@ -1,0 +1,40 @@
+{
+  "id": "demo_counter",
+  "name": "Demo Counter",
+  "version": "0.1.0",
+  "description": "Counts up on every step, exposes the total as $demo_counter.total and doubles numbers in expressions.",
+  "author": "Octane Coffee",
+  "protocolVersion": 1,
+
+  "runtime": "python",
+  "entry": "main.py",
+  "args": [],
+  "python": { "minVersion": "3.9", "requirements": "requirements.txt" },
+
+  "autoStart": true,
+  "restart": { "mode": "always", "maxRestarts": 5, "backoffMs": 2000 },
+
+  "steps": [
+    {
+      "id": "count",
+      "label": "Count",
+      "description": "Adds 'by' to the running total and returns it.",
+      "params": [
+        { "key": "by", "label": "Increment", "type": "number", "default": 1 }
+      ],
+      "outputs": [
+        { "key": "total", "label": "Total", "type": "number" }
+      ],
+      "timeoutMs": 0,
+      "cancellable": false
+    }
+  ],
+
+  "functions": [
+    { "name": "double", "signature": "demo_counter.double(x)", "description": "Returns x * 2", "minArgs": 1, "maxArgs": 1 }
+  ],
+
+  "properties": [
+    { "name": "total", "description": "Running total of all count steps", "type": "number" }
+  ]
+}
