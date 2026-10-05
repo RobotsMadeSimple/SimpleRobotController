@@ -38,6 +38,22 @@ public class GoldenProgramStepTests
     }
 
     [Fact]
+    public void PluginStepFieldsDeserialize()
+    {
+        var step = JsonSerializer.Deserialize<ProgramStep>(File.ReadAllText(GoldenPath), Options)!;
+        Assert.Equal("scale", step.PluginId);
+        Assert.Equal("weigh", step.PluginStepId);
+        Assert.Equal(6, step.PluginParams!.Count);
+        Assert.Equal("$n * 2", step.PluginParams["samples"]);
+        Assert.Equal("Bin {$i}", step.PluginParams["label"]);
+        Assert.Equal(2, step.PluginOutputs!.Count);
+        Assert.Equal("where", step.PluginOutputs[1].Key);
+        Assert.Equal("pickPts", step.PluginOutputs[1].VariableName);
+        Assert.Equal(5000, step.PluginTimeoutMs);
+        Assert.Equal(StepType.Plugin, JsonSerializer.Deserialize<ProgramStep>("""{"id":"p","type":"Plugin"}""", Options)!.Type);
+    }
+
+    [Fact]
     public void RoundTripPreservesEveryGoldenKey()
     {
         var json = File.ReadAllText(GoldenPath);
