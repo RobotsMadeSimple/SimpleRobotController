@@ -271,6 +271,14 @@ namespace Controller.RobotControl
         // ── Webhooks ──────────────────────────────────────────────────────────
         public WebhookManager WebhookManager { get; private set; } = new();
 
+        // ── Plugins ───────────────────────────────────────────────────────────
+        /// <summary>
+        /// External plugin processes (docs/plugins.md). Rooted at the data directory (the
+        /// current directory at construction). Constructed side-effect free; Program.cs
+        /// discovers plugins and starts them once the web host is listening.
+        /// </summary>
+        public Plugins.PluginManager PluginManager { get; private set; } = null!;
+
         // ── Program vision snapshots ──────────────────────────────────────────
         private readonly Dictionary<string, byte[]> _programVisionSnapshots = new();
         private readonly object _visionSnapshotLock = new();
@@ -335,8 +343,27 @@ namespace Controller.RobotControl
                 isBackground: false, globalVars: backgroundProgramManager.GlobalVars,
                 globalImages: backgroundProgramManager.GlobalImages, backgroundManager: backgroundProgramManager);
 
+            PluginManager = CreatePluginManager();
+
             _commands = CommandDispatcher.Create(this, programManager, programExecutor, backgroundProgramManager);
         }
+
+        private Plugins.PluginManager CreatePluginManager() => new(Directory.GetCurrentDirectory(), new Plugins.PluginManagerOptions
+        {
+            // controller.command goes through the dispatcher exactly like a WebSocket client.
+            CommandHandler = async cmd => await AddCommand(cmd),
+            StatusProvider = () => _commands.TryGet("GetStatus", out var getStatus)
+                ? getStatus(new CommandMessage { Type = "Command", Id = "plugin-status", Command = "GetStatus" }).GetAwaiter().GetResult()
+                : null,
+            RobotProvider = () =>
+            {
+                var pos   = GetCurrentPosition();
+                var fault = FaultStatus;
+                return new Plugins.PluginRobotSnapshot(pos.X, pos.Y, pos.Z, pos.RX, pos.RY, pos.RZ, IsMoving,
+                                                       homed, fault.Faulted, fault.Joint, fault.Message);
+            },
+            IoProvider = io => ProgramExecutor.AddIoVariables(this, io),
+        });
 
         private int _started;
 

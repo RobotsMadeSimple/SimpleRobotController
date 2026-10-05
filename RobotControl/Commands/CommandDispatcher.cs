@@ -52,6 +52,7 @@ internal sealed class CommandDispatcher
         new CameraCommands(robot).Register(d);
         new VisionCommands(robot).Register(d);
         new CalibrationCommands(robot).Register(d);
+        new PluginCommands(robot).Register(d);
         return d;
     }
 }
