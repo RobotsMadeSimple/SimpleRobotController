@@ -103,6 +103,8 @@ public sealed class PluginProcessLauncher : IPluginProcessLauncher
         args.AddRange(m.Args ?? new List<string>());
 
         var psi = BuildStartInfo(fileName, args, dir, context.Environment);
+        // Lets the SDKs notice a force-killed controller and exit instead of reconnecting forever.
+        psi.Environment["SRC_PARENT_PID"] = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var log = context.Log;
         process.OutputDataReceived += (_, e) => { if (e.Data != null) log.Append("stdout", e.Data); };
@@ -117,6 +119,7 @@ public sealed class PluginProcessLauncher : IPluginProcessLauncher
         }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+        if (IsWindows) WindowsKillOnCloseJob.TryAssign(process, log);
         log.Append("info", $"Started {Path.GetFileName(fileName)} {string.Join(' ', args)} (pid {process.Id})");
         return new OsPluginProcess(process);
     }
@@ -290,4 +293,117 @@ internal sealed class OsPluginProcess : IPluginProcess
 
     [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
     private static extern int sys_kill(int pid, int sig);
+}
+
+
+/// <summary>
+/// Windows only: one shared Job Object with <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c>. Every launched plugin
+/// is assigned to it, so when the controller dies (even force-killed) the OS closes the job handle and kills
+/// the plugins. Failures are logged once and never fail a launch.
+/// </summary>
+internal static class WindowsKillOnCloseJob
+{
+    private static readonly object Gate = new();
+    private static IntPtr _job;
+    private static bool _initTried;
+    private static bool _warned;
+
+    public static void TryAssign(Process process, PluginLog log)
+    {
+        try
+        {
+            IntPtr job = GetJob();
+            if (job == IntPtr.Zero) { Warn(log, "could not create the job object"); return; }
+            if (!AssignProcessToJobObject(job, process.Handle))
+                Warn(log, $"AssignProcessToJobObject failed (error {Marshal.GetLastWin32Error()})");
+        }
+        catch (Exception ex)
+        {
+            Warn(log, ex.Message);
+        }
+    }
+
+    private static IntPtr GetJob()
+    {
+        lock (Gate)
+        {
+            if (_initTried) return _job;
+            _initTried = true;
+            IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) return _job;
+            var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            int size = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
+            IntPtr ptr = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(info, ptr, false);
+                if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ptr, (uint)size))
+                {
+                    CloseHandle(job);
+                    return _job;
+                }
+            }
+            finally { Marshal.FreeHGlobal(ptr); }
+            _job = job; // never closed: it lives (and kills the children) with this process
+            return _job;
+        }
+    }
+
+    private static void Warn(PluginLog log, string detail)
+    {
+        if (_warned) return;
+        _warned = true;
+        log.Append("warn", $"Windows job object unavailable ({detail}); plugins may outlive a force-killed controller");
+    }
+
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        public ulong ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObjectW(IntPtr attributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(IntPtr job, int infoClass, IntPtr info, uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
 }
