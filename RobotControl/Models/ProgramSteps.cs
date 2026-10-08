@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -290,6 +290,12 @@ public class ProgramStep
 
     // SetTool
     [JsonPropertyName("toolName")]        public string? ToolName { get; set; }
+
+    // SetJointPosition — manually home one joint by declaring its value (no motion).
+    // JointIndex: 0=J1/X, 1=Horizontal/Y, 2=Vertical/Z, 3=J4/RZ. JointValue is the literal;
+    // an Expressions["jointValue"] entry overrides it at runtime (e.g. an external reading).
+    [JsonPropertyName("jointIndex")]      public int     JointIndex { get; set; }
+    [JsonPropertyName("jointValue")]      public double? JointValue { get; set; }
 
     // SetLocal / ClearLocal — also used as per-step local override on move steps
     [JsonPropertyName("localName")]       public string? LocalName { get; set; }

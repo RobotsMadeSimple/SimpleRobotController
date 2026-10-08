@@ -779,6 +779,12 @@ namespace Controller.RobotControl.Validation
                                     CheckExpr(expr, at, $"cncSpec.expressions.{key}");
                         break;
 
+                    case StepType.SetJointPosition:
+                        if (s.JointIndex is < 0 or > 3)
+                            Add(at, ValidationCodes.MissingField,
+                                "Joint must be 0..3 (0=J1/X, 1=Horizontal/Y, 2=Vertical/Z, 3=J4/RZ)", "jointIndex");
+                        break;
+
                     case StepType.Unknown:
                         Add(at, ValidationCodes.UnknownStepType,
                             $"Step type '{s.UnknownStepType ?? "?"}' is not known to this controller; it will be skipped",
