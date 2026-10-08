@@ -209,11 +209,21 @@ namespace Controller.RobotControl
         // replaced by SetConfig, read on the motion, program and WS threads.
         private volatile RobotConfig _config = new();
 
-        // If the Robot was homed from startup
-        // Volatile: written on the motion thread, read on WS/program threads (and
-        // startHoming is requested from those threads).
-        private volatile bool homed = false;
+        // Per-joint "referenced" state as a bitmask over the 4 logical joints:
+        // bit 0 = J1/X, 1 = Horizontal/Y, 2 = Vertical/Z, 3 = J4/RZ. A joint becomes
+        // referenced when it is homed or set to a known value (SetJointPosition). The
+        // robot counts as homed only once all four are referenced. Replaces the old
+        // single `homed` bool. Volatile int, written only on the motion thread (single
+        // writer, so |= is safe), read on WS/program threads.
+        private const int AllJointsReferenced = 0b1111;
+        private volatile int _referencedMask = 0;
         private volatile bool startHoming = false;
+
+        private void MarkJointReferenced(int joint) { if (joint is >= 0 and <= 3) _referencedMask |= 1 << joint; }
+        private void MarkAllReferenced() => _referencedMask = AllJointsReferenced;
+        private void ClearAllReferenced() => _referencedMask = 0;
+        // CNC joint targets live at vector indices X=0, Y=1, Z=2, RZ=5 — map to logical 0..3.
+        private static int CncVectorToLogical(int vectorJoint) => vectorJoint switch { 0 => 0, 1 => 1, 2 => 2, 5 => 3, _ => -1 };
 
         // Homing state machine — ticked by RunHoming on the motion thread.
         private readonly HomingSequencer _homing;
@@ -502,7 +512,7 @@ namespace Controller.RobotControl
                 color = NeoPixelColor.Red;
             else if (startHoming || _homing.IsActive)
                 color = NeoPixelColor.Yellow;
-            else if (!homed)
+            else if (!Homed)
                 color = NeoPixelColor.Orange;
             else if (IsMoving)
                 color = NeoPixelColor.Blue;
@@ -784,9 +794,13 @@ namespace Controller.RobotControl
 
         public void SetConfig(RobotConfig config)
         {
+            var prevType = _config.RobotType;
             _config = config;
             ApplyMotorDirections();
             InitializeKinematics();
+            // A robot-type switch rebuilds the kinematics and invalidates every joint's
+            // position reference, so none of them count as referenced any more.
+            if (config.RobotType != prevType) ClearAllReferenced();
         }
 
         private void InitializeKinematics()
@@ -862,7 +876,13 @@ namespace Controller.RobotControl
         internal IRobotKinematics  Kinematics         => _kinematics;
         internal Vector6           LivePosition       => CurrentPosition;
         internal Vector6           LiveTargetPosition => TargetPosition;
-        internal bool              Homed              => homed;
+        internal bool              Homed              => _referencedMask == AllJointsReferenced;
+        /// <summary>Per-joint referenced state: [J1/X, Horizontal/Y, Vertical/Z, J4/RZ].</summary>
+        internal IReadOnlyList<bool> JointReferenced => new[]
+        {
+            (_referencedMask & 1) != 0, (_referencedMask & 2) != 0,
+            (_referencedMask & 4) != 0, (_referencedMask & 8) != 0,
+        };
         internal string            ActiveToolName     => activeTool;
         internal string            ActiveLocalName    => activeLocal;
 
@@ -899,6 +919,10 @@ namespace Controller.RobotControl
         });
 
         internal void RequestSetHomed() => PostToMotionThread(SetAllHomed);
+
+        /// <summary>Declare one logical joint (0..3) to be at <paramref name="value"/> now — no motion.</summary>
+        internal void RequestSetJointPosition(int joint, double value)
+            => PostToMotionThread(() => SetJointPosition(joint, value));
 
         internal void StopJog()
         {
@@ -1147,6 +1171,53 @@ namespace Controller.RobotControl
             }
 
             stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
+            MarkAllReferenced();
+        }
+
+        /// <summary>
+        /// Declares one logical joint to be at <paramref name="value"/> right now, with no
+        /// motion — the manual / external-stimulus counterpart of the per-axis "set homed" the
+        /// homing sequence runs. Writes the value into the kinematics, overwrites the STB motor
+        /// targets from the new pose, and marks the joint referenced. Motion thread only.
+        /// joint: 0=J1/X, 1=Horizontal/Y, 2=Vertical/Z, 3=J4/RZ.
+        /// </summary>
+        public void SetJointPosition(int joint, double value)
+        {
+            if (_kinematics is ASTROKinematics astro)
+            {
+                switch (joint)
+                {
+                    case 0:
+                        astro.InterpolatedJoint1.JointAngleDeg = value;
+                        astro.CurrentJoint1.JointAngleDeg      = value;
+                        break;
+                    case 1:
+                        astro.InterpolatedJoint2.Cartesian = (value, astro.InterpolatedJoint2.Cartesian.z);
+                        astro.CurrentJoint2.Cartesian      = (value, astro.CurrentJoint2.Cartesian.z);
+                        break;
+                    case 2:
+                        astro.InterpolatedJoint2.Cartesian = (astro.InterpolatedJoint2.Cartesian.x, value);
+                        astro.CurrentJoint2.Cartesian      = (astro.CurrentJoint2.Cartesian.x, value);
+                        break;
+                    case 3:
+                        astro.InterpolatedJoint4.JointAngleDeg = value;
+                        astro.CurrentJoint4.JointAngleDeg      = value;
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(joint), "joint must be 0..3");
+                }
+                CommitAstroHomedJoints();
+            }
+            else
+            {
+                // CNC4Axis: logical 0..3 map to vector targets X/Y/Z/RZ (0/1/2/5).
+                SetCncJointHomed(joint switch
+                {
+                    0 => 0, 1 => 1, 2 => 2, 3 => 5,
+                    _ => throw new ArgumentOutOfRangeException(nameof(joint), "joint must be 0..3"),
+                }, value);
+            }
+            MarkJointReferenced(joint);
         }
         // ── Homing ────────────────────────────────────────────────────────────
         // Motion thread only. One sequencer phase per tick — see HomingSequencer.
@@ -1162,7 +1233,7 @@ namespace Controller.RobotControl
                 case HomingPhase.Complete:
                     startHoming = false;
                     _homing.Reset();
-                    homed = true;
+                    MarkAllReferenced();
                     break;
 
                 default:
@@ -1228,6 +1299,7 @@ namespace Controller.RobotControl
             var astro = Astro;
             astro.InterpolatedJoint2.Cartesian = (astro.InterpolatedJoint2.Cartesian.x, _config.VerticalHomePosition);
             astro.CurrentJoint2.Cartesian      = (astro.CurrentJoint2.Cartesian.x,      _config.VerticalHomePosition);
+            MarkJointReferenced(2);
             CommitAstroHomedJoints();
         }
 
@@ -1236,6 +1308,7 @@ namespace Controller.RobotControl
             var astro = Astro;
             astro.InterpolatedJoint2.Cartesian = (_config.HorizontalHomePosition, astro.InterpolatedJoint2.Cartesian.z);
             astro.CurrentJoint2.Cartesian      = (_config.HorizontalHomePosition, astro.CurrentJoint2.Cartesian.z);
+            MarkJointReferenced(1);
             CommitAstroHomedJoints();
         }
 
@@ -1244,6 +1317,7 @@ namespace Controller.RobotControl
             var astro = Astro;
             astro.InterpolatedJoint1.JointAngleDeg = _config.J1HomeOffsetDeg;
             astro.CurrentJoint1.JointAngleDeg      = _config.J1HomeOffsetDeg;
+            MarkJointReferenced(0);
             CommitAstroHomedJoints();
         }
 
@@ -1252,6 +1326,7 @@ namespace Controller.RobotControl
             var astro = Astro;
             astro.InterpolatedJoint4.JointAngleDeg = _config.J4HomeOffsetDeg;
             astro.CurrentJoint4.JointAngleDeg      = _config.J4HomeOffsetDeg;
+            MarkJointReferenced(3);
             CommitAstroHomedJoints();
         }
 
@@ -1280,6 +1355,7 @@ namespace Controller.RobotControl
             _kinematics.UpdateMotorTargets(CurrentJointTargets, out double m1Deg, out double m2Deg, out double m3Deg, out double m4Deg);
             stb.OverwriteMotorTargets(m1Deg, m2Deg, m3Deg, m4Deg);
             CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
+            MarkJointReferenced(CncVectorToLogical(joint));
         }
 
         // IHomingHost — called by the sequencer on the motion thread.

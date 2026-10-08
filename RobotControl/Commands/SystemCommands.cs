@@ -76,6 +76,9 @@ internal sealed class SystemCommands
         {
             moving = robot.IsMoving,
             wasHomed = robot.Homed,
+            // Per-joint referenced state [J1/X, Horizontal/Y, Vertical/Z, J4/RZ] — a joint is
+            // referenced once homed or set to a known value; wasHomed is all four.
+            jointReferenced = robot.JointReferenced,
             homingState,
             isHoming = homingState != HomingSequencer.IdleStateName,
             lastPointUpdate = robot.pointRepo.LastUpdatedUnixMs,
