@@ -98,6 +98,10 @@ namespace Controller.RobotControl.AuxAxis
         public void ZeroPosition(string deviceId, int axis) =>
             GetDevice(deviceId)?.ZeroPosition(axis);
 
+        /// <summary>Resolve (set, or clear with 0) the tracked step position of an axis without moving it.</summary>
+        public void SetPosition(string deviceId, int axis, long steps) =>
+            GetDevice(deviceId)?.SetPosition(axis, steps);
+
         // ── State query ───────────────────────────────────────────────────────
 
         public List<AuxAxisState> GetState()
@@ -120,12 +124,16 @@ namespace Controller.RobotControl.AuxAxis
                     {
                         AxisIndex       = a.AxisIndex,
                         Name            = a.Name,
-                        Active          = false,
+                        Active          = device.IsMoving,
+                        Position        = device.GetPosition(a.AxisIndex),
                         StepsPerRev     = a.StepsPerRev,
                         InvertDirection = a.InvertDirection,
                         AxisType        = a.AxisType,
                         GearRatio       = a.GearRatio,
                         MmPerRev        = a.MmPerRev,
+                        Role            = a.Role,
+                        ActionDistance  = a.ActionDistance,
+                        ActionVelocity  = a.ActionVelocity,
                     }).ToList() ?? new(),
                 });
             }
@@ -145,6 +153,9 @@ namespace Controller.RobotControl.AuxAxis
             axis.AxisType        = patch.AxisType;
             axis.GearRatio       = patch.GearRatio;
             axis.MmPerRev        = patch.MmPerRev;
+            axis.Role            = patch.Role;
+            axis.ActionDistance  = patch.ActionDistance;
+            axis.ActionVelocity  = patch.ActionVelocity;
             Save(_config);
         }
 

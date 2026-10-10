@@ -54,6 +54,18 @@ public class SetAuxAxisConfigParams
     public AuxAxis.AuxAxisType AxisType { get; set; } = AuxAxis.AuxAxisType.Unconfigured;
     [JsonPropertyName("gearRatio")]      public double GearRatio      { get; set; } = 1.0;
     [JsonPropertyName("mmPerRev")]       public double MmPerRev       { get; set; } = 0.0;
+    [JsonPropertyName("role"), JsonConverter(typeof(AuxAxis.AuxAxisRoleJsonConverter))]
+    public AuxAxis.AuxAxisRole Role { get; set; } = AuxAxis.AuxAxisRole.Generic;
+    [JsonPropertyName("actionDistance")] public double ActionDistance { get; set; } = 0.0;
+    [JsonPropertyName("actionVelocity")] public double ActionVelocity { get; set; } = 0.0;
+}
+
+public class SetAuxPositionParams
+{
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "AUX_STEPPER_001";
+    [JsonPropertyName("axis")]     public int    Axis     { get; set; }
+    /// <summary>Tracked step position to declare (0 clears / zeroes the axis).</summary>
+    [JsonPropertyName("steps")]    public long   Steps    { get; set; }
 }
 
 

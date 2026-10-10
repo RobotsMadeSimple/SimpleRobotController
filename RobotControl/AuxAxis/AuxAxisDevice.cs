@@ -176,5 +176,12 @@ namespace Controller.RobotControl.AuxAxis
         {
             lock (_lock) { if ((uint)axis < 4) _position[axis] = 0; }
         }
+
+        /// <summary>Declare the tracked step position for an axis — resolves ("sets" or, with 0,
+        /// "clears") the dead-reckoned position without moving the motor.</summary>
+        public void SetPosition(int axis, long steps)
+        {
+            lock (_lock) { if ((uint)axis < 4) _position[axis] = steps; }
+        }
     }
 }

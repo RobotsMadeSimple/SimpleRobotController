@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -374,6 +374,16 @@ public class ProgramStep
     [JsonPropertyName("auxAbsolute")]    public bool?   AuxAbsolute    { get; set; }
     // AuxEnable — enable or disable motor drivers
     [JsonPropertyName("auxEnable")]      public bool?   AuxEnable      { get; set; }
+
+    // Role-specific aux steps (reuse auxDeviceId/auxAxisIndex above). These use the axis's
+    // configured actionDistance/actionVelocity unless overridden by the aux* fields above.
+    // GripperAction: "Open" | "Close".
+    [JsonPropertyName("gripperAction")]  public string? GripperAction  { get; set; }
+    // ConveyorAction: "RunForward" | "RunReverse" | "Stop" (continuous; a later Stop ends a run).
+    [JsonPropertyName("conveyorAction")] public string? ConveyorAction { get; set; }
+    // RotaryIndex: direction +1 / -1, and how many index increments to advance.
+    [JsonPropertyName("rotaryDirection")] public int? RotaryDirection { get; set; }
+    [JsonPropertyName("rotaryCount")]     public int? RotaryCount     { get; set; }
 
     // ThreadMove
     [JsonPropertyName("threadDistance")]   public double? ThreadDistance   { get; set; }

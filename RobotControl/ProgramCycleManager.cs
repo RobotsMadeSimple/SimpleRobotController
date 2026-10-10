@@ -14,6 +14,16 @@ namespace Controller.RobotControl
         private readonly Dictionary<string, ProgramModel> _programs = new();
         private readonly object _lock = new();
 
+        /// <summary>
+        /// Bumped whenever the program LIST or any list-level field changes (membership,
+        /// description, status transition, error/warning, action flags, run count). Live
+        /// per-step progress does NOT bump it — that rides the compact activePrograms block in
+        /// the status broadcast. Mirrors the repo lastXUpdate pattern: the app re-fetches the
+        /// full summary via GetPrograms only when this changes, instead of per-poll.
+        /// </summary>
+        public long LastUpdatedUnixMs { get; private set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        private void Touch() => LastUpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
         // ── Registration ─────────────────────────────────────────────────────
 
         /// <summary>
@@ -23,7 +33,7 @@ namespace Controller.RobotControl
         /// </summary>
         public void RemoveProgram(string name)
         {
-            lock (_lock) { _programs.Remove(name); }
+            lock (_lock) { if (_programs.Remove(name)) Touch(); }
         }
 
         public void SetAvailablePrograms(List<ProgramUpdateParams> programs)
@@ -47,6 +57,7 @@ namespace Controller.RobotControl
                         };
                     }
                 }
+                Touch();
             }
         }
 
@@ -64,18 +75,27 @@ namespace Controller.RobotControl
                 if (!_programs.TryGetValue(update.ProgramName, out var program))
                     return;
 
+                // Track list-level changes (status transition / error / warning) — these bump
+                // LastUpdatedUnixMs so the app re-fetches the full summary. Per-step progress
+                // (step number, offsets, step description) does NOT bump it; it rides the
+                // compact activePrograms live block instead.
+                bool listLevelChanged = false;
+
                 if (update.ProgramStatus.HasValue)
                 {
                     var incoming        = update.ProgramStatus.Value;
                     var isProgressOnly  = incoming == ProgramStatus.Running || incoming == ProgramStatus.Starting || incoming == ProgramStatus.Finishing;
                     var isTerminal      = program.Status == ProgramStatus.Stopped || program.Status == ProgramStatus.Complete || program.Status == ProgramStatus.Error;
                     if (!isProgressOnly || !isTerminal)
+                    {
+                        if (program.Status != incoming) listLevelChanged = true;
                         program.Status  = incoming;
+                    }
                 }
                 if (update.CurrentStepNumber.HasValue) program.CurrentStepNumber    = update.CurrentStepNumber.Value;
                 if (update.MaxStepCount.HasValue)      program.MaxStepCount         = update.MaxStepCount.Value;
-                if (update.ErrorDescription      != null)  program.ErrorDescription     = update.ErrorDescription;
-                if (update.WarningDescription    != null)  program.WarningDescription   = update.WarningDescription;
+                if (update.ErrorDescription      != null && update.ErrorDescription   != program.ErrorDescription)   { program.ErrorDescription   = update.ErrorDescription;   listLevelChanged = true; }
+                if (update.WarningDescription    != null && update.WarningDescription != program.WarningDescription) { program.WarningDescription = update.WarningDescription; listLevelChanged = true; }
                 if (update.CurrentPointName != null)
                 {
                     program.CurrentPointName = update.CurrentPointName;
@@ -114,6 +134,8 @@ namespace Controller.RobotControl
                         }
                     }
                 }
+
+                if (listLevelChanged) Touch();
             }
         }
 
@@ -137,6 +159,7 @@ namespace Controller.RobotControl
                     case "Reset": program.Reset = true; break;
                     case "Abort": program.Abort = true; break;
                 }
+                Touch();
             }
         }
 
@@ -152,6 +175,7 @@ namespace Controller.RobotControl
                 if (!_programs.TryGetValue(programName, out var program)) return;
                 program.RunCount++;
                 program.LastStartedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                Touch();
             }
         }
 
@@ -168,6 +192,7 @@ namespace Controller.RobotControl
                 program.CurrentStepDescription = "";
                 program.ErrorDescription       = "";
                 program.WarningDescription     = "";
+                Touch();
             }
         }
 
@@ -182,7 +207,10 @@ namespace Controller.RobotControl
             {
                 if (!_programs.TryGetValue(programName, out var p)) return;
                 if (p.Status == ProgramStatus.Stopped)
+                {
                     p.Status = ProgramStatus.Running;
+                    Touch();
+                }
             }
         }
 
@@ -195,6 +223,7 @@ namespace Controller.RobotControl
         {
             lock (_lock)
             {
+                bool changed = false;
                 foreach (var (name, maxSteps) in programs)
                 {
                     if (!_programs.TryGetValue(name, out var p)) continue;
@@ -206,7 +235,9 @@ namespace Controller.RobotControl
                     p.CurrentStepDescription = "";
                     p.ErrorDescription       = "";
                     p.WarningDescription     = "";
+                    changed = true;
                 }
+                if (changed) Touch();
             }
         }
 
@@ -221,10 +252,12 @@ namespace Controller.RobotControl
                 if (!_programs.TryGetValue(programName, out var program))
                     return;
 
+                bool any = program.Start || program.Stop || program.Reset || program.Abort;
                 program.Start = false;
                 program.Stop  = false;
                 program.Reset = false;
                 program.Abort = false;
+                if (any) Touch();
             }
         }
 
@@ -268,6 +301,44 @@ namespace Controller.RobotControl
                     reset                  = p.Reset,
                     abort                  = p.Abort
                 }).ToList();
+            }
+        }
+
+        /// <summary>
+        /// Compact live progress for programs that are actively running — broadcast every
+        /// status poll so the monitor view stays real-time without re-fetching the full
+        /// summary. Usually 0 or 1 entries. List-level fields (status transitions, run count,
+        /// flags) travel via GetProgramsSummary behind <see cref="LastUpdatedUnixMs"/>.
+        /// </summary>
+        public List<object> GetActivePrograms()
+        {
+            lock (_lock)
+            {
+                return _programs.Values
+                    .Where(p => p.Status == ProgramStatus.Running
+                             || p.Status == ProgramStatus.Starting
+                             || p.Status == ProgramStatus.Finishing)
+                    .Select(p => (object)new
+                    {
+                        name                   = p.Name,
+                        status                 = p.Status.ToString(),
+                        currentStepDescription = p.CurrentStepDescription,
+                        currentStepNumber      = p.CurrentStepNumber,
+                        maxStepCount           = p.MaxStepCount,
+                        currentPointName       = p.CurrentPointName,
+                        currentOffsetX         = p.CurrentOffsetX,
+                        currentOffsetY         = p.CurrentOffsetY,
+                        currentOffsetZ         = p.CurrentOffsetZ,
+                        currentOffsetRX        = p.CurrentOffsetRX,
+                        currentOffsetRY        = p.CurrentOffsetRY,
+                        currentOffsetRZ        = p.CurrentOffsetRZ,
+                        currentToolOffsetX     = p.CurrentToolOffsetX,
+                        currentToolOffsetY     = p.CurrentToolOffsetY,
+                        currentToolOffsetZ     = p.CurrentToolOffsetZ,
+                        currentToolOffsetRX    = p.CurrentToolOffsetRX,
+                        currentToolOffsetRY    = p.CurrentToolOffsetRY,
+                        currentToolOffsetRZ    = p.CurrentToolOffsetRZ,
+                    }).ToList();
             }
         }
 
