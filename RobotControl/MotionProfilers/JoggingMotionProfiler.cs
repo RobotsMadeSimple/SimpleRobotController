@@ -44,21 +44,24 @@ namespace Controller.RobotControl.MotionProfilers
                   )
                 : Vector6.Zero;
 
-            double rate = enabled ? Math.Abs(accel) : Math.Abs(decel);
-            double maxDv = rate * dt;
+            // Pick the ramp rate per axis: accel while an axis is building speed toward its
+            // target, decel while it's slowing toward (or reversing through) zero. Tying decel
+            // only to the disabled state meant a joystick reversal — target flips sign while the
+            // jog stays enabled — ramped down through zero at `accel` instead of `decel`. This is
+            // behaviour-identical for the button pad (a release drives target to 0, so every axis
+            // decelerates) while giving the joystick a proper decel before it changes direction.
+            double aRate = Math.Abs(accel);
+            double dRate = Math.Abs(decel);
+            double dt2 = dt;
 
-            Vector6 velPrev = _vel;
-
-            _vel = (maxDv <= 0)
-                ? targetVel
-                : new Vector6(
-                    MoveTowards(_vel.X, targetVel.X, maxDv),
-                    MoveTowards(_vel.Y, targetVel.Y, maxDv),
-                    MoveTowards(_vel.Z, targetVel.Z, maxDv),
-                    MoveTowards(_vel.RX, targetVel.RX, maxDv),
-                    MoveTowards(_vel.RY, targetVel.RY, maxDv),
-                    MoveTowards(_vel.RZ, targetVel.RZ, maxDv)
-                  );
+            _vel = new Vector6(
+                StepAxis(_vel.X,  targetVel.X,  aRate, dRate, dt2),
+                StepAxis(_vel.Y,  targetVel.Y,  aRate, dRate, dt2),
+                StepAxis(_vel.Z,  targetVel.Z,  aRate, dRate, dt2),
+                StepAxis(_vel.RX, targetVel.RX, aRate, dRate, dt2),
+                StepAxis(_vel.RY, targetVel.RY, aRate, dRate, dt2),
+                StepAxis(_vel.RZ, targetVel.RZ, aRate, dRate, dt2)
+              );
 
             if (!enabled && IsNearlyZero(_vel))
             {
@@ -137,6 +140,21 @@ namespace Controller.RobotControl.MotionProfilers
             double delta = target - current;
             if (Math.Abs(delta) <= maxDelta) return target;
             return current + Math.Sign(delta) * maxDelta;
+        }
+
+        // Ramp one axis toward its target, choosing accel vs decel by whether the axis is
+        // building speed or slowing toward/through zero. An axis is "decelerating" when its
+        // target has a smaller magnitude than its current velocity, or points the opposite way
+        // (a reversal first bleeds speed down to zero at decel, then builds up the other way at
+        // accel). maxDelta <= 0 snaps straight to target (matches the old maxDv<=0 path).
+        private static double StepAxis(double current, double target, double accel, double decel, double dt)
+        {
+            bool reversing     = current != 0 && Math.Sign(target) != Math.Sign(current);
+            bool decelerating  = reversing || Math.Abs(target) < Math.Abs(current);
+            double rate        = decelerating ? decel : accel;
+            double maxDelta     = rate * dt;
+            if (maxDelta <= 0) return target;
+            return MoveTowards(current, target, maxDelta);
         }
 
         private bool IsNearlyZero(Vector6 v) =>
