@@ -377,8 +377,12 @@ public class ProgramStep
 
     // Role-specific aux steps (reuse auxDeviceId/auxAxisIndex above). These use the axis's
     // configured actionDistance/actionVelocity unless overridden by the aux* fields above.
-    // GripperAction: "Open" | "Close".
+    // GripperAction: "Open" | "Close" | "GripTo". Open/Close drive to the configured
+    // gap limits; GripTo drives to gripTargetMm. auxVelocity (mm/s) and auxAccel (mm/s²)
+    // optionally override the gripper's time-derived speed and configured accel.
     [JsonPropertyName("gripperAction")]  public string? GripperAction  { get; set; }
+    // GripperAction == "GripTo": absolute jaw-gap target (mm), clamped to [closed, open].
+    [JsonPropertyName("gripTargetMm")]   public double? GripTargetMm   { get; set; }
     // ConveyorAction: "RunForward" | "RunReverse" | "Stop" (continuous; a later Stop ends a run).
     [JsonPropertyName("conveyorAction")] public string? ConveyorAction { get; set; }
     // RotaryIndex: direction +1 / -1, and how many index increments to advance.

@@ -32,6 +32,25 @@ namespace Controller.RobotControl.AuxAxis
                 var device = new AuxAxisDevice(cfg);
                 lock (_devicesLock) _devices.Add(device);
                 device.Start();
+                foreach (var a in cfg.Axes) ApplyAxisBounds(device, a);
+            }
+        }
+
+        // A gripper's tracked position is a jaw gap confined to [closed, open]; pin the device's
+        // soft bounds there so over-driving a hard stop can't advance the dead-reckoned position
+        // past the physical limit. Any other role stays unbounded.
+        private static void ApplyAxisBounds(AuxAxisDevice device, AuxAxisChannelConfig a)
+        {
+            double spu = a.StepsPerUnit();
+            if (a.Role == AuxAxisRole.Gripper && spu > 0 && a.GripperOpenMm != a.GripperClosedMm)
+            {
+                double loMm = Math.Min(a.GripperOpenMm, a.GripperClosedMm);
+                double hiMm = Math.Max(a.GripperOpenMm, a.GripperClosedMm);
+                device.SetPositionBounds(a.AxisIndex, (long)Math.Round(loMm * spu), (long)Math.Round(hiMm * spu));
+            }
+            else
+            {
+                device.ClearPositionBounds(a.AxisIndex);
             }
         }
 
@@ -134,6 +153,12 @@ namespace Controller.RobotControl.AuxAxis
                         Role            = a.Role,
                         ActionDistance  = a.ActionDistance,
                         ActionVelocity  = a.ActionVelocity,
+                        GripperOpenMm   = a.GripperOpenMm,
+                        GripperClosedMm = a.GripperClosedMm,
+                        GripperOpenTimeSec  = a.GripperOpenTimeSec,
+                        GripperCloseTimeSec = a.GripperCloseTimeSec,
+                        GripperAccel        = a.GripperAccel,
+                        GripperOverTravelMm = a.GripperOverTravelMm,
                     }).ToList() ?? new(),
                 });
             }
@@ -156,7 +181,17 @@ namespace Controller.RobotControl.AuxAxis
             axis.Role            = patch.Role;
             axis.ActionDistance  = patch.ActionDistance;
             axis.ActionVelocity  = patch.ActionVelocity;
+            axis.GripperOpenMm   = patch.GripperOpenMm;
+            axis.GripperClosedMm = patch.GripperClosedMm;
+            axis.GripperOpenTimeSec  = patch.GripperOpenTimeSec;
+            axis.GripperCloseTimeSec = patch.GripperCloseTimeSec;
+            axis.GripperAccel        = patch.GripperAccel;
+            axis.GripperOverTravelMm = patch.GripperOverTravelMm;
             Save(_config);
+
+            // Re-pin the live device's soft bounds — role or gap limits may have just changed.
+            var device = GetDevice(deviceId);
+            if (device != null) ApplyAxisBounds(device, axis);
         }
 
         // ── Config persistence ────────────────────────────────────────────────

@@ -58,6 +58,12 @@ public class SetAuxAxisConfigParams
     public AuxAxis.AuxAxisRole Role { get; set; } = AuxAxis.AuxAxisRole.Generic;
     [JsonPropertyName("actionDistance")] public double ActionDistance { get; set; } = 0.0;
     [JsonPropertyName("actionVelocity")] public double ActionVelocity { get; set; } = 0.0;
+    [JsonPropertyName("gripperOpenMm")]   public double GripperOpenMm   { get; set; } = 0.0;
+    [JsonPropertyName("gripperClosedMm")] public double GripperClosedMm { get; set; } = 0.0;
+    [JsonPropertyName("gripperOpenTimeSec")]  public double GripperOpenTimeSec  { get; set; } = 0.0;
+    [JsonPropertyName("gripperCloseTimeSec")] public double GripperCloseTimeSec { get; set; } = 0.0;
+    [JsonPropertyName("gripperAccel")]        public double GripperAccel        { get; set; } = 0.0;
+    [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
 }
 
 public class SetAuxPositionParams

@@ -102,8 +102,27 @@ namespace Controller.RobotControl.AuxAxis
         // Gripper Open/Close travel and RotaryTable index increment, in the axis's physical
         // unit (mm/deg) when AxisType is set, else raw steps.
         [JsonPropertyName("actionDistance")]  public double ActionDistance  { get; set; } = 0.0;
-        // Move/run speed (steps/s) for Gripper/RotaryTable moves and Conveyor run.
+        // Role speed, in the axis's physical unit per second (mm/s for a Linear gripper/conveyor,
+        // deg/s for rotary, else steps/s). The app converts to steps/s via StepsPerUnit().
         [JsonPropertyName("actionVelocity")]  public double ActionVelocity  { get; set; } = 0.0;
+
+        // ── Gripper geometry (Role == Gripper) ────────────────────────────────────
+        // Jaw-gap width (in the Linear unit, mm) at the two mechanical extremes. Open/Close
+        // actions drive to these; "grip to X" drives to an absolute gap clamped to [Closed, Open].
+        // Editable + re-captured from the live position so a gripper that has lost steps can be
+        // re-referenced in either direction.
+        [JsonPropertyName("gripperOpenMm")]   public double GripperOpenMm   { get; set; } = 0.0;
+        [JsonPropertyName("gripperClosedMm")] public double GripperClosedMm { get; set; } = 0.0;
+        // Gripper motion. The per-direction speed is derived from the full-stroke time
+        // (speed = |Open-Closed| / time) so "open in 0.8 s" is honoured whatever the gap
+        // target is; 0 = fall back to ActionVelocity. GripperAccel is the ramp in mm/s².
+        [JsonPropertyName("gripperOpenTimeSec")]  public double GripperOpenTimeSec  { get; set; } = 0.0;
+        [JsonPropertyName("gripperCloseTimeSec")] public double GripperCloseTimeSec { get; set; } = 0.0;
+        [JsonPropertyName("gripperAccel")]        public double GripperAccel        { get; set; } = 0.0;
+        // Extra travel (mm) driven past a hard stop on a full Open/Close so the jaws seat
+        // firmly against the mechanical limit; the tracked position then re-references at the
+        // clamped limit (it can never read past [Closed, Open]). 0 = don't over-travel.
+        [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
 
         /// <summary>Steps per physical output unit (mm for Linear, degrees for Rotary).
         /// Returns 0 when the axis is not configured (use raw steps instead).</summary>
@@ -149,5 +168,11 @@ namespace Controller.RobotControl.AuxAxis
         public AuxAxisRole Role { get; set; } = AuxAxisRole.Generic;
         [JsonPropertyName("actionDistance")]  public double ActionDistance  { get; set; } = 0.0;
         [JsonPropertyName("actionVelocity")]  public double ActionVelocity  { get; set; } = 0.0;
+        [JsonPropertyName("gripperOpenMm")]   public double GripperOpenMm   { get; set; } = 0.0;
+        [JsonPropertyName("gripperClosedMm")] public double GripperClosedMm { get; set; } = 0.0;
+        [JsonPropertyName("gripperOpenTimeSec")]  public double GripperOpenTimeSec  { get; set; } = 0.0;
+        [JsonPropertyName("gripperCloseTimeSec")] public double GripperCloseTimeSec { get; set; } = 0.0;
+        [JsonPropertyName("gripperAccel")]        public double GripperAccel        { get; set; } = 0.0;
+        [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
     }
 }

@@ -82,6 +82,12 @@ internal sealed class AuxCommands
             Role            = p.Role,
             ActionDistance  = p.ActionDistance,
             ActionVelocity  = p.ActionVelocity,
+            GripperOpenMm   = p.GripperOpenMm,
+            GripperClosedMm = p.GripperClosedMm,
+            GripperOpenTimeSec  = p.GripperOpenTimeSec,
+            GripperCloseTimeSec = p.GripperCloseTimeSec,
+            GripperAccel        = p.GripperAccel,
+            GripperOverTravelMm = p.GripperOverTravelMm,
         });
     }
 

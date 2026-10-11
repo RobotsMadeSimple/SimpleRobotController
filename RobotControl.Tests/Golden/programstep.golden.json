@@ -89,6 +89,7 @@
   "auxAbsolute": false,
   "auxEnable": true,
   "gripperAction": "Open",
+  "gripTargetMm": 30,
   "conveyorAction": "RunForward",
   "rotaryDirection": 1,
   "rotaryCount": 1,
