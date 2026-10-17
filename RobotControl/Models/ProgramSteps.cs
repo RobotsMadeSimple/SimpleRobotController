@@ -155,6 +155,13 @@ public class ProgramStep
     // MoveL / MoveJ / SetSpeedL / SetSpeedJ
     [JsonPropertyName("pointName")]
     public string? PointName { get; set; }
+    /// <summary>
+    /// Stable id of the referenced saved point. Preferred over <see cref="PointName"/>
+    /// at resolution time so a renamed point keeps resolving. Null on programs saved
+    /// before ids existed — those fall back to PointName.
+    /// </summary>
+    [JsonPropertyName("pointId")]
+    public string? PointId { get; set; }
     [JsonPropertyName("speed")]
     public double? Speed { get; set; }
     [JsonPropertyName("accel")]
