@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, AuxMove, AuxContinuous, AuxStop, AuxEnable, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -291,6 +291,12 @@ public class ProgramStep
     // SetTool
     [JsonPropertyName("toolName")]        public string? ToolName { get; set; }
 
+    // SetJointPosition — manually home one joint by declaring its value (no motion).
+    // JointIndex: 0=J1/X, 1=Horizontal/Y, 2=Vertical/Z, 3=J4/RZ. JointValue is the literal;
+    // an Expressions["jointValue"] entry overrides it at runtime (e.g. an external reading).
+    [JsonPropertyName("jointIndex")]      public int     JointIndex { get; set; }
+    [JsonPropertyName("jointValue")]      public double? JointValue { get; set; }
+
     // SetLocal / ClearLocal — also used as per-step local override on move steps
     [JsonPropertyName("localName")]       public string? LocalName { get; set; }
 
@@ -368,6 +374,20 @@ public class ProgramStep
     [JsonPropertyName("auxAbsolute")]    public bool?   AuxAbsolute    { get; set; }
     // AuxEnable — enable or disable motor drivers
     [JsonPropertyName("auxEnable")]      public bool?   AuxEnable      { get; set; }
+
+    // Role-specific aux steps (reuse auxDeviceId/auxAxisIndex above). These use the axis's
+    // configured actionDistance/actionVelocity unless overridden by the aux* fields above.
+    // GripperAction: "Open" | "Close" | "GripTo". Open/Close drive to the configured
+    // gap limits; GripTo drives to gripTargetMm. auxVelocity (mm/s) and auxAccel (mm/s²)
+    // optionally override the gripper's time-derived speed and configured accel.
+    [JsonPropertyName("gripperAction")]  public string? GripperAction  { get; set; }
+    // GripperAction == "GripTo": absolute jaw-gap target (mm), clamped to [closed, open].
+    [JsonPropertyName("gripTargetMm")]   public double? GripTargetMm   { get; set; }
+    // ConveyorAction: "RunForward" | "RunReverse" | "Stop" (continuous; a later Stop ends a run).
+    [JsonPropertyName("conveyorAction")] public string? ConveyorAction { get; set; }
+    // RotaryIndex: direction +1 / -1, and how many index increments to advance.
+    [JsonPropertyName("rotaryDirection")] public int? RotaryDirection { get; set; }
+    [JsonPropertyName("rotaryCount")]     public int? RotaryCount     { get; set; }
 
     // ThreadMove
     [JsonPropertyName("threadDistance")]   public double? ThreadDistance   { get; set; }

@@ -18,6 +18,7 @@ internal sealed class AuxCommands
         d.Add("JogAux",           JogAux);
         d.Add("StopAux",          StopAux);
         d.Add("SetAuxAxisConfig", SetAuxAxisConfig);
+        d.Add("SetAuxPosition",   SetAuxPosition);
         d.Add("EnableAux",        EnableAux);
     }
 
@@ -53,7 +54,17 @@ internal sealed class AuxCommands
     private void StopAux(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<StopAuxParams>(msg);
-        _robot.StopAux(p.Decel, p.Immediate);
+        // Stop a specific axis when one is named (e.g. a Conveyor Stop button); otherwise fall
+        // back to stopping the last-active aux axis.
+        if (p.Axis.HasValue && !string.IsNullOrEmpty(p.DeviceId))
+        {
+            if (p.Immediate) _robot.AuxAxisManager.StopAll(p.DeviceId);
+            else             _robot.AuxAxisManager.StopSmooth(p.DeviceId, p.Axis.Value, (int)System.Math.Max(1, p.Decel));
+        }
+        else
+        {
+            _robot.StopAux(p.Decel, p.Immediate);
+        }
     }
 
     private void SetAuxAxisConfig(CommandMessage msg)
@@ -68,7 +79,22 @@ internal sealed class AuxCommands
             AxisType        = p.AxisType,
             GearRatio       = p.GearRatio,
             MmPerRev        = p.MmPerRev,
+            Role            = p.Role,
+            ActionDistance  = p.ActionDistance,
+            ActionVelocity  = p.ActionVelocity,
+            GripperOpenMm   = p.GripperOpenMm,
+            GripperClosedMm = p.GripperClosedMm,
+            GripperOpenTimeSec  = p.GripperOpenTimeSec,
+            GripperCloseTimeSec = p.GripperCloseTimeSec,
+            GripperAccel        = p.GripperAccel,
+            GripperOverTravelMm = p.GripperOverTravelMm,
         });
+    }
+
+    private void SetAuxPosition(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<SetAuxPositionParams>(msg);
+        _robot.AuxAxisManager.SetPosition(p.DeviceId, p.Axis, p.Steps);
     }
 
     private void EnableAux(CommandMessage msg)

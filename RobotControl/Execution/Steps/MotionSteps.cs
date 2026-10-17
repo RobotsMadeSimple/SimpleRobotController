@@ -18,6 +18,7 @@ namespace Controller.RobotControl.Execution
             r[StepType.SetLocal]       = new SetLocalStep();
             r[StepType.ClearLocal]     = new ClearLocalStep();
             r[StepType.RunHoming]      = new RunHomingStep();
+            r[StepType.SetJointPosition] = new SetJointPositionStep();
         }
 
         // Effective blend radius for a move: its own override if set, else the program default.
@@ -398,6 +399,20 @@ namespace Controller.RobotControl.Execution
         public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
         {
             ctx.Controller.ApplyTool(step.ToolName);
+            return StepOutcome.Advance;
+        }
+    }
+
+    // Declares one joint to be at a known value (manual homing of a single joint) — no motion.
+    // The value is a literal with optional runtime expression override ("jointValue"), so an
+    // external reading captured by an earlier step can drive it. Posted to the motion thread,
+    // which drains control actions before queued moves, so a following move sees the new pose.
+    internal sealed class SetJointPositionStep : IStepHandler
+    {
+        public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
+        {
+            double value = ctx.Eval.EvalField(step, "jointValue", step.JointValue ?? 0);
+            ctx.Controller.RequestSetJointPosition(step.JointIndex, value);
             return StepOutcome.Advance;
         }
     }

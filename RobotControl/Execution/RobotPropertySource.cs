@@ -75,6 +75,10 @@ namespace Controller.RobotControl.Execution
             new("robot.joint2x", "Joint 2 X readout",    "number", Group.Robot, r => r.Kinematics.GetJointAngles().joint2x),
             new("robot.joint2z", "Joint 2 Z readout",    "number", Group.Robot, r => r.Kinematics.GetJointAngles().joint2z),
             new("robot.joint4",  "Joint 4 angle (deg)",  "number", Group.Robot, r => r.Kinematics.GetJointAngles().joint4),
+            new("robot.joint1Referenced", "1 once J1/X is homed or set to a known value",         "boolean", Group.Robot, r => B(r.JointReferenced[0])),
+            new("robot.joint2Referenced", "1 once Horizontal/Y is homed or set to a known value", "boolean", Group.Robot, r => B(r.JointReferenced[1])),
+            new("robot.joint3Referenced", "1 once Vertical/Z is homed or set to a known value",   "boolean", Group.Robot, r => B(r.JointReferenced[2])),
+            new("robot.joint4Referenced", "1 once J4/RZ is homed or set to a known value",        "boolean", Group.Robot, r => B(r.JointReferenced[3])),
 
             new("program.runCount",  "Times this program has been started (this run included)", "number", Group.Program, Program: p => p.RunCount),
             new("program.stepIndex", "Completed top-level steps in this run",   "number", Group.Program, Program: p => p.StepIndex),

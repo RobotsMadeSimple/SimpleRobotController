@@ -40,6 +40,40 @@ namespace Controller.RobotControl.AuxAxis
             });
     }
 
+    /// <summary>
+    /// What an aux axis drives — the role that picks its manual controls and program blocks.
+    /// Separate from <see cref="AuxAxisType"/> (which is just the motion unit, mm vs degrees).
+    /// Serialized as its name; missing / unrecognized -> Generic for forward-compat.
+    /// </summary>
+    public enum AuxAxisRole
+    {
+        Generic,
+        Gripper,
+        Conveyor,
+        RotaryTable,
+    }
+
+    public sealed class AuxAxisRoleJsonConverter : JsonConverter<AuxAxisRole>
+    {
+        public override AuxAxisRole Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            reader.GetString() switch
+            {
+                "Gripper"     => AuxAxisRole.Gripper,
+                "Conveyor"    => AuxAxisRole.Conveyor,
+                "RotaryTable" => AuxAxisRole.RotaryTable,
+                _             => AuxAxisRole.Generic,
+            };
+
+        public override void Write(Utf8JsonWriter writer, AuxAxisRole value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value switch
+            {
+                AuxAxisRole.Gripper     => "Gripper",
+                AuxAxisRole.Conveyor    => "Conveyor",
+                AuxAxisRole.RotaryTable => "RotaryTable",
+                _                       => "Generic",
+            });
+    }
+
     public class AuxAxisConfig
     {
         [JsonPropertyName("id")]             public string                    Id   { get; set; } = "AUX_STEPPER_001";
@@ -60,6 +94,35 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("gearRatio")]       public double GearRatio       { get; set; } = 1.0;
         // Only used when AxisType == Linear
         [JsonPropertyName("mmPerRev")]        public double MmPerRev        { get; set; } = 0.0;
+
+        // ── Role (what this axis drives) + its action parameters ──────────────────
+        // Role picks the manual controls / program blocks; it is independent of AxisType.
+        [JsonPropertyName("role"), JsonConverter(typeof(AuxAxisRoleJsonConverter))]
+        public AuxAxisRole Role { get; set; } = AuxAxisRole.Generic;
+        // Gripper Open/Close travel and RotaryTable index increment, in the axis's physical
+        // unit (mm/deg) when AxisType is set, else raw steps.
+        [JsonPropertyName("actionDistance")]  public double ActionDistance  { get; set; } = 0.0;
+        // Role speed, in the axis's physical unit per second (mm/s for a Linear gripper/conveyor,
+        // deg/s for rotary, else steps/s). The app converts to steps/s via StepsPerUnit().
+        [JsonPropertyName("actionVelocity")]  public double ActionVelocity  { get; set; } = 0.0;
+
+        // ── Gripper geometry (Role == Gripper) ────────────────────────────────────
+        // Jaw-gap width (in the Linear unit, mm) at the two mechanical extremes. Open/Close
+        // actions drive to these; "grip to X" drives to an absolute gap clamped to [Closed, Open].
+        // Editable + re-captured from the live position so a gripper that has lost steps can be
+        // re-referenced in either direction.
+        [JsonPropertyName("gripperOpenMm")]   public double GripperOpenMm   { get; set; } = 0.0;
+        [JsonPropertyName("gripperClosedMm")] public double GripperClosedMm { get; set; } = 0.0;
+        // Gripper motion. The per-direction speed is derived from the full-stroke time
+        // (speed = |Open-Closed| / time) so "open in 0.8 s" is honoured whatever the gap
+        // target is; 0 = fall back to ActionVelocity. GripperAccel is the ramp in mm/s².
+        [JsonPropertyName("gripperOpenTimeSec")]  public double GripperOpenTimeSec  { get; set; } = 0.0;
+        [JsonPropertyName("gripperCloseTimeSec")] public double GripperCloseTimeSec { get; set; } = 0.0;
+        [JsonPropertyName("gripperAccel")]        public double GripperAccel        { get; set; } = 0.0;
+        // Extra travel (mm) driven past a hard stop on a full Open/Close so the jaws seat
+        // firmly against the mechanical limit; the tracked position then re-references at the
+        // clamped limit (it can never read past [Closed, Open]). 0 = don't over-travel.
+        [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
 
         /// <summary>Steps per physical output unit (mm for Linear, degrees for Rotary).
         /// Returns 0 when the axis is not configured (use raw steps instead).</summary>
@@ -101,5 +164,15 @@ namespace Controller.RobotControl.AuxAxis
         public AuxAxisType AxisType { get; set; } = AuxAxisType.Unconfigured;
         [JsonPropertyName("gearRatio")]       public double GearRatio       { get; set; } = 1.0;
         [JsonPropertyName("mmPerRev")]        public double MmPerRev        { get; set; } = 0.0;
+        [JsonPropertyName("role"), JsonConverter(typeof(AuxAxisRoleJsonConverter))]
+        public AuxAxisRole Role { get; set; } = AuxAxisRole.Generic;
+        [JsonPropertyName("actionDistance")]  public double ActionDistance  { get; set; } = 0.0;
+        [JsonPropertyName("actionVelocity")]  public double ActionVelocity  { get; set; } = 0.0;
+        [JsonPropertyName("gripperOpenMm")]   public double GripperOpenMm   { get; set; } = 0.0;
+        [JsonPropertyName("gripperClosedMm")] public double GripperClosedMm { get; set; } = 0.0;
+        [JsonPropertyName("gripperOpenTimeSec")]  public double GripperOpenTimeSec  { get; set; } = 0.0;
+        [JsonPropertyName("gripperCloseTimeSec")] public double GripperCloseTimeSec { get; set; } = 0.0;
+        [JsonPropertyName("gripperAccel")]        public double GripperAccel        { get; set; } = 0.0;
+        [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
     }
 }
