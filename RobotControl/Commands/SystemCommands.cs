@@ -22,6 +22,7 @@ internal sealed class SystemCommands
     {
         d.Add("GetRobotInfo",      GetRobotInfo);
         d.Add("GetStatus",         GetStatus);
+        d.Add("GetPrograms",       _ => new { programs = _programs.GetProgramsSummary() });
         d.Add("Update",            Update);
         d.Add("RestartController", RestartController);
         d.Add("SetRobotIdentity",  SetRobotIdentity);
@@ -76,6 +77,9 @@ internal sealed class SystemCommands
         {
             moving = robot.IsMoving,
             wasHomed = robot.Homed,
+            // Per-joint referenced state [J1/X, Horizontal/Y, Vertical/Z, J4/RZ] — a joint is
+            // referenced once homed or set to a known value; wasHomed is all four.
+            jointReferenced = robot.JointReferenced,
             homingState,
             isHoming = homingState != HomingSequencer.IdleStateName,
             lastPointUpdate = robot.pointRepo.LastUpdatedUnixMs,
@@ -144,8 +148,11 @@ internal sealed class SystemCommands
                 Names     = relay.GetRelayNames(),
             },
 
-            // Program cycle — summary only (no logs / images)
-            programs = _programs.GetProgramsSummary(),
+            // Program cycle — the full summary now rides behind lastProgramUpdate (fetched via
+            // GetPrograms), so it isn't re-sent every poll. Only a compact live block for the
+            // actively-running program(s) is broadcast so the monitor view stays real-time.
+            activePrograms = _programs.GetActivePrograms(),
+            lastProgramUpdate = _programs.LastUpdatedUnixMs,
 
             // Tool repository
             lastToolUpdate = robot.toolRepo.LastUpdatedUnixMs,

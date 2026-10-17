@@ -84,6 +84,13 @@ public abstract class NamedVectorRepository<TItem, TEntry>
             _items = list
                 .Where(i => !string.IsNullOrWhiteSpace(i.Name))
                 .ToDictionary(i => i.Name!, i => i);
+
+            // Backfill stable identities for items saved before ids existed, then
+            // persist once so the assigned ids stick across restarts.
+            bool backfilled = false;
+            foreach (var item in _items.Values)
+                backfilled |= EnsureIdentity(item, null);
+            if (backfilled) SaveItems();
         }
         catch (Exception ex)
         {
@@ -135,6 +142,11 @@ public abstract class NamedVectorRepository<TItem, TEntry>
 
             if (string.IsNullOrWhiteSpace(item.Name))
                 throw new Exception($"{typeof(TItem).Name} must have a Name");
+
+            // Preserve the existing identity when re-teaching a point of the same
+            // name (so references survive), otherwise assign a fresh one.
+            _items.TryGetValue(item.Name!, out var prior);
+            EnsureIdentity(item, prior);
 
             _items[item.Name!] = item;
             AppendHistory(item);
@@ -193,6 +205,17 @@ public abstract class NamedVectorRepository<TItem, TEntry>
 
     /// <summary>Subclass supplies the concrete history-entry wrapper.</summary>
     protected abstract TEntry CreateHistoryEntry(TItem item);
+
+    // ── Stable identity ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Hook for subclasses that carry a stable id (Point): assign one when missing,
+    /// preserving <paramref name="existing"/>'s id when an item of the same name is
+    /// being replaced. Called on create and for each item at load (with existing
+    /// null) to backfill legacy data. Returns true when it changed the item, so the
+    /// loader knows to persist. Default: no-op (items without an id, like Tool/Local).
+    /// </summary>
+    protected virtual bool EnsureIdentity(TItem item, TItem? existing) => false;
 
     private void AppendHistory(TItem item)
     {

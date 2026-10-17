@@ -130,6 +130,13 @@ namespace Controller.RobotControl.Execution
                     point = namedPoint;
                 }
             }
+            else if (!string.IsNullOrEmpty(step.PointId) && src.Points.GetById(step.PointId) is { } byId)
+            {
+                // Preferred path: resolve by stable id so a renamed point still resolves
+                // to its current coordinates. Falls through to the name path below when the
+                // step has no id or the id no longer exists (deleted point).
+                point = byId;
+            }
             else if (string.IsNullOrEmpty(step.PointName))
             {
                 // No point specified — use the base TCP position so offsets act as relative
