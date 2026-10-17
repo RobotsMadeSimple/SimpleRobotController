@@ -375,7 +375,7 @@ namespace Controller.RobotControl
                 var pos   = GetCurrentPosition();
                 var fault = FaultStatus;
                 return new Plugins.PluginRobotSnapshot(pos.X, pos.Y, pos.Z, pos.RX, pos.RY, pos.RZ, IsMoving,
-                                                       homed, fault.Faulted, fault.Joint, fault.Message);
+                                                       Homed, fault.Faulted, fault.Joint, fault.Message);
             },
             IoProvider = io => ProgramExecutor.AddIoVariables(this, io),
         });
