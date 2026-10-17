@@ -20,6 +20,15 @@ public class Point : Vector6, INamedVector
 {
     public string? Name { get; set; }
 
+    /// <summary>
+    /// Stable identity, assigned once on create and preserved across renames and
+    /// re-teaches. Program steps reference a point by this id so renaming the point
+    /// never breaks the link. Serialized as lowercase "id" to match the app.
+    /// Backfilled for points saved before ids existed (see PointRepository).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
     // Unix ms when this point was last created or modified
     public long LastUpdatedUnixMs { get; set; }
 }
