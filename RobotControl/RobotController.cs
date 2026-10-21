@@ -273,6 +273,9 @@ namespace Controller.RobotControl
         // ── Phone / client data devices ───────────────────────────────────────
         public Devices.DeviceManager DeviceManager { get; private set; } = null!;
 
+        // ── IO value history + recordings ─────────────────────────────────────
+        public History.IoHistoryService IoHistory { get; private set; } = null!;
+
         // ── Vision ────────────────────────────────────────────────────────────
         public Vision.VisionProgramRepository VisionRepo    { get; private set; } = null!;
         public Vision.VisionManager           VisionManager { get; private set; } = null!;
@@ -336,6 +339,11 @@ namespace Controller.RobotControl
             _homing = new HomingSequencer(this);
 
             NanoManager = new NanoManager("nano_config.json");
+
+            // IO value history + recordings (in-RAM rolling buffer, opt-in disk persistence).
+            // Subscribes to the nano load-cell sample event; generic over any numeric channel.
+            IoHistory = new History.IoHistoryService("io_history");
+            IoHistory.AttachNano(NanoManager);
 
             RelayManager = new UsbRelayManager();
 

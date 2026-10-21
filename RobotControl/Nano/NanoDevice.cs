@@ -17,6 +17,10 @@ namespace Controller.RobotControl.Nano
         /// <summary>Fired on the device thread when an Input pin changes value.</summary>
         public event Action<NanoPinState>? InputChanged;
 
+        /// <summary>Fired on the device thread for every HX711 load-cell reading (pinState, unixMs).
+        /// Carries the just-updated state (Raw/Grams/Unit/Name) so a recorder can capture every sample.</summary>
+        public event Action<NanoPinState, long>? LoadCellSampled;
+
         // ── SerialLineDevice knobs ─────────────────────────────────────────────
         protected override string DeviceTag                    => "Nano";
         protected override string ThreadNamePrefix              => "NanoDevice";
@@ -162,6 +166,10 @@ namespace Controller.RobotControl.Nano
                 }
                 _lcLastTicks[state.Pin] = now;
             }
+
+            // Per-sample fidelity for the history/recording engine. Timestamp is assigned here
+            // (receive time) since the firmware sends no timestamp. Fires on the device thread.
+            LoadCellSampled?.Invoke(state, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
         // ── Public command API ─────────────────────────────────────────────────

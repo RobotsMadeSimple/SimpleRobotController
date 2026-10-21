@@ -18,6 +18,7 @@ namespace Controller.RobotControl.Hosting
             MapWebhook(app, robot);
             MapCamera(app, robot);
             MapDevices(app, robot);
+            MapIoHistory(app, robot);
             MapVision(app, robot);
             MapVectorFiles(app, vectorFileDir);
         }
@@ -89,6 +90,54 @@ namespace Controller.RobotControl.Hosting
             // Values surface as $device.<id>.<channel>. Open on the LAN (no token) for v1.
             app.MapGet("/devices/{id}/ingest", (string id, HttpContext context) =>
                 IngestDeviceAsync(context, robot.DeviceManager, id));
+        }
+
+        // ── IO value history ────────────────────────────────────────────────────
+        private static readonly JsonSerializerOptions IoHistoryJson =
+            new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+        private static void MapIoHistory(WebApplication app, RobotController robot)
+        {
+            // Live sample stream for one channel (?channel=<key>&window=<ms>). On connect the
+            // server backfills the last `window` ms from the rolling buffer, then pushes new
+            // samples as they arrive. Text JSON frames: { channelKey, unit, samples:[{t,v,r}] }.
+            // Push-out only — the command channel (/control) stays request/ack.
+            app.MapGet("/io/history/ws", (HttpContext context) => StreamIoHistoryAsync(context, robot));
+        }
+
+        private static async Task StreamIoHistoryAsync(HttpContext context, RobotController robot)
+        {
+            if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 426; return; }
+
+            string channel = context.Request.Query["channel"].ToString();
+            if (string.IsNullOrEmpty(channel)) { context.Response.StatusCode = 400; return; }
+
+            long window = 20_000;
+            if (long.TryParse(context.Request.Query["window"], out var w) && w > 0)
+                window = Math.Clamp(w, 1_000, 3_600_000);
+
+            using var ws = await context.WebSockets.AcceptWebSocketAsync();
+            var ct = context.RequestAborted;
+            // Backfill from `window` ms ago (exclusive lower bound), then stream everything newer.
+            long lastTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - window;
+            try
+            {
+                while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
+                {
+                    var batch = robot.IoHistory.GetSince(channel, lastTs, 4000);
+                    if (batch.Count > 0)
+                    {
+                        lastTs = batch[^1].T;
+                        var payload = JsonSerializer.SerializeToUtf8Bytes(
+                            new { channelKey = channel, unit = robot.IoHistory.ChannelUnit(channel), samples = batch },
+                            IoHistoryJson);
+                        await ws.SendAsync(payload, WebSocketMessageType.Text, true, ct);
+                    }
+                    await Task.Delay(50, ct);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { /* client went away mid-send */ }
         }
 
         // ── Vision ────────────────────────────────────────────────────────────

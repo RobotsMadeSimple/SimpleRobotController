@@ -83,6 +83,9 @@ internal sealed class SystemCommands
             homingState,
             isHoming = homingState != HomingSequencer.IdleStateName,
             lastPointUpdate = robot.pointRepo.LastUpdatedUnixMs,
+            // Bumped whenever a recording starts/stops/saves/deletes, so the app refetches
+            // the recordings list only on change (not every poll).
+            lastRecordingUpdate = robot.IoHistory.LastRecordingUpdate,
             driverConnected = stb.connected,
             driverOk = stb.connected && stb.status != 0,
 

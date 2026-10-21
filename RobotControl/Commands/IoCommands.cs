@@ -26,6 +26,17 @@ internal sealed class IoCommands
         d.Add("SetRelay",         SetRelay);
         d.Add("RenameRelay",      RenameRelay);
         d.Add("GetRelayState",    GetRelayState);
+
+        // IO value history + recordings
+        d.Add("GetIoHistoryConfig",    GetIoHistoryConfig);
+        d.Add("SetIoHistoryRetention", SetIoHistoryRetention);
+        d.Add("GetIoHistoryWindow",    GetIoHistoryWindow);
+        d.Add("StartIoRecording",      StartIoRecording);
+        d.Add("StopIoRecording",       StopIoRecording);
+        d.Add("ListIoRecordings",      ListIoRecordings);
+        d.Add("GetIoRecordingWindow",  GetIoRecordingWindow);
+        d.Add("SaveIoRecording",       SaveIoRecording);
+        d.Add("DeleteIoRecording",     DeleteIoRecording);
     }
 
     private UsbRelayState RelayState()
@@ -140,4 +151,65 @@ internal sealed class IoCommands
     }
 
     private object? GetRelayState(CommandMessage msg) => RelayState();
+
+    // ── IO value history + recordings ──────────────────────────────────────────
+
+    private object? GetIoHistoryConfig(CommandMessage msg) =>
+        new { maxRetentionMs = _robot.IoHistory.MaxRetentionMs };
+
+    private object? SetIoHistoryRetention(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<SetIoHistoryRetentionParams>(msg);
+        return new { maxRetentionMs = _robot.IoHistory.SetRetention(p.MaxRetentionMs) };
+    }
+
+    private object? GetIoHistoryWindow(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoHistoryWindowParams>(msg);
+        var w = _robot.IoHistory.GetWindow(p.ChannelKey, p.FromUnixMs, p.ToUnixMs, p.MaxPoints ?? 1000);
+        return new { window = w };
+    }
+
+    private object? StartIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<StartIoRecordingParams>(msg);
+        if (string.IsNullOrWhiteSpace(p.ChannelKey))
+            throw new InvalidOperationException("A channelKey is required to start a recording.");
+        return new { recording = _robot.IoHistory.StartRecording(p.ChannelKey, p.Name) };
+    }
+
+    private object? StopIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingIdParams>(msg);
+        var rec = _robot.IoHistory.StopRecording(p.Id)
+                  ?? throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+        return new { recording = rec };
+    }
+
+    private object? ListIoRecordings(CommandMessage msg) =>
+        new { recordings = _robot.IoHistory.ListRecordings() };
+
+    private object? GetIoRecordingWindow(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingWindowParams>(msg);
+        var w = _robot.IoHistory.GetRecordingWindow(p.Id, p.FromUnixMs, p.ToUnixMs, p.MaxPoints ?? 2000)
+                ?? throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+        var meta = _robot.IoHistory.GetRecordingMeta(p.Id);
+        return new { window = w, recording = meta };
+    }
+
+    private object? SaveIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingIdParams>(msg);
+        var rec = _robot.IoHistory.SaveRecording(p.Id)
+                  ?? throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+        return new { recording = rec };
+    }
+
+    private void DeleteIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingIdParams>(msg);
+        if (!_robot.IoHistory.DeleteRecording(p.Id))
+            throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+    }
 }

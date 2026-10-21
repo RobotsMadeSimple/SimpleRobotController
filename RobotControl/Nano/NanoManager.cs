@@ -16,6 +16,9 @@ namespace Controller.RobotControl.Nano
         /// <summary>Fired (on a device thread) when any Input pin changes.</summary>
         public event Action<string, NanoPinState>? InputChanged;  // (nanoId, pinState)
 
+        /// <summary>Fired (on a device thread) for every HX711 load-cell reading. (nanoId, pinState, unixMs)</summary>
+        public event Action<string, NanoPinState, long>? LoadCellSampled;
+
         public NanoManager(string configPath)
         {
             _configPath = configPath;
@@ -36,6 +39,7 @@ namespace Controller.RobotControl.Nano
             {
                 var device = new NanoDevice(nanoCfg);
                 device.InputChanged += state => InputChanged?.Invoke(device.Id, state);
+                device.LoadCellSampled += (state, ts) => LoadCellSampled?.Invoke(device.Id, state, ts);
                 _devices.Add(device);
             }
         }

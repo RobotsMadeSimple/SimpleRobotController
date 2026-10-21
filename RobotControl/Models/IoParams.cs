@@ -77,6 +77,40 @@ public class SetLoadCellUnitParams
     [JsonPropertyName("unit")]   public string Unit   { get; set; } = "g";
 }
 
+// ── IO value history / recordings command params ───────────────────────────────
+
+public class IoHistoryWindowParams
+{
+    [JsonPropertyName("channelKey")] public string ChannelKey { get; set; } = "";
+    [JsonPropertyName("fromUnixMs")] public long?  FromUnixMs { get; set; }
+    [JsonPropertyName("toUnixMs")]   public long?  ToUnixMs   { get; set; }
+    [JsonPropertyName("maxPoints")]  public int?   MaxPoints  { get; set; }
+}
+
+public class SetIoHistoryRetentionParams
+{
+    [JsonPropertyName("maxRetentionMs")] public long MaxRetentionMs { get; set; }
+}
+
+public class StartIoRecordingParams
+{
+    [JsonPropertyName("channelKey")] public string  ChannelKey { get; set; } = "";
+    [JsonPropertyName("name")]       public string? Name       { get; set; }
+}
+
+public class IoRecordingIdParams
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+}
+
+public class IoRecordingWindowParams
+{
+    [JsonPropertyName("id")]         public string Id         { get; set; } = "";
+    [JsonPropertyName("fromUnixMs")] public long?  FromUnixMs { get; set; }
+    [JsonPropertyName("toUnixMs")]   public long?  ToUnixMs   { get; set; }
+    [JsonPropertyName("maxPoints")]  public int?   MaxPoints  { get; set; }
+}
+
 // ── USB Relay ─────────────────────────────────────────────────────────────────
 
 public class SetRelayParams
