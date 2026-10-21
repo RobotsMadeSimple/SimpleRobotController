@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, MoveWithForce, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, MoveWithForce, StartRecording, StopRecording, ExportData, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -470,6 +470,17 @@ public class ProgramStep
     [JsonPropertyName("jsonOutbound")]        public List<JsonKeyValue>?       JsonOutbound        { get; set; }
     [JsonPropertyName("jsonInbound")]         public List<JsonInboundMapping>? JsonInbound         { get; set; }
     [JsonPropertyName("jsonImageOutbound")]   public List<JsonImageMapping>?   JsonImageOutbound   { get; set; }
+
+    // StartRecording — captures a load cell (loadCellNanoId/loadCellPin above) into this list variable
+    // (filled on StopRecording as a Record list of {t,v,r}). StopRecording reuses the load-cell fields.
+    [JsonPropertyName("recordVariableName")] public string? RecordVariableName { get; set; }
+
+    // ExportData — write one or more variables to a file. exportColumns reuses the HttpRequest outbound
+    // row shape (key + expr/listVar/imageVar). exportPath supports $variable / $time_ms interpolation.
+    [JsonPropertyName("exportFormat")]   public string?             ExportFormat  { get; set; } // "csv" | "json"
+    [JsonPropertyName("exportPath")]     public string?             ExportPath    { get; set; }
+    [JsonPropertyName("exportColumns")]  public List<JsonKeyValue>? ExportColumns { get; set; }
+
     // CaptureImage
     [JsonPropertyName("captureImageVariableName")] public string? CaptureImageVariableName { get; set; }
     [JsonPropertyName("captureImageCameraId")]     public string? CaptureImageCameraId     { get; set; }

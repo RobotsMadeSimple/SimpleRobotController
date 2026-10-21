@@ -139,6 +139,10 @@ namespace Controller.RobotControl.Execution
         public HttpState   Http   { get; } = new();
         public PluginStepState PluginState { get; } = new();
 
+        // Active program recordings: channelKey → (IoHistory recording id, target list-variable name).
+        // Set by StartRecording, consumed + cleared by StopRecording.
+        public Dictionary<string, (string RecordingId, string VarName)> ProgramRecordings { get; } = new();
+
         // ── Control ───────────────────────────────────────────────────────────
 
         /// <summary>Ends the program; returns <see cref="StepOutcome.Finished"/> for the handler to return.</summary>
@@ -305,6 +309,7 @@ namespace Controller.RobotControl.Execution
             MotionSteps.Register(r);
             IoSteps.Register(r);
             LoadCellSteps.Register(r);
+            RecordingSteps.Register(r);
             ControlFlowSteps.Register(r);
             VariableSteps.Register(r);
             AuxSteps.Register(r);
