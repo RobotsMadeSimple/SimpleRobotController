@@ -157,6 +157,15 @@ public class ProgramActionParams
     /// </summary>
     [JsonPropertyName("programId")]
     public string? ProgramId { get; set; }
+
+    /// <summary>
+    /// Optional launch inputs for StartProgram: a map of variable name → value that seeds the
+    /// program's declared input variables (<see cref="ProgramVariable.IsInput"/>) before the run,
+    /// overriding their initial values. Non-input, computed, list and image variables are ignored.
+    /// Numbers seed scalars, true/false seed booleans, strings seed string variables.
+    /// </summary>
+    [JsonPropertyName("variables")]
+    public Dictionary<string, JsonElement>? Variables { get; set; }
 }
 
 

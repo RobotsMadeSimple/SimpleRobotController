@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Controller.RobotControl.Execution
@@ -363,6 +365,51 @@ namespace Controller.RobotControl.Execution
                 }
             }
         }
+
+        /// <summary>
+        /// Override declared input variables from a launch-time seed map (StartProgram's
+        /// <c>variables</c>). Applied right after <see cref="Initialize"/>, so a seeded value wins
+        /// over the declared default. Only variables flagged <see cref="ProgramVariable.IsInput"/>
+        /// and of a seedable kind (number, boolean or string — not list, image or computed) are
+        /// touched; every other name in the map is ignored. Routing goes through the normal
+        /// setters, so a global input is seeded in the shared store.
+        /// </summary>
+        public void SeedInputs(BuiltProgram program, IReadOnlyDictionary<string, JsonElement>? seed)
+        {
+            if (seed == null || seed.Count == 0) return;
+
+            foreach (var v in program.Variables ?? [])
+            {
+                if (v.IsInput != true || v.IsComputed == true) continue;
+                if (v.IsImage == true || v.ToListVar() != null) continue;   // scalars/strings only
+                if (!seed.TryGetValue(v.Name, out var el)) continue;
+
+                if (v.IsString == true)
+                    SetString(v.Name, JsonToString(el));
+                else
+                    Set(v.Name, JsonToNumber(el));
+            }
+        }
+
+        /// <summary>A seed JSON value as a string (JSON strings verbatim, other kinds stringified).</summary>
+        private static string JsonToString(JsonElement el) => el.ValueKind switch
+        {
+            JsonValueKind.String => el.GetString() ?? "",
+            JsonValueKind.Null or JsonValueKind.Undefined => "",
+            _ => el.GetRawText(),
+        };
+
+        /// <summary>A seed JSON value as a number: numbers directly, true/false as 1/0, numeric
+        /// strings parsed (so a text input field of "5" works), anything else 0.</summary>
+        private static double JsonToNumber(JsonElement el) => el.ValueKind switch
+        {
+            JsonValueKind.Number => el.TryGetDouble(out var d) ? d : 0,
+            JsonValueKind.True   => 1,
+            JsonValueKind.False  => 0,
+            JsonValueKind.String => double.TryParse(el.GetString(), NumberStyles.Any,
+                                        CultureInfo.InvariantCulture, out var s) ? s : 0,
+            _ => 0,
+        };
 
         /// <summary>
         /// A scalar's starting value: its expression if it declares one, otherwise its plain

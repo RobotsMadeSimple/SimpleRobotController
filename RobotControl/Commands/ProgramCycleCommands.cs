@@ -80,7 +80,7 @@ internal sealed class ProgramCycleCommands
             else
             {
                 _robot.DisplaceRunningBuiltProgram(name);
-                _executor?.Start(built);
+                _executor?.Start(built, null, p.Variables);
             }
         }
         else

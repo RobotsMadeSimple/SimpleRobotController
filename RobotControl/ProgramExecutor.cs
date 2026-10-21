@@ -162,9 +162,10 @@ namespace Controller.RobotControl
         // or Reset() returns, the next tick sees the stopped state, and IsRunning is
         // already true when Start() returns (BackgroundProgramManager and
         // WaitForBackground rely on that).
-        public void Start(BuiltProgram program, string? imageBase64 = null)
+        public void Start(BuiltProgram program, string? imageBase64 = null,
+                          IReadOnlyDictionary<string, JsonElement>? inputs = null)
         {
-            lock (_controlLock) StartCore(program, imageBase64);
+            lock (_controlLock) StartCore(program, imageBase64, inputs);
         }
 
         public void Resume()
@@ -186,7 +187,8 @@ namespace Controller.RobotControl
             lock (_controlLock) ResetCore();
         }
 
-        private void StartCore(BuiltProgram program, string? imageBase64)
+        private void StartCore(BuiltProgram program, string? imageBase64,
+                               IReadOnlyDictionary<string, JsonElement>? inputs = null)
         {
             // Pulses left over from a run that completed normally finish now rather than
             // being dropped (which would leave the output stuck in its pulsed state).
@@ -212,6 +214,7 @@ namespace Controller.RobotControl
             try
             {
                 _vars.Initialize(program);
+                _vars.SeedInputs(program, inputs); // launch-time input overrides win over defaults
             }
             catch (UnknownVariableException ex)
             {

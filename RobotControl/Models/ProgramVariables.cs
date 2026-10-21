@@ -201,6 +201,13 @@ public class ProgramVariable
     /// <summary>When true, the current runtime value of this variable is shown on the monitor page while the program runs.</summary>
     [JsonPropertyName("displayOnMonitor")]
     public bool? DisplayOnMonitor { get; set; }
+    /// <summary>
+    /// When true, a program display page may seed this variable's value at launch — StartProgram
+    /// carries a <c>variables</c> map that overrides the declared initial value before the run.
+    /// Only scalars/booleans/strings are seedable (not lists, images or computed variables).
+    /// </summary>
+    [JsonPropertyName("isInput")]
+    public bool? IsInput { get; set; }
     /// <summary>When true, this variable is a stopwatch; its value holds elapsed milliseconds at runtime.</summary>
     [JsonPropertyName("isStopwatch")]
     public bool? IsStopwatch { get; set; }
