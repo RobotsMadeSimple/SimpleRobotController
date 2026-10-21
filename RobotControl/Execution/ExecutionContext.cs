@@ -135,6 +135,7 @@ namespace Controller.RobotControl.Execution
         public ThreadMoveState ThreadMove { get; } = new();
         public HomingState Homing { get; } = new();
         public VisionState Vision { get; } = new();
+        public ForceMoveState Force { get; } = new();
         public HttpState   Http   { get; } = new();
         public PluginStepState PluginState { get; } = new();
 
@@ -303,6 +304,7 @@ namespace Controller.RobotControl.Execution
             var r = new Dictionary<StepType, IStepHandler>();
             MotionSteps.Register(r);
             IoSteps.Register(r);
+            LoadCellSteps.Register(r);
             ControlFlowSteps.Register(r);
             VariableSteps.Register(r);
             AuxSteps.Register(r);

@@ -91,6 +91,84 @@ namespace Controller.RobotControl.Nano
         public void ConfigurePin(string nanoId, int pin, PinType type, int pixelCount = 8) =>
             GetDevice(nanoId)?.ConfigurePin(pin, type, pixelCount);
 
+        // ── Load cell (HX711) ──────────────────────────────────────────────────
+
+        /// <summary>Configure a pin as an HX711 load cell (DT = <paramref name="dtPin"/>, SCK = <paramref name="sckPin"/>)
+        /// and persist it. Keeps any existing calibration/name for that pin.</summary>
+        public bool SetLoadCellConfig(string nanoId, int dtPin, int sckPin, string unit)
+        {
+            var dev = GetDevice(nanoId);
+            var nanoCfg = _config.Nanos.FirstOrDefault(n => n.Id == nanoId);
+            if (dev == null || nanoCfg == null) return false;
+
+            var pinCfg = nanoCfg.Pins.FirstOrDefault(p => p.Pin == dtPin);
+            if (pinCfg == null)
+            {
+                pinCfg = new NanoPinConfig { Pin = dtPin, Name = "Load Cell" };
+                nanoCfg.Pins.Add(pinCfg);
+            }
+            pinCfg.Type   = PinType.LoadCell;
+            pinCfg.SckPin = sckPin;
+            pinCfg.Unit   = string.IsNullOrEmpty(unit) ? "g" : unit;
+
+            dev.UpsertPinState(dtPin, PinType.LoadCell, pinCfg.Name, pinCfg.PixelCount,
+                sckPin, pinCfg.Unit, pinCfg.TareOffset, pinCfg.CountsPerGram);
+            dev.ConfigurePin(dtPin, PinType.LoadCell, pinCfg.PixelCount, sckPin);
+            SaveConfig();
+            return true;
+        }
+
+        /// <summary>Zero the load cell: capture its current raw reading as the tare offset. Returns the new offset.</summary>
+        public long? TareLoadCell(string nanoId, int pin)
+        {
+            var (dev, pinCfg, state) = ResolveLoadCell(nanoId, pin);
+            if (dev == null || pinCfg == null || state == null) return null;
+
+            pinCfg.TareOffset = state.Raw;
+            dev.ApplyLoadCellCalibration(pin, pinCfg.TareOffset, pinCfg.CountsPerGram, pinCfg.Unit);
+            SaveConfig();
+            return pinCfg.TareOffset;
+        }
+
+        /// <summary>Second calibration point: with <paramref name="knownGrams"/> on the cell, derive counts-per-gram
+        /// from the current raw reading (relative to the tare offset). Returns the new counts-per-gram.</summary>
+        public double? CalibrateLoadCell(string nanoId, int pin, double knownGrams)
+        {
+            var (dev, pinCfg, state) = ResolveLoadCell(nanoId, pin);
+            if (dev == null || pinCfg == null || state == null) return null;
+            if (Math.Abs(knownGrams) < 1e-9) return null;   // need a non-zero known weight
+
+            pinCfg.CountsPerGram = (state.Raw - pinCfg.TareOffset) / knownGrams;
+            dev.ApplyLoadCellCalibration(pin, pinCfg.TareOffset, pinCfg.CountsPerGram, pinCfg.Unit);
+            SaveConfig();
+            return pinCfg.CountsPerGram;
+        }
+
+        /// <summary>Set the load cell's display unit (grams stays the master behind the scenes).</summary>
+        public bool SetLoadCellUnit(string nanoId, int pin, string unit)
+        {
+            var (dev, pinCfg, _) = ResolveLoadCell(nanoId, pin);
+            if (dev == null || pinCfg == null) return false;
+
+            pinCfg.Unit = string.IsNullOrEmpty(unit) ? "g" : unit;
+            dev.ApplyLoadCellCalibration(pin, pinCfg.TareOffset, pinCfg.CountsPerGram, pinCfg.Unit);
+            SaveConfig();
+            return true;
+        }
+
+        /// <summary>Current calibrated weight (grams) of a load cell, or null if not a connected load cell.</summary>
+        public double? GetLoadCellGrams(string nanoId, int pin) =>
+            GetDevice(nanoId)?.GetPinState(pin) is { Type: PinType.LoadCell } s ? s.Grams : null;
+
+        private (NanoDevice? dev, NanoPinConfig? cfg, NanoPinState? state) ResolveLoadCell(string nanoId, int pin)
+        {
+            var dev = GetDevice(nanoId);
+            var pinCfg = _config.Nanos.FirstOrDefault(n => n.Id == nanoId)?.Pins
+                .FirstOrDefault(p => p.Pin == pin && p.Type == PinType.LoadCell);
+            var state = dev?.GetPinState(pin);
+            return (dev, pinCfg, state);
+        }
+
         // ── Config mutations (persist to disk) ─────────────────────────────────
 
         /// <summary>

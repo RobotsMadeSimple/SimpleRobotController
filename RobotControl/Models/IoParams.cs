@@ -47,6 +47,36 @@ public class ConfigureNanoPinParams
     [JsonPropertyName("pixelCount")] public int    PixelCount { get; set; } = 8;
 }
 
+// ── Load cell (HX711) command params ──────────────────────────────────────────
+
+public class ConfigureLoadCellParams
+{
+    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("dtPin")]  public int    DtPin  { get; set; }  // HX711 data pin
+    [JsonPropertyName("sckPin")] public int    SckPin { get; set; }  // HX711 clock pin
+    [JsonPropertyName("unit")]   public string Unit   { get; set; } = "g";
+}
+
+public class LoadCellPinParams
+{
+    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("pin")]    public int    Pin    { get; set; }  // the DT pin
+}
+
+public class CalibrateLoadCellParams
+{
+    [JsonPropertyName("nanoId")]     public string NanoId     { get; set; } = "";
+    [JsonPropertyName("pin")]        public int    Pin        { get; set; }
+    [JsonPropertyName("knownGrams")] public double KnownGrams { get; set; }
+}
+
+public class SetLoadCellUnitParams
+{
+    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("pin")]    public int    Pin    { get; set; }
+    [JsonPropertyName("unit")]   public string Unit   { get; set; } = "g";
+}
+
 // ── USB Relay ─────────────────────────────────────────────────────────────────
 
 public class SetRelayParams

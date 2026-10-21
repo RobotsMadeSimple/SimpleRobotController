@@ -19,6 +19,10 @@ internal sealed class IoCommands
         d.Add("SetNeoPixel",      SetNeoPixel);
         d.Add("RenameNanoPin",    RenameNanoPin);
         d.Add("ConfigureNanoPin", ConfigureNanoPin);
+        d.Add("ConfigureLoadCell", ConfigureLoadCell);
+        d.Add("TareLoadCell",      TareLoadCell);
+        d.Add("CalibrateLoadCell", CalibrateLoadCell);
+        d.Add("SetLoadCellUnit",   SetLoadCellUnit);
         d.Add("SetRelay",         SetRelay);
         d.Add("RenameRelay",      RenameRelay);
         d.Add("GetRelayState",    GetRelayState);
@@ -88,6 +92,39 @@ internal sealed class IoCommands
         if (!_robot.NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount))
             throw new InvalidOperationException(
                 $"Nano is not connected — pin {p.Pin} was not saved.");
+    }
+
+    private void ConfigureLoadCell(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<ConfigureLoadCellParams>(msg);
+        if (!_robot.NanoManager.SetLoadCellConfig(p.NanoId, p.DtPin, p.SckPin, p.Unit))
+            throw new InvalidOperationException($"Nano '{p.NanoId}' not found — load cell was not saved.");
+    }
+
+    private object? TareLoadCell(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<LoadCellPinParams>(msg);
+        var offset = _robot.NanoManager.TareLoadCell(p.NanoId, p.Pin);
+        if (offset == null)
+            throw new InvalidOperationException($"Load cell on pin {p.Pin} not found or not connected.");
+        return new { tareOffset = offset.Value };
+    }
+
+    private object? CalibrateLoadCell(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<CalibrateLoadCellParams>(msg);
+        var cpg = _robot.NanoManager.CalibrateLoadCell(p.NanoId, p.Pin, p.KnownGrams);
+        if (cpg == null)
+            throw new InvalidOperationException(
+                $"Load cell on pin {p.Pin} not found, not connected, or the known weight was zero.");
+        return new { countsPerGram = cpg.Value };
+    }
+
+    private void SetLoadCellUnit(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<SetLoadCellUnitParams>(msg);
+        if (!_robot.NanoManager.SetLoadCellUnit(p.NanoId, p.Pin, p.Unit))
+            throw new InvalidOperationException($"Load cell on pin {p.Pin} not found.");
     }
 
     private void SetRelay(CommandMessage msg)

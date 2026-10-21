@@ -5,7 +5,7 @@ namespace Controller.RobotControl.Nano
     // ── Enums ─────────────────────────────────────────────────────────────────
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
-    public enum PinType { Input, Output, Neopixel, Unconfigured }
+    public enum PinType { Input, Output, Neopixel, Unconfigured, LoadCell }
 
     // ── Config file models ────────────────────────────────────────────────────
 
@@ -48,6 +48,24 @@ namespace Controller.RobotControl.Nano
         /// <summary>Number of pixels for Neopixel strips (ignored for other types).</summary>
         [JsonPropertyName("pixelCount")]
         public int PixelCount { get; set; } = 8;
+
+        // ── Load cell (HX711) — only used when Type == LoadCell ────────────────
+        /// <summary>HX711 clock (SCK) pin. The <see cref="Pin"/> field is the HX711 data (DT) pin.</summary>
+        [JsonPropertyName("sckPin")]
+        public int SckPin { get; set; } = -1;
+
+        /// <summary>Raw count read with no load — subtracted from every reading (the tare / zero offset).</summary>
+        [JsonPropertyName("tareOffset")]
+        public long TareOffset { get; set; }
+
+        /// <summary>Raw counts per gram, from the 2-point calibration. grams = (raw - tareOffset) / countsPerGram.
+        /// 0 means uncalibrated (grams reports 0).</summary>
+        [JsonPropertyName("countsPerGram")]
+        public double CountsPerGram { get; set; }
+
+        /// <summary>Display unit for this load cell (grams is the master behind the scenes): g, kg, oz, lb, N.</summary>
+        [JsonPropertyName("unit")]
+        public string Unit { get; set; } = "g";
     }
 
     // ── Runtime state models ──────────────────────────────────────────────────
@@ -62,6 +80,19 @@ namespace Controller.RobotControl.Nano
         public string  NanoId     { get; set; } = "";
         public string  NanoName   { get; set; } = "";
         public int     PixelCount { get; set; }
+
+        // ── Load cell runtime (Type == LoadCell) ──────────────────────────────
+        public int     SckPin        { get; set; }
+        /// <summary>Latest raw 24-bit count streamed by the HX711.</summary>
+        public long    Raw           { get; set; }
+        /// <summary>Calibrated weight in grams (the master unit): (raw - tareOffset) / countsPerGram.</summary>
+        public double  Grams         { get; set; }
+        /// <summary>Display unit (g/kg/oz/lb/N); grams is converted to it client-side.</summary>
+        public string  Unit          { get; set; } = "g";
+        public long    TareOffset    { get; set; }
+        public double  CountsPerGram { get; set; }
+        /// <summary>Measured HX711 sample rate (Hz) — reflects the RATE-pin wiring (10 or 80 SPS).</summary>
+        public double  SampleRateHz  { get; set; }
     }
 
     /// <summary>Connection + pin state for a single Nano, sent to the WebSocket client.</summary>

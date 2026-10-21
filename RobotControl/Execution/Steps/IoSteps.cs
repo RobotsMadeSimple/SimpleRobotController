@@ -55,8 +55,8 @@ namespace Controller.RobotControl.Execution
                         // Scheduled on the loop thread (see ProgramExecutor.ProcessOutputFlips)
                         // rather than a Task.Delay, so Stop/Reset/e-stop cancel the revert
                         // instead of it flipping the output some time after the program was halted.
-                        var ctrl   = ctx.Controller;
-                        var nanoId = step.OutputNanoId;
+                        var ctrl     = ctx.Controller;
+                        var nanoId   = step.OutputNanoId;
                         ctx.OutputFlips.Add((NowMs() + pulse,
                             () => ApplyOutput(ctrl, card, number, !value, nanoId)));
                     }
