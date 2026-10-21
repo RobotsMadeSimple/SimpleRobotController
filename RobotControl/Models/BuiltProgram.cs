@@ -18,6 +18,28 @@ public class BuiltProgram
     public List<ProgramStep> Steps { get; set; } = new();
     [JsonPropertyName("variables")]
     public List<ProgramVariable>? Variables { get; set; }
+    /// <summary>
+    /// Optional user-authored HTML for a custom display page: a dashboard that shows this
+    /// program's variables/state/images/graphs and offers inputs + a run button. Rendered in a
+    /// sandboxed WebView in the app, which brokers data through the host bridge — see the app's
+    /// DisplayPage. Null/empty means the program has no custom page.
+    /// </summary>
+    [JsonPropertyName("displayPageHtml")]
+    public string? DisplayPageHtml { get; set; }
+    /// <summary>
+    /// Which editor authored the display page: "widgets" (a drag-and-drop grid, stored in
+    /// <see cref="DisplayPageLayout"/> and compiled to HTML by the app) or "html" (the raw HTML
+    /// in <see cref="DisplayPageHtml"/>). Null reads as "html" for pages authored before widgets.
+    /// </summary>
+    [JsonPropertyName("displayPageMode")]
+    public string? DisplayPageMode { get; set; }
+    /// <summary>
+    /// The visual display-page layout (grid of configured widgets). Stored opaquely — the app
+    /// owns the widget schema and compiles this to the bridge HTML the WebView runs. Null for a
+    /// raw-HTML page or a program with no display page.
+    /// </summary>
+    [JsonPropertyName("displayPageLayout")]
+    public JsonElement? DisplayPageLayout { get; set; }
     [JsonPropertyName("lastUpdatedUnixMs")]
     public long LastUpdatedUnixMs { get; set; }
     /// <summary>Routines are hidden from the program list and can only be called from a program step.</summary>
@@ -38,6 +60,9 @@ public class SaveBuiltProgramParams
     [JsonPropertyName("description")]          public string Description          { get; set; } = "";
     [JsonPropertyName("steps")]                public List<ProgramStep> Steps     { get; set; } = new();
     [JsonPropertyName("variables")]            public List<ProgramVariable>? Variables { get; set; }
+    [JsonPropertyName("displayPageHtml")]      public string? DisplayPageHtml      { get; set; }
+    [JsonPropertyName("displayPageMode")]      public string? DisplayPageMode      { get; set; }
+    [JsonPropertyName("displayPageLayout")]    public JsonElement? DisplayPageLayout { get; set; }
     [JsonPropertyName("isRoutine")]            public bool IsRoutine              { get; set; } = false;
     [JsonPropertyName("isBackground")]         public bool IsBackground           { get; set; } = false;
     [JsonPropertyName("killBackgroundOnStop")] public bool KillBackgroundOnStop   { get; set; } = true;
