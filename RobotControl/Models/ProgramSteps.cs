@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, MoveWithForce, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -223,6 +223,41 @@ public class ProgramStep
     [JsonPropertyName("pulseBlocking")]
     public bool? PulseBlocking { get; set; }
 
+    // Load cell (Tare, ReadLoadCell, MoveWithForce) — which HX711 cell to use.
+    [JsonPropertyName("loadCellNanoId")]
+    public string? LoadCellNanoId { get; set; }
+    [JsonPropertyName("loadCellPin")]
+    public int? LoadCellPin { get; set; }
+    /// <summary>ReadLoadCell: unit to store into the target variable (default grams, the master unit).</summary>
+    [JsonPropertyName("loadCellUnit")]
+    public string? LoadCellUnit { get; set; }
+
+    // MoveWithForce — approach an axis/direction and continuously hold a target contact force.
+    /// <summary>Axis to control force along: X/Y/Z/RX/RY/RZ (tool or base frame per the executor).</summary>
+    [JsonPropertyName("forceAxis")]
+    public string? ForceAxis { get; set; }
+    /// <summary>Push direction along the axis: +1 or -1.</summary>
+    [JsonPropertyName("forceDirection")]
+    public int? ForceDirection { get; set; }
+    /// <summary>Target contact force in grams (the master unit).</summary>
+    [JsonPropertyName("forceTargetGrams")]
+    public double? ForceTargetGrams { get; set; }
+    /// <summary>Acceptable force deadband in grams.</summary>
+    [JsonPropertyName("forceToleranceGrams")]
+    public double? ForceToleranceGrams { get; set; }
+    /// <summary>Safety: maximum distance (mm) to travel while seeking/holding force.</summary>
+    [JsonPropertyName("forceMaxTravelMm")]
+    public double? ForceMaxTravelMm { get; set; }
+    /// <summary>Approach/correction speed (mm/s).</summary>
+    [JsonPropertyName("forceApproachSpeed")]
+    public double? ForceApproachSpeed { get; set; }
+    /// <summary>How long (ms) to actively maintain the force once reached (0 = just reach then finish).</summary>
+    [JsonPropertyName("forceHoldMs")]
+    public int? ForceHoldMs { get; set; }
+    /// <summary>Safety: overall timeout (ms) for the whole force move.</summary>
+    [JsonPropertyName("forceTimeoutMs")]
+    public int? ForceTimeoutMs { get; set; }
+
     // Wait
     [JsonPropertyName("waitMs")]
     public int? WaitMs { get; set; }
@@ -302,8 +337,10 @@ public class ProgramStep
     [JsonPropertyName("elseIfBranches")]  public List<ElseIfBranch>? ElseIfBranches { get; set; }
     [JsonPropertyName("elseSteps")]       public List<ProgramStep>?  ElseSteps      { get; set; }
 
-    // SetTool
+    // SetTool — ToolId is the stable link (rename-proof); ToolName is a display label / fallback for
+    // steps saved before tool ids existed.
     [JsonPropertyName("toolName")]        public string? ToolName { get; set; }
+    [JsonPropertyName("toolId")]          public string? ToolId { get; set; }
 
     // SetJointPosition — manually home one joint by declaring its value (no motion).
     // JointIndex: 0=J1/X, 1=Horizontal/Y, 2=Vertical/Z, 3=J4/RZ. JointValue is the literal;
@@ -311,8 +348,10 @@ public class ProgramStep
     [JsonPropertyName("jointIndex")]      public int     JointIndex { get; set; }
     [JsonPropertyName("jointValue")]      public double? JointValue { get; set; }
 
-    // SetLocal / ClearLocal — also used as per-step local override on move steps
+    // SetLocal / ClearLocal — also used as per-step local override on move steps. LocalId is the
+    // stable link (rename-proof); LocalName is a display label / fallback for pre-id steps.
     [JsonPropertyName("localName")]       public string? LocalName { get; set; }
+    [JsonPropertyName("localId")]         public string? LocalId { get; set; }
 
     // JumpL / JumpJ — Z height used for lift and lower legs (mm). JumpZStart/JumpZEnd override each leg independently.
     [JsonPropertyName("jumpZ")]      public double? JumpZ      { get; set; }

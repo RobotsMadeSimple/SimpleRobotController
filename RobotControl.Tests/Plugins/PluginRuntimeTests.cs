@@ -547,7 +547,7 @@ public sealed class PluginRuntimeTests : IAsyncLifetime
 
     private ValidationContext VCtx() => new()
     {
-        PointExists    = n => n == "P1",
+        PointExists    = (id, n) => n == "P1",
         GridNameExists = n => n == "Tray",
         PluginLookup   = id => ValidationPlugin.From(Manager.Get(id)),
     };

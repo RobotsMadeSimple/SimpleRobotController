@@ -103,7 +103,9 @@ internal sealed class BuiltProgramCommands
     private void StartBackgroundProgram(CommandMessage msg)
     {
         var p     = CommandJson.LoadParams<ProgramActionParams>(msg);
-        var built = _robot.builtProgramRepo.Get(p.ProgramName);
+        // Id first (rename-proof), then name.
+        var built = (!string.IsNullOrEmpty(p.ProgramId) ? _robot.builtProgramRepo.GetById(p.ProgramId) : null)
+                    ?? _robot.builtProgramRepo.Get(p.ProgramName);
         if (built != null && built.IsBackground)
             _background.TryStart(built);
     }
@@ -241,9 +243,10 @@ internal sealed class BuiltProgramCommands
         var vision = _robot.VisionRepo;
         return new ValidationContext
         {
-            PointExists         = n => _robot.pointRepo.Get(n) != null,
-            ToolExists          = n => _robot.toolRepo.Get(n) != null,
-            LocalExists         = n => _robot.localRepo.Get(n) != null,
+            // Id first (rename-proof), name as fallback/convenience.
+            PointExists         = (id, n) => _robot.pointRepo.GetById(id) != null || (!string.IsNullOrEmpty(n) && _robot.pointRepo.Get(n) != null),
+            ToolExists          = (id, n) => _robot.toolRepo.GetById(id)  != null || (!string.IsNullOrEmpty(n) && _robot.toolRepo.Get(n)  != null),
+            LocalExists         = (id, n) => _robot.localRepo.GetById(id) != null || (!string.IsNullOrEmpty(n) && _robot.localRepo.Get(n) != null),
             GridExists          = id => _robot.gridRepo.Get(id) != null,
             StackExists         = id => _robot.stackRepo.Get(id) != null,
             VisionProgramExists = vision == null ? null : id => vision.Get(id) != null,

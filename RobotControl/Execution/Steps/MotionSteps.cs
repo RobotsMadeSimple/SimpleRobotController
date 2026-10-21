@@ -398,7 +398,10 @@ namespace Controller.RobotControl.Execution
     {
         public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
         {
-            ctx.Controller.ApplyTool(step.ToolName);
+            // Resolve by stable id first (rename-proof), fall back to the stored name. Applying by
+            // the resolved tool's current name keeps ApplyTool as the single apply primitive.
+            var tool = ctx.Controller.toolRepo.GetById(step.ToolId);
+            ctx.Controller.ApplyTool(tool?.Name ?? step.ToolName);
             return StepOutcome.Advance;
         }
     }
@@ -421,14 +424,17 @@ namespace Controller.RobotControl.Execution
     {
         public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
         {
-            if (string.IsNullOrEmpty(step.LocalName))
+            // No id and no name → clear the active local. Otherwise resolve by stable id first,
+            // falling back to the stored name (rename-proof link).
+            if (string.IsNullOrEmpty(step.LocalId) && string.IsNullOrEmpty(step.LocalName))
             {
                 ctx.ActiveLocal = null;
             }
             else
             {
-                var local = ctx.Locals.Get(step.LocalName);
-                if (local is null) return ctx.Finish(ProgramStatus.Error, $"Local not found: {step.LocalName}");
+                var local = ctx.Locals.GetById(step.LocalId)
+                    ?? (string.IsNullOrEmpty(step.LocalName) ? null : ctx.Locals.Get(step.LocalName));
+                if (local is null) return ctx.Finish(ProgramStatus.Error, $"Local not found: {step.LocalName ?? step.LocalId}");
                 ctx.ActiveLocal = new Vector6(local.X, local.Y, local.Z, local.RX, local.RY, local.RZ);
             }
             return StepOutcome.Advance;

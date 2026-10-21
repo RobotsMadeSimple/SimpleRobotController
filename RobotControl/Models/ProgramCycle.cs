@@ -149,6 +149,14 @@ public class ProgramActionParams
 {
     [JsonPropertyName("programName")]
     public string ProgramName { get; set; } = "";
+
+    /// <summary>
+    /// Stable id of a built program. When set, the target is resolved by id first (rename-proof)
+    /// and its current name used for the name-keyed runtime. Optional — external (non-built)
+    /// programs have no id and are addressed by <see cref="ProgramName"/> only.
+    /// </summary>
+    [JsonPropertyName("programId")]
+    public string? ProgramId { get; set; }
 }
 
 

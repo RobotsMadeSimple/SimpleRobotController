@@ -68,19 +68,23 @@ internal sealed class ProgramCycleCommands
     private void StartProgram(CommandMessage msg)
     {
         var p     = CommandJson.LoadParams<ProgramActionParams>(msg);
-        var built = _robot.builtProgramRepo.Get(p.ProgramName);
+        // Resolve by stable id first (rename-proof), then by name; use the resolved program's
+        // current name for the name-keyed runtime. External programs have no id → name only.
+        var built = (!string.IsNullOrEmpty(p.ProgramId) ? _robot.builtProgramRepo.GetById(p.ProgramId) : null)
+                    ?? _robot.builtProgramRepo.Get(p.ProgramName);
+        var name  = built?.Name ?? p.ProgramName;
         if (built != null)
         {
-            if (_executor?.IsPaused == true && _executor.CurrentProgramName == p.ProgramName)
+            if (_executor?.IsPaused == true && _executor.CurrentProgramName == name)
                 _executor.Resume();
             else
             {
-                _robot.DisplaceRunningBuiltProgram(p.ProgramName);
+                _robot.DisplaceRunningBuiltProgram(name);
                 _executor?.Start(built);
             }
         }
         else
-            _programs.SetFlag(p.ProgramName, "Start");
+            _programs.SetFlag(name, "Start");
     }
 
     private void StopProgram(CommandMessage msg)

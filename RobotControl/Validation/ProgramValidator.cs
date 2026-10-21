@@ -114,9 +114,12 @@ namespace Controller.RobotControl.Validation
     /// </summary>
     internal sealed class ValidationContext
     {
-        public Func<string, bool>? PointExists         { get; init; }
-        public Func<string, bool>? ToolExists          { get; init; }
-        public Func<string, bool>? LocalExists         { get; init; }
+        // (id, name) → exists? Resolves by stable id first, falling back to name — so a renamed
+        // point/tool/local linked by id is not falsely flagged as missing. Expression/text call
+        // sites that only have a typed name pass (null, name).
+        public Func<string?, string?, bool>? PointExists         { get; init; }
+        public Func<string?, string?, bool>? ToolExists          { get; init; }
+        public Func<string?, string?, bool>? LocalExists         { get; init; }
         /// <summary>By grid id (what GridPointRef carries).</summary>
         public Func<string, bool>? GridExists          { get; init; }
         /// <summary>By stack id (what StackPointRef carries).</summary>
@@ -690,8 +693,9 @@ namespace Controller.RobotControl.Validation
                 {
                     case StepType.MoveL: case StepType.MoveJ: case StepType.JumpL: case StepType.JumpJ:
                         CheckMoveTarget(s, at);
-                        if (!string.IsNullOrEmpty(s.LocalName) && _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalName))
-                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName}' does not exist", "localName");
+                        if ((!string.IsNullOrEmpty(s.LocalId) || !string.IsNullOrEmpty(s.LocalName)) &&
+                            _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalId, s.LocalName))
+                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName ?? s.LocalId}' does not exist", "localName");
                         break;
 
                     case StepType.SetOutput:
@@ -748,14 +752,15 @@ namespace Controller.RobotControl.Validation
                         break;
 
                     case StepType.SetTool:
-                        if (!string.IsNullOrEmpty(s.ToolName) && s.ToolName != "none" &&
-                            _ctx.ToolExists != null && !_ctx.ToolExists(s.ToolName))
-                            Add(at, ValidationCodes.UnknownTool, $"Tool '{s.ToolName}' does not exist", "toolName");
+                        if ((!string.IsNullOrEmpty(s.ToolId) || (!string.IsNullOrEmpty(s.ToolName) && s.ToolName != "none")) &&
+                            _ctx.ToolExists != null && !_ctx.ToolExists(s.ToolId, s.ToolName))
+                            Add(at, ValidationCodes.UnknownTool, $"Tool '{s.ToolName ?? s.ToolId}' does not exist", "toolName");
                         break;
 
                     case StepType.SetLocal:
-                        if (!string.IsNullOrEmpty(s.LocalName) && _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalName))
-                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName}' does not exist", "localName");
+                        if ((!string.IsNullOrEmpty(s.LocalId) || !string.IsNullOrEmpty(s.LocalName)) &&
+                            _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalId, s.LocalName))
+                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName ?? s.LocalId}' does not exist", "localName");
                         break;
 
                     case StepType.RunVision:
@@ -1069,13 +1074,13 @@ namespace Controller.RobotControl.Validation
                     }
                     else if (expr.Contains('$') || expr.Contains('{'))
                         CheckTemplate(expr, at, "pointNameExpr", ValidationSeverity.Error);
-                    else if (_ctx.PointExists != null && !_ctx.PointExists(expr.Trim()))
+                    else if (_ctx.PointExists != null && !_ctx.PointExists(null, expr.Trim()))
                         Add(at, ValidationCodes.UnknownPoint, $"Point '{expr.Trim()}' does not exist", "pointNameExpr");
                 }
-                else if (!string.IsNullOrEmpty(s.PointName))
+                else if (!string.IsNullOrEmpty(s.PointId) || !string.IsNullOrEmpty(s.PointName))
                 {
-                    if (_ctx.PointExists != null && !_ctx.PointExists(s.PointName))
-                        Add(at, ValidationCodes.UnknownPoint, $"Point '{s.PointName}' does not exist", "pointName");
+                    if (_ctx.PointExists != null && !_ctx.PointExists(s.PointId, s.PointName))
+                        Add(at, ValidationCodes.UnknownPoint, $"Point '{s.PointName ?? s.PointId}' does not exist", "pointName");
                 }
             }
 
@@ -1252,7 +1257,7 @@ namespace Controller.RobotControl.Validation
                 }
                 else if (t.Contains('$') || t.Contains('{'))
                     CheckTemplate(t, at, field, ValidationSeverity.Error);
-                else if (_ctx.PointExists != null && !_ctx.PointExists(t))
+                else if (_ctx.PointExists != null && !_ctx.PointExists(null, t))
                     Add(at, ValidationCodes.UnknownPoint, $"Point '{t}' does not exist", field);
             }
 

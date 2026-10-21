@@ -32,9 +32,9 @@ public class ProgramValidatorTests
 
     private static ValidationContext Ctx(params BuiltProgram[] others) => new()
     {
-        PointExists         = Points.Contains,
-        ToolExists          = n => n == "Gripper",
-        LocalExists         = n => n == "Fixture",
+        PointExists         = (id, n) => n != null && Points.Contains(n),
+        ToolExists          = (id, n) => n == "Gripper",
+        LocalExists         = (id, n) => n == "Fixture",
         GridExists          = id => id == "grid1",
         StackExists         = id => id == "stack1",
         VisionProgramExists = id => id == "vp1",
