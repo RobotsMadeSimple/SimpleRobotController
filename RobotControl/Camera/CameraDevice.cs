@@ -45,6 +45,8 @@ namespace Controller.RobotControl.Camera
         /// <summary>Sofia / DVRIP (XMeye) camera; username/password are its Sofia login.</summary>
         public bool   IsSofia      => SourceType == NetworkCameraSource.SourceSofia;
         public bool   IsUsb        => SourceType == NetworkCameraSource.SourceUsb;
+        /// <summary>A phone/client push source: no capture thread — frames arrive via <see cref="PushFrame"/>.</summary>
+        public bool   IsPhone      => SourceType == NetworkCameraSource.SourcePhone;
         public string Host         { get; private set; } = "";
         public int    Port         { get; private set; } = SofiaCameraSource.DefaultPort;
         public string Stream       { get; private set; } = SofiaCameraSource.StreamMain;
@@ -62,7 +64,13 @@ namespace Controller.RobotControl.Camera
         public Action<List<CameraResolution>>?  OnResolutionsDetected;
 
         private byte[]?         _latestFrame;
+        private byte[]?         _latestPreview;   // optional lighter JPEG for live /ws preview
         private readonly object _frameLock = new();
+
+        // Phone push source: the wall-clock tick of the last pushed frame. A phone camera is
+        // "connected" while frames keep arriving; it goes stale after PhoneStaleMs with none.
+        private long _lastPushMs = long.MinValue / 2;
+        private const int PhoneStaleMs = 3000;
 
         // Capture thread lifecycle. _generation is bumped on every Start(); a thread whose
         // generation is stale exits at its next check, so a Stop() whose Join timed out
@@ -153,6 +161,9 @@ namespace Controller.RobotControl.Camera
         public void Start()
         {
             if (!Enabled) return;
+            // Phone sources have no device to open — frames are pushed in over the ingest
+            // socket (PushFrame). There is no capture thread to start.
+            if (IsPhone) return;
             if (_thread is { IsAlive: true } && _running) return;   // idempotent
 
             int gen  = Interlocked.Increment(ref _generation);
@@ -195,11 +206,39 @@ namespace Controller.RobotControl.Camera
             lock (_frameLock) return _latestFrame;
         }
 
+        /// <summary>
+        /// The frame for live <c>/ws</c> preview. A source may supply a lighter (downscaled) JPEG here
+        /// so the preview stream doesn't flood the network at full resolution; snapshot and vision keep
+        /// reading the full-resolution <see cref="GetLatestFrame"/>. Falls back to the full frame.
+        /// </summary>
+        public byte[]? GetLatestPreviewFrame()
+        {
+            lock (_frameLock) return _latestPreview ?? _latestFrame;
+        }
+
+        /// <summary>
+        /// A phone/client push source delivered a JPEG frame (over <c>/camera/{id}/ingest</c>).
+        /// Stores it as the latest frame — every consumer (snapshot, <c>/ws</c>, vision,
+        /// calibration) reads <see cref="GetLatestFrame"/>, so nothing downstream changes.
+        /// <paramref name="width"/>/<paramref name="height"/> ≤ 0 leave the last known size.
+        /// </summary>
+        public void PushFrame(byte[] jpeg, int width, int height, byte[]? preview = null)
+        {
+            lock (_frameLock) { _latestFrame = jpeg; _latestPreview = preview; }
+            if (width  > 0) StreamWidth  = width;
+            if (height > 0) StreamHeight = height;
+            _lastPushMs = Environment.TickCount64;
+        }
+
+        /// <summary>Phone sources report connectivity from push freshness; others use the capture thread's flag.</summary>
+        private bool EffectiveConnected =>
+            IsPhone ? (Environment.TickCount64 - _lastPushMs) < PhoneStaleMs : Connected;
+
         public CameraState GetState() => new()
         {
             Id                   = Id,
             Name                 = Name,
-            Connected            = Connected,
+            Connected            = EffectiveConnected,
             DeviceIndex          = DeviceIndex,
             Width                = Width,
             Height               = Height,

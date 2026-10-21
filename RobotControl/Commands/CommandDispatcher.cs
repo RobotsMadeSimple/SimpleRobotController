@@ -50,6 +50,7 @@ internal sealed class CommandDispatcher
         new IoCommands(robot).Register(d);
         new AuxCommands(robot).Register(d);
         new CameraCommands(robot).Register(d);
+        new DeviceCommands(robot).Register(d);
         new VisionCommands(robot).Register(d);
         new CalibrationCommands(robot).Register(d);
         new PluginCommands(robot).Register(d);

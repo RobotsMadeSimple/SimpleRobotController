@@ -31,6 +31,9 @@ namespace Controller.RobotControl.Camera
         public const string SourceNetwork = "network";
         /// <summary>XMeye / Sofia DVRIP camera (docs/network-cameras.md, "Sofia / DVRIP").</summary>
         public const string SourceSofia   = "sofia";
+        /// <summary>A phone (or other client) that pushes JPEG frames in over <c>/camera/{id}/ingest</c>;
+        /// the controller never opens anything — see <see cref="CameraDevice.PushFrame"/>.</summary>
+        public const string SourcePhone   = "phone";
         public const string TransportTcp  = "tcp";
         public const string TransportUdp  = "udp";
 
@@ -52,6 +55,7 @@ namespace Controller.RobotControl.Camera
             var v = s?.Trim();
             if (string.Equals(v, SourceNetwork, StringComparison.OrdinalIgnoreCase)) return SourceNetwork;
             if (string.Equals(v, SourceSofia,   StringComparison.OrdinalIgnoreCase)) return SourceSofia;
+            if (string.Equals(v, SourcePhone,   StringComparison.OrdinalIgnoreCase)) return SourcePhone;
             return SourceUsb;
         }
 

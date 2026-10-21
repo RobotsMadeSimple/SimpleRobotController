@@ -109,7 +109,7 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>The first segment of every property name — a <c>$name.…</c> starting with one of these is a property reference.</summary>
         public static readonly IReadOnlySet<string> Roots =
-            new HashSet<string>(["robot", "program", "time", "aux", "camera"], StringComparer.OrdinalIgnoreCase);
+            new HashSet<string>(["robot", "program", "time", "aux", "camera", "device"], StringComparer.OrdinalIgnoreCase);
 
         public bool TryGet(string name, out double value)
         {
@@ -138,6 +138,9 @@ namespace Controller.RobotControl.Execution
             if (name.StartsWith("camera.", StringComparison.OrdinalIgnoreCase))
                 return TryGetCamera(name, out value);
 
+            if (name.StartsWith("device.", StringComparison.OrdinalIgnoreCase))
+                return TryGetDevice(name, out value);
+
             // $<pluginId>.<name>. Plugin ids can never be one of the roots above (manifest
             // rule), so asking after them is the documented computed → plugin → robot order
             // without a plugin lookup on every $robot.x read.
@@ -165,6 +168,19 @@ namespace Controller.RobotControl.Execution
 
         private IEnumerable<string> CameraIds() =>
             _robot?.CameraManager?.GetState().Select(s => s.Id) ?? [];
+
+        // $device.<deviceId>.<channel>  — a value a phone/client pushed over /devices/{id}/ingest.
+        // The device id is the first segment (ids never contain dots); the channel is the rest,
+        // so a dotted channel like "accel.x" stays intact.
+        private bool TryGetDevice(string name, out double value)
+        {
+            value = 0;
+            if (_robot?.DeviceManager is not { } mgr) return false;
+            var rest = name["device.".Length..];
+            int dot = rest.IndexOf('.');
+            if (dot <= 0 || dot == rest.Length - 1) return false;
+            return mgr.TryGetChannel(rest[..dot], rest[(dot + 1)..], out value);
+        }
 
         // $aux.<deviceId>.<axisIndex>.position  and  $aux.<deviceId>.moving
         private bool TryGetAux(string name, out double value)
@@ -219,6 +235,12 @@ namespace Controller.RobotControl.Execution
 
             foreach (var id in CameraIds())
                 yield return ($"camera.{id}.calibrated", $"1 when camera '{id}' has a camera-to-robot calibration", "boolean");
+
+            if (_robot.DeviceManager is { } devices)
+                foreach (var (id, channel, unit) in devices.ListChannels())
+                    yield return ($"device.{id}.{channel}",
+                                  string.IsNullOrEmpty(unit) ? $"Phone channel '{channel}'" : $"Phone channel '{channel}' ({unit})",
+                                  "number");
         }
     }
 }

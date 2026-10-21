@@ -270,6 +270,9 @@ namespace Controller.RobotControl
         // ── USB Cameras ───────────────────────────────────────────────────────
         public Camera.CameraManager CameraManager { get; private set; } = null!;
 
+        // ── Phone / client data devices ───────────────────────────────────────
+        public Devices.DeviceManager DeviceManager { get; private set; } = null!;
+
         // ── Vision ────────────────────────────────────────────────────────────
         public Vision.VisionProgramRepository VisionRepo    { get; private set; } = null!;
         public Vision.VisionManager           VisionManager { get; private set; } = null!;
@@ -339,6 +342,8 @@ namespace Controller.RobotControl
             AuxAxisManager = new AuxAxisManager("aux_config.json");
 
             CameraManager = new Camera.CameraManager("camera_config.json");
+
+            DeviceManager = new Devices.DeviceManager("device_config.json");
 
             VisionRepo    = new Vision.VisionProgramRepository("vision_programs");
             VisionManager = new Vision.VisionManager(CameraManager, VisionRepo);
