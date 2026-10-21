@@ -113,6 +113,19 @@ public sealed class PluginPropertyDef
 }
 
 /// <summary>
+/// A custom GUI a plugin ships (docs/plugins.md §4). The controller serves the files and the
+/// app shows them in a WebView on the plugin's detail page; the page talks to the controller over
+/// the per-plugin UI WebSocket (<c>view.set</c> push / <c>ui.action</c> invoke).
+/// </summary>
+public sealed class PluginUiDef
+{
+    /// <summary>Entry HTML relative to the plugin folder, e.g. <c>ui/index.html</c>.</summary>
+    public string Entry { get; set; } = "";
+    /// <summary>Optional title shown above the embedded GUI.</summary>
+    public string? Title { get; set; }
+}
+
+/// <summary>
 /// The parsed <c>plugin.json</c> (docs/plugins.md §2). <see cref="Validate"/> returns every
 /// rule violation; a manifest with problems leaves its plugin in state <c>error</c>.
 /// </summary>
@@ -159,6 +172,10 @@ public sealed class PluginManifest
     public List<PluginStepDef> Steps { get; set; } = new();
     public List<PluginFunctionDef> Functions { get; set; } = new();
     public List<PluginPropertyDef> Properties { get; set; } = new();
+    public PluginUiDef? Ui { get; set; }
+
+    /// <summary>True when the plugin ships a custom GUI (a valid <see cref="Ui"/> with an entry).</summary>
+    [JsonIgnore] public bool HasUi => Ui is not null && !string.IsNullOrWhiteSpace(Ui.Entry);
 
     /// <summary>The display name: <see cref="Name"/>, or the id when absent.</summary>
     [JsonIgnore] public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Id : Name!;
@@ -297,6 +314,15 @@ public sealed class PluginManifest
                 Add("badArity", $"function '{f.Name}' needs 0 <= minArgs <= maxArgs", $"{at}.maxArgs");
             if (f.TimeoutMs is { } t && (t <= 0 || t > MaxFunctionTimeoutMs))
                 Add("badFunctionTimeout", $"function timeoutMs must be 1..{MaxFunctionTimeoutMs}", $"{at}.timeoutMs");
+        }
+
+        // ── ui ──
+        if (Ui is not null)
+        {
+            if (string.IsNullOrWhiteSpace(Ui.Entry))
+                Add("badUi", "ui.entry is required when ui is present", "ui.entry");
+            else if (!IsInsideFolder(Ui.Entry))
+                Add("entryOutsideFolder", $"ui.entry '{Ui.Entry}' must stay inside the plugin folder", "ui.entry");
         }
 
         // ── properties ──

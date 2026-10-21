@@ -37,6 +37,9 @@ internal sealed class PluginCommands
         d.AddAsync("UninstallPlugin",      UninstallPlugin);
         d.AddAsync("ReloadPlugins",        ReloadPlugins);
         d.Add("RotatePluginToken",         RotatePluginToken);
+        d.AddAsync("InvokePluginAction",   InvokePluginAction);
+        d.AddAsync("CallPluginFunction",   CallPluginFunction);
+        d.AddAsync("RunPluginStep",        RunPluginStep);
     }
 
     private object? GetPlugins(CommandMessage msg) =>
@@ -130,6 +133,103 @@ internal sealed class PluginCommands
         if (Host(msg, out var h) is { } err) return err;
         h.RotateToken();
         return Summary(h);
+    }
+
+    /// <summary>Invokes a plugin UI action without a UI socket (docs/plugins.md §7); the GUI uses the socket instead.</summary>
+    private async Task<object?> InvokePluginAction(CommandMessage msg)
+    {
+        if (Host(msg, out var h) is { } err) return err;
+        var p = Params(msg);
+        string? action = p.TryGetProperty("action", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
+        if (string.IsNullOrEmpty(action)) return Fail("badParams", "action is required");
+        JsonElement args = p.TryGetProperty("args", out var ar) ? ar : PluginJson.EmptyObject;
+        try { return await h.InvokeUiActionAsync(action, args); }     // plugin replies { result: … } → merged into the ack
+        catch (PluginProtocolException ex) { return Fail(ex.Code, ex.Message); }
+        catch (Exception ex) { return Fail("actionFailed", ex.Message); }
+    }
+
+    /// <summary>
+    /// Calls an expression function <c>id.name(args)</c> directly from a client (docs/plugins.md §7),
+    /// so the plugin detail page can exercise a function without building a program. Args are numbers
+    /// (booleans accepted as 0/1); returns <c>{ value }</c>. Runs off the dispatcher thread because
+    /// the call blocks up to the function's timeout.
+    /// </summary>
+    private async Task<object?> CallPluginFunction(CommandMessage msg)
+    {
+        if (Host(msg, out var h) is { } err) return err;
+        var p = Params(msg);
+        string? name = p.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+        if (string.IsNullOrEmpty(name)) return Fail("badParams", "name is required");
+
+        var def = h.Manifest?.Functions.FirstOrDefault(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (def is null) return Fail("unknownPluginFunction", $"Plugin '{h.Id}' has no function '{name}'");
+
+        var args = new List<double>();
+        if (p.TryGetProperty("args", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var a in arr.EnumerateArray())
+            {
+                switch (a.ValueKind)
+                {
+                    case JsonValueKind.Number: args.Add(a.GetDouble()); break;
+                    case JsonValueKind.True:   args.Add(1); break;
+                    case JsonValueKind.False:  args.Add(0); break;
+                    default: return Fail("badParams", "args must be numbers");
+                }
+            }
+        }
+        if (args.Count < def.MinArgs || args.Count > def.EffectiveMaxArgs)
+        {
+            string want = def.MinArgs == def.EffectiveMaxArgs ? $"{def.MinArgs}" : $"{def.MinArgs}–{def.EffectiveMaxArgs}";
+            return Fail("badParams", $"{h.Id}.{def.Name}() expects {want} argument(s), got {args.Count}");
+        }
+
+        try
+        {
+            double value = await Task.Run(() => Manager.CallFunction($"{h.Id}.{def.Name}", args.ToArray()));
+            return new { value };
+        }
+        catch (PluginFunctionException ex) { return Fail(ex.Code, ex.Message); }
+        catch (Exception ex) { return Fail("pluginFunctionFailed", ex.Message); }
+    }
+
+    /// <summary>
+    /// Runs a plugin step once directly from a client (docs/plugins.md §7), so the plugin detail page
+    /// can test a step without building a program. <c>params</c> is an object of already-resolved
+    /// param values (numbers/booleans/strings/etc.); returns <c>{ outputs }</c>. Bridges the
+    /// callback-based <see cref="PluginManager.ExecuteStep"/> to a single awaited reply, bounded by
+    /// the step's own timeout (or a default), cancelling the invocation if it overruns.
+    /// </summary>
+    private async Task<object?> RunPluginStep(CommandMessage msg)
+    {
+        if (Host(msg, out var h) is { } err) return err;
+        var p = Params(msg);
+        string? stepId = p.TryGetProperty("stepId", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+        if (string.IsNullOrEmpty(stepId)) return Fail("badParams", "stepId is required");
+
+        var def = h.Manifest?.Steps.FirstOrDefault(x => string.Equals(x.Id, stepId, StringComparison.Ordinal));
+        if (def is null) return Fail("unknownPluginStep", $"Plugin '{h.Id}' has no step '{stepId}'");
+
+        // Pass the client's param values straight through (JsonElement values serialize as-is on the wire).
+        var request = new PluginStepRequest { ProgramName = "Test run", StepName = def.Label ?? def.Id, IsBackground = false };
+        if (p.TryGetProperty("params", out var pp) && pp.ValueKind == JsonValueKind.Object)
+            foreach (var prop in pp.EnumerateObject()) request.Params[prop.Name] = prop.Value.Clone();
+
+        var tcs = new TaskCompletionSource<PluginStepReply>(TaskCreationOptions.RunContinuationsAsynchronously);
+        string invocationId;
+        try { invocationId = Manager.ExecuteStep(h.Id, stepId, request, reply => tcs.TrySetResult(reply)); }
+        catch (PluginNotRunningException) { return Fail("pluginNotRunning", $"Plugin '{h.Id}' is not running"); }
+
+        int timeoutMs = def.TimeoutMs > 0 ? def.TimeoutMs : 30000;
+        if (await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs)) != tcs.Task)
+        {
+            Manager.CancelStep(invocationId, "timeout");
+            return Fail("pluginStepTimeout", $"Step '{def.Label ?? def.Id}' timed out");
+        }
+
+        var r = await tcs.Task;
+        if (!r.Ok) return Fail(r.Error ?? "pluginStepFailed", r.Message ?? "Step failed");
+        return Json(new { outputs = r.Outputs });
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

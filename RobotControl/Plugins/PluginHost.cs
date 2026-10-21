@@ -98,6 +98,18 @@ public sealed class PluginHost : IPluginSessionHandler
     /// <summary>Live property values (lock-free reads). Cleared on disconnect.</summary>
     public ConcurrentDictionary<string, double> Properties { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    // Custom-GUI view state (docs/plugins.md §4.3 view.set). Arbitrary JSON, shallow-merged per
+    // top-level key. Guarded by _lock; a cached serialization + version let UI sockets poll cheaply.
+    private readonly Dictionary<string, JsonElement> _viewState = new(StringComparer.Ordinal);
+    private long _viewVersion;
+    private string _viewJson = "{}";
+
+    /// <summary>A snapshot for a UI socket: the change version, whether the plugin is connected, and the view-state JSON.</summary>
+    public (long Version, bool Connected, string Json) ViewSnapshot()
+    {
+        lock (_lock) return (_viewVersion, Connected, _viewJson);
+    }
+
     public bool Enabled { get { lock (_lock) return _config.Enabled; } }
     public string Token { get { lock (_lock) return _config.Token; } }
 
@@ -121,6 +133,18 @@ public sealed class PluginHost : IPluginSessionHandler
     public Dictionary<string, JsonElement> GetConfig()
     {
         lock (_lock) return PluginConfigValidator.MergeDefaults(FileManifest?.ConfigSchema ?? new(), _config.Config);
+    }
+
+    /// <summary>
+    /// Invokes a UI action on the running plugin (docs/plugins.md §4.4 <c>ui.action</c>) and returns its reply's
+    /// <c>result</c>. Throws <see cref="PluginProtocolException"/> (<c>pluginNotRunning</c>) when not connected.
+    /// </summary>
+    public async Task<JsonElement> InvokeUiActionAsync(string actionId, JsonElement args, CancellationToken ct = default)
+    {
+        PluginSession? s;
+        lock (_lock) s = Connected && State is PluginState.Running or PluginState.Degraded ? _session : null;
+        if (s is null) throw new PluginProtocolException("pluginNotRunning", $"Plugin '{Id}' is not running");
+        return await s.RequestAsync("ui.action", new { actionId, args }, timeoutMs: 0, ct).ConfigureAwait(false);
     }
 
     // ── manifest (re)load ───────────────────────────────────────────────────
@@ -648,6 +672,20 @@ public sealed class PluginHost : IPluginSessionHandler
 
             case "properties.clear":
                 Properties.Clear();
+                break;
+
+            case "view.set":
+                if ((data.TryGetProperty("state", out var vs) || data.TryGetProperty("values", out vs)) && vs.ValueKind == JsonValueKind.Object)
+                    lock (_lock)
+                    {
+                        foreach (var pr in vs.EnumerateObject()) _viewState[pr.Name] = pr.Value.Clone();
+                        _viewVersion++;
+                        _viewJson = JsonSerializer.Serialize(_viewState, PluginJson.Options);
+                    }
+                break;
+
+            case "view.clear":
+                lock (_lock) { _viewState.Clear(); _viewVersion++; _viewJson = "{}"; }
                 break;
 
             case "log":

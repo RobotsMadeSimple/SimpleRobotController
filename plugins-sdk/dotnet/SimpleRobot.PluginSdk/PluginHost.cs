@@ -13,6 +13,7 @@ public sealed class PluginHost
     private readonly List<Func<IPluginContext, Task>> _ready = new();
     private readonly Dictionary<string, Func<IPluginContext, StepParams, Task<StepResult>>> _steps = new();
     private readonly Dictionary<string, Func<IPluginContext, double[], Task<double>>> _functions = new();
+    private readonly Dictionary<string, Func<IPluginContext, JsonElement, Task<object?>>> _actions = new();
     private readonly List<(string Pattern, Func<IPluginContext, JsonElement, Task> Handler)> _events = new();
     private readonly List<Func<IPluginContext, CancellationToken, Task>> _background = new();
     private readonly List<Func<IPluginContext, JsonElement, Task>> _configChanged = new();
@@ -70,6 +71,17 @@ public sealed class PluginHost
         return this;
     }
 
+    /// <summary>
+    /// Registers a handler for a UI action invoked from the plugin's custom GUI (docs/plugins.md §4.4 <c>ui.action</c>).
+    /// The handler's second argument is the GUI-supplied argument object; its return value is sent back as the invoke result.
+    /// </summary>
+    public PluginHost OnAction(string id, Func<IPluginContext, JsonElement, Task<object?>> handler)
+    {
+        Guard();
+        if (!_actions.TryAdd(id, handler)) throw new ArgumentException($"Action '{id}' is already registered", nameof(id));
+        return this;
+    }
+
     /// <summary>Handles a controller event (<c>program.started</c>, a glob such as <c>program.*</c>, …). Subscribed automatically at ready.</summary>
     public PluginHost On(string eventName, Func<IPluginContext, JsonElement, Task> handler)
     {
@@ -113,6 +125,11 @@ public sealed class PluginHost
             {
                 Expect(m, typeof(void), typeof(IPluginContext), typeof(JsonElement));
                 On(a.EventName, async (c, e) => await InvokeAsync(m, instance, c, e).ConfigureAwait(false));
+            }
+            foreach (var a in m.GetCustomAttributes<PluginActionAttribute>())
+            {
+                Expect(m, typeof(object), typeof(IPluginContext), typeof(JsonElement));
+                OnAction(a.Id, async (c, e) => await InvokeAsync(m, instance, c, e).ConfigureAwait(false));
             }
         }
         return this;
@@ -187,6 +204,7 @@ public sealed class PluginHost
     internal IReadOnlyList<Func<IPluginContext, JsonElement, Task>> ConfigHandlers => _configChanged;
     internal bool TryGetStep(string id, out Func<IPluginContext, StepParams, Task<StepResult>>? h) => _steps.TryGetValue(id, out h);
     internal bool TryGetFunction(string name, out Func<IPluginContext, double[], Task<double>>? h) => _functions.TryGetValue(name, out h);
+    internal bool TryGetAction(string id, out Func<IPluginContext, JsonElement, Task<object?>>? h) => _actions.TryGetValue(id, out h);
 
     internal IEnumerable<Func<IPluginContext, JsonElement, Task>> EventHandlersFor(string name)
     {

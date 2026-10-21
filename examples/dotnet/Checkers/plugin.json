@@ -1,0 +1,115 @@
+{
+  "id": "checkers",
+  "name": "Checkers Opponent",
+  "version": "1.0.0",
+  "description": "An American-checkers opponent hosted by the controller. Computes the robot's move with an alpha-beta search; no external server. Works in 0..31 square indices — the program maps a square to a physical point.",
+  "author": "SimpleRobot",
+  "protocolVersion": 1,
+
+  "runtime": "exe",
+  "entry": "Checkers.exe",
+  "args": [],
+
+  "autoStart": true,
+  "restart": { "mode": "always", "maxRestarts": 5, "backoffMs": 2000 },
+  "readyTimeoutMs": 15000,
+
+  "ui": { "entry": "ui/index.html", "title": "Checkers board" },
+
+  "configSchema": [
+    { "key": "maxDepth",     "label": "Search depth",   "type": "number", "default": 8,    "min": 1, "max": 20,    "step": 1, "help": "Maximum plies searched (higher = stronger, slower)" },
+    { "key": "timeBudgetMs", "label": "Think time (ms)", "type": "number", "default": 1000, "min": 50, "max": 20000, "step": 50, "help": "Wall-clock budget per move; iterative deepening keeps the best depth that finished in time" }
+  ],
+
+  "steps": [
+    {
+      "id": "newGame",
+      "label": "New game",
+      "description": "Reset to the standard opening position.",
+      "params": [
+        { "key": "firstPlayer", "label": "First to move", "type": "enum", "default": "black", "options": ["black", "white"] }
+      ],
+      "outputs": [
+        { "key": "turn",     "label": "Side to move (0=white,1=black)", "type": "number" },
+        { "key": "gameOver", "label": "Game over",                      "type": "boolean" },
+        { "key": "moveText", "label": "Status text",                    "type": "string" }
+      ],
+      "timeoutMs": 0
+    },
+    {
+      "id": "setBoard",
+      "label": "Set board from lists",
+      "description": "Replace the tracked board with an observed one (e.g. from vision). Each list is 32 booleans indexed by dark-square number.",
+      "params": [
+        { "key": "white",      "label": "White men",    "type": "list" },
+        { "key": "black",      "label": "Black men",    "type": "list" },
+        { "key": "whiteKings", "label": "White kings",  "type": "list" },
+        { "key": "blackKings", "label": "Black kings",  "type": "list" },
+        { "key": "turn",       "label": "Side to move", "type": "enum", "default": "black", "options": ["black", "white"] }
+      ],
+      "outputs": [
+        { "key": "legal",      "label": "Side has a move", "type": "boolean" },
+        { "key": "whiteCount", "label": "White pieces",    "type": "number" },
+        { "key": "blackCount", "label": "Black pieces",    "type": "number" },
+        { "key": "turn",       "label": "Side to move",    "type": "number" },
+        { "key": "gameOver",   "label": "Game over",       "type": "boolean" },
+        { "key": "winner",     "label": "Winner",          "type": "string" }
+      ],
+      "timeoutMs": 0
+    },
+    {
+      "id": "applyMove",
+      "label": "Apply opponent move",
+      "description": "Apply a human move by its from/to dark-square numbers. A multi-jump needs only its start and end; the engine fills in the forced path and captures.",
+      "params": [
+        { "key": "from", "label": "From square", "type": "number", "required": true },
+        { "key": "to",   "label": "To square",   "type": "number", "required": true }
+      ],
+      "outputs": [
+        { "key": "legal",    "label": "Was legal",       "type": "boolean" },
+        { "key": "captured", "label": "Captured squares", "type": "list" },
+        { "key": "path",     "label": "Move path",        "type": "list" },
+        { "key": "kinged",   "label": "Was crowned",      "type": "boolean" },
+        { "key": "gameOver", "label": "Game over",        "type": "boolean" },
+        { "key": "winner",   "label": "Winner",           "type": "string" },
+        { "key": "moveText", "label": "Move text",        "type": "string" }
+      ],
+      "timeoutMs": 0
+    },
+    {
+      "id": "aiMove",
+      "label": "Robot move",
+      "description": "Compute and apply the robot's move for the side to move. Outputs the squares the arm must act on.",
+      "params": [
+        { "key": "maxDepth",     "label": "Search depth (override)",   "type": "number", "min": 1, "max": 20 },
+        { "key": "timeBudgetMs", "label": "Think time ms (override)",  "type": "number", "min": 50, "max": 20000 }
+      ],
+      "outputs": [
+        { "key": "fromSquare", "label": "From square",      "type": "number" },
+        { "key": "toSquare",   "label": "To square",        "type": "number" },
+        { "key": "path",       "label": "Move path",        "type": "list" },
+        { "key": "captured",   "label": "Captured squares", "type": "list" },
+        { "key": "kinged",     "label": "Was crowned",      "type": "boolean" },
+        { "key": "gameOver",   "label": "Game over",        "type": "boolean" },
+        { "key": "winner",     "label": "Winner",           "type": "string" },
+        { "key": "moveText",   "label": "Move text",        "type": "string" }
+      ],
+      "timeoutMs": 0,
+      "cancellable": true
+    }
+  ],
+
+  "functions": [
+    { "name": "pieceAt",    "signature": "checkers.pieceAt(square)", "description": "Piece at a square: 0 empty, +1/+2 white man/king, -1/-2 black man/king", "minArgs": 1, "maxArgs": 1 },
+    { "name": "legalMoves", "signature": "checkers.legalMoves()",    "description": "Number of legal moves for the side to move (0 = game over)",          "minArgs": 0, "maxArgs": 0 }
+  ],
+
+  "properties": [
+    { "name": "gameOver",   "description": "1 when the game is over",      "type": "boolean" },
+    { "name": "turn",       "description": "Side to move (0 white, 1 black)", "type": "number" },
+    { "name": "whiteCount", "description": "White pieces on the board",    "type": "number" },
+    { "name": "blackCount", "description": "Black pieces on the board",    "type": "number" },
+    { "name": "lastFrom",   "description": "Last move's from square (-1 none)", "type": "number" },
+    { "name": "lastTo",     "description": "Last move's to square (-1 none)",   "type": "number" }
+  ]
+}

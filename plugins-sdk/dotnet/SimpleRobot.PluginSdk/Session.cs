@@ -347,6 +347,15 @@ internal sealed class Session
                     Reply(id, true);
                     return;
                 }
+                case "ui.action":
+                {
+                    var action = Str(p, "actionId") ?? "";
+                    if (!_host.TryGetAction(action, out var handler)) { Reply(id, false, error: "unknownAction", message: $"No action '{action}'"); return; }
+                    var args = p.TryGetProperty("args", out var a) ? a : EmptyObject;
+                    var result = await handler!(new PluginContext(this), args).ConfigureAwait(false);
+                    Reply(id, true, new { result });
+                    return;
+                }
                 case "shutdown":
                     Reply(id, true);
                     _shutdown.TrySetResult();
@@ -418,6 +427,9 @@ internal sealed class Session
 
         public void SetProperties(object values) => S.SendEvent("properties.set", new { values });
         public void ClearProperties() => S.SendEvent("properties.clear", null);
+
+        public void SetView(object state) => S.SendEvent("view.set", new { state });
+        public void ClearView() => S.SendEvent("view.clear", null);
 
         public void SetStatus(string state, string? message = null) =>
             S.SendEvent("status", message == null ? new { state } : (object)new { state, message });

@@ -72,3 +72,7 @@ public sealed class PluginFunctionAttribute(string name) : Attribute { public st
 /// <summary>Marks a method as an event handler. Signature: <c>(IPluginContext, JsonElement) → Task|void</c>.</summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
 public sealed class PluginEventAttribute(string eventName) : Attribute { public string EventName { get; } = eventName; }
+
+/// <summary>Marks a method as a UI action handler (invoked from the plugin's custom GUI). Signature: <c>(IPluginContext, JsonElement) → [Task&lt;]object?[&gt;]</c>; the return value is sent back to the GUI as the invoke result.</summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class PluginActionAttribute(string id) : Attribute { public string Id { get; } = id; }

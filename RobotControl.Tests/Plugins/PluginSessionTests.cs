@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Controller.RobotControl;
+using Controller.RobotControl.Commands;
 using Controller.RobotControl.Plugins;
 
 namespace RobotControl.Tests.Plugins;
@@ -163,6 +164,63 @@ public class PluginSessionTests : IDisposable
         await c.EventAsync("status", new { state = "ok" });
         await Wait.UntilAsync(() => Demo.State == PluginState.Running, "ok again");
         Assert.Null(Demo.StatusMessage);
+    }
+
+    [Fact]
+    public async Task CallPluginFunctionCommandRoundTripsAndValidates()
+    {
+        var c = await _env.ConnectReadyAsync("demo");
+        c.Handlers["function.call"] = p => new { value = p.GetProperty("args")[0].GetDouble() * 2 };
+
+        var d = new CommandDispatcher();
+        new PluginCommands(_env.Manager).Register(d);
+
+        JsonElement Send(object parameters)
+        {
+            Assert.True(d.TryGet("CallPluginFunction", out var h));
+            var msg = new CommandMessage { Type = "Command", Id = "t", Command = "CallPluginFunction", Params = JsonSerializer.SerializeToElement(parameters) };
+            var r = h(msg).GetAwaiter().GetResult();
+            return JsonSerializer.SerializeToElement(r ?? new { });
+        }
+        static string? Err(JsonElement r) => r.TryGetProperty("ok", out var ok) && !ok.GetBoolean() ? r.GetProperty("error").GetString() : null;
+
+        var ok = Send(new { id = "demo", name = "twice", args = new[] { 4.0 } });
+        Assert.Null(Err(ok));
+        Assert.Equal(8, ok.GetProperty("value").GetDouble());
+
+        Assert.Equal("badParams", Err(Send(new { id = "demo", name = "twice", args = Array.Empty<double>() })));   // twice needs 1 arg
+        Assert.Equal("unknownPluginFunction", Err(Send(new { id = "demo", name = "nope" })));
+        Assert.Equal("unknownPlugin", Err(Send(new { id = "ghost", name = "twice", args = new[] { 1.0 } })));
+    }
+
+    [Fact]
+    public async Task RunPluginStepCommandRoundTripsAndValidates()
+    {
+        var c = await _env.ConnectReadyAsync("demo");
+
+        var d = new CommandDispatcher();
+        new PluginCommands(_env.Manager).Register(d);
+        Assert.True(d.TryGet("RunPluginStep", out var h));
+
+        CommandMessage Msg(object parameters) =>
+            new() { Type = "Command", Id = "t", Command = "RunPluginStep", Params = JsonSerializer.SerializeToElement(parameters) };
+        static string? Err(JsonElement r) => r.TryGetProperty("ok", out var ok) && !ok.GetBoolean() ? r.GetProperty("error").GetString() : null;
+        JsonElement Immediate(object parameters) => JsonSerializer.SerializeToElement(h(Msg(parameters)).GetAwaiter().GetResult() ?? new { });
+
+        // Success: run "weigh", params forwarded, plugin reply surfaced as { outputs }.
+        var task = h(Msg(new { id = "demo", stepId = "weigh", @params = new { samples = 3.0, unit = "g" } }));
+        var req = await c.WaitForRequestAsync("step.execute");
+        Assert.Equal("weigh", req.GetProperty("params").GetProperty("stepId").GetString());
+        Assert.Equal(3, req.GetProperty("params").GetProperty("params").GetProperty("samples").GetDouble());
+        await c.SendRawAsync(new { t = "res", id = req.GetProperty("id").GetString(), ok = true, result = new { outputs = new { grams = 7.5 } } });
+        var okEl = JsonSerializer.SerializeToElement(await task ?? new { });
+        Assert.Null(Err(okEl));
+        Assert.Equal(7.5, okEl.GetProperty("outputs").GetProperty("grams").GetDouble());
+
+        // Validation (returns before anything is sent to the plugin).
+        Assert.Equal("badParams", Err(Immediate(new { id = "demo" })));                              // no stepId
+        Assert.Equal("unknownPluginStep", Err(Immediate(new { id = "demo", stepId = "nope" })));
+        Assert.Equal("unknownPlugin", Err(Immediate(new { id = "ghost", stepId = "weigh" })));
     }
 
     [Fact]

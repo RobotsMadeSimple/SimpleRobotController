@@ -17,6 +17,15 @@ public interface IPluginContext
     /// <summary>Replaces these values in the plugin's property table. Accepts an anonymous object or a dictionary.</summary>
     void SetProperties(object values);
     void ClearProperties();
+
+    /// <summary>
+    /// Pushes view state to the plugin's custom GUI (docs/plugins.md §4.3 <c>view.set</c>). The controller
+    /// shallow-merges the top-level keys of <paramref name="state"/> into the stored view state and streams
+    /// it to every open GUI. Accepts an anonymous object or a dictionary; any JSON is allowed (unlike properties).
+    /// </summary>
+    void SetView(object state);
+    /// <summary>Clears all view state (the GUI receives an empty state). Also happens automatically on disconnect.</summary>
+    void ClearView();
     /// <summary><paramref name="state"/> is "ok", "degraded" or "error".</summary>
     void SetStatus(string state, string? message = null);
 

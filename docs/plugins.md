@@ -65,6 +65,8 @@ a zip and triggers a reload of that one plugin.
   "restart": { "mode": "always", "maxRestarts": 5, "backoffMs": 2000 },
   "readyTimeoutMs": 15000,
 
+  "ui": { "entry": "ui/index.html", "title": "Scale" },
+
   "configSchema": [
     { "key": "port",     "label": "Serial port", "type": "string",  "default": "COM3", "help": "e.g. COM3 or /dev/ttyUSB0" },
     { "key": "baud",     "label": "Baud rate",   "type": "enum",    "default": "9600", "options": ["9600", "19200", "115200"] },
@@ -133,6 +135,7 @@ Rules:
 | `steps[].timeoutMs` | 0 (default) = none. The step's own `pluginTimeoutMs` overrides. |
 | `functions[].name` | `^[a-z][A-Za-z0-9_]{0,31}$`; called as `<id>.<name>(…)`. `timeoutMs` default 250, max 5000. |
 | `properties[].name` | `^[a-z][A-Za-z0-9_]{0,31}$`; read as `$<id>.<name>`. `type` is `number` or `boolean` (booleans are 0/1). |
+| `ui` | Optional custom GUI (§4.5). `ui.entry` is the entry HTML relative to the plugin folder (must stay inside it); `ui.title` is shown above the embedded page. The app renders it in a WebView on the plugin's detail page. |
 
 A manifest that fails validation leaves the plugin listed with state `error`
 and `message` naming the problem; it is never launched.
@@ -213,6 +216,8 @@ that fails validation → `error:"badParams"`. Message size limit 16 MB (images)
 | **evt** `log` | `{ level: "debug"|"info"|"warn"|"error", message }` | Appended to the plugin log with a timestamp. |
 | **evt** `status` | `{ state: "ok"|"degraded"|"error", message? }` | `degraded`/`error` show on the plugin card; `ok` clears. Does not stop the plugin. |
 | **evt** `step.progress` | `{ invocationId, message?, percent? }` | Updates the monitor's current-step description (`<step label>: <message>`). |
+| **evt** `view.set` | `{ state: { … } }` (or `{ values: { … } }`) | Custom-GUI state (§4.5). The controller **shallow-merges** the top-level keys into the stored view state and pushes it to every open GUI. Any JSON is allowed (unlike properties). |
+| **evt** `view.clear` | `{}` | Resets the view state to `{}`. |
 
 ### 4.4 Controller → plugin
 
@@ -222,6 +227,7 @@ that fails validation → `error:"badParams"`. Message size limit 16 MB (images)
 | **req** `step.cancel` | `{ invocationId, reason: "stopped"|"reset"|"timeout"|"shutdown" }` | `{}`. Sent when the run ends while the step is outstanding; a late `step.execute` reply is discarded. |
 | **req** `function.call` | `{ name, args: [numbers] }` | `{ value: number }` (booleans as 0/1). `ok:false` → the expression throws `pluginFunctionFailed` (program error). No reply within `timeoutMs` → `pluginFunctionTimeout`. |
 | **req** `config.changed` | `{ config }` | `{}`. Sent after `SetPluginConfig`. |
+| **req** `ui.action` | `{ actionId, args }` | `{ result }` — invoked when the custom GUI calls `SimpleRobot.invoke(actionId, args)` (§4.5). `ok:false` with `error`/`message` surfaces to the GUI as a rejected promise. |
 | **req** `shutdown` | `{ reason }` | `{}`; then the plugin exits. |
 | **evt** `program.started` / `program.resumed` / `program.paused` / `program.stopped` / `program.finished` / `program.error` | `{ programName, isBackground, runCount, error? }` | — |
 | **evt** `step.started` / `step.completed` / `step.skipped` | `{ programName, stepId, stepType, stepName?, stepIndex, description }` | — |
@@ -233,6 +239,38 @@ that fails validation → `error:"badParams"`. Message size limit 16 MB (images)
 
 Event names are dotted; subscription globs: `program.*`, `step.*`, `robot.*`,
 `io.changed`, `status`, `plugin.*`, `*`.
+
+### 4.5 Custom GUI (view + actions)
+
+A plugin may ship an interactive HTML GUI (manifest `ui.entry`). The controller
+serves it; the app shows it in a WebView on the plugin's detail page. The page talks
+to the controller over a dedicated **per-plugin UI WebSocket** — the app does not relay.
+
+HTTP surface (served by the controller, same origin as the WS, LAN posture — no token,
+scoped by id, like `/camera/{id}/…`):
+
+| Path | Purpose |
+|---|---|
+| `GET /plugins/{id}/ui/{**path}` | The plugin's ui files (the folder of `ui.entry`); an empty path serves the entry. Sent with a restrictive `Content-Security-Policy` (self + ws only). |
+| `GET /plugins/{id}/ui/ui-bridge.js` | The canonical bridge (reserved name; never a plugin file). |
+| `GET /plugins/{id}/ui` (WebSocket) | Pushes `{t:"state",connected,state}` (the current view state, then on every change); accepts `{t:"invoke",id,action,args}` → runs `ui.action` on the plugin → replies `{t:"result",id,ok,result|error}`. |
+
+The page loads the bridge and uses it (no WS plumbing of its own):
+
+```html
+<script src="ui-bridge.js"></script>
+<script>
+  SimpleRobot.onState(function (s) { /* render s — whatever the plugin view.set's */ });
+  SimpleRobot.onStatus(function (connected) { /* plugin up/down */ });
+  button.onclick = function () { SimpleRobot.invoke("doThing", { n: 1 }).then(/* result */); };
+</script>
+```
+
+Bridge API: `SimpleRobot.onState(cb)→unsub`, `getState()`, `onStatus(cb)→unsub`,
+`isConnected()`, `onReady(cb)`, `invoke(action, args)→Promise<result>`, `pluginId`.
+The plugin pushes state with `ctx.SetView({...})` (merged) / `ctx.ClearView()` and
+handles actions with `OnAction(id, (ctx, args) => result)` (C#) — the GUI's `invoke`
+result is whatever the handler returns.
 
 ## 5. Controller internals (where things live)
 
@@ -453,6 +491,8 @@ missing grid/stack report `unknownGrid`/`unknownStack`.
 | `UninstallPlugin` | `{ id }` | `{}`. Stops it, deletes `plugins/<id>` and `pluginConfigs/<id>.json`. |
 | `ReloadPlugins` | — | `{ plugins }`. Rescans the folder: new folders appear, removed ones vanish (stopped first), changed manifests of stopped plugins reload. |
 | `RotatePluginToken` | `{ id }` | `{ plugin }` (external plugins must reconnect) |
+| `InvokePluginAction` | `{ id, action, args? }` | `{ result }` — runs a `ui.action` without the UI socket (the GUI uses the socket). `ok:false` `pluginNotRunning`/`actionFailed`. |
+| `CallPluginFunction` | `{ id, name, args?: number[] }` | `{ value }` — calls expression function `id.name(args)` directly (used by the plugin detail page). Arg count is checked against the manifest's `minArgs`/`maxArgs`. `ok:false` `badParams`/`unknownPluginFunction`/`pluginNotRunning`/`pluginFunctionTimeout`/`pluginFunctionFailed`. |
 
 `PluginSummary`: `{ id, name, version, description, author, runtime, state, message, enabled, connected, pid, startedUnixMs, restartCount, stepCount, functionCount, propertyCount, hasConfig, statusState, statusMessage }`.
 `PluginDetail` = summary + `{ manifest, config, token (external runtime only), properties: { name: value }, logTail: [last 50 lines] }`.
@@ -467,6 +507,7 @@ HTTP: `POST /plugins/install` — body is the zip (`application/zip`), query
 `plugin.json` at its root or inside a single top-level folder. Responds
 `200 { "id": "...", "plugin": PluginSummary }`, `400 { "error": "badZip"|"badManifest"|"idExists", "message" }`.
 Max 200 MB (`413 { "error": "tooLarge", "message" }` above it). `GET /plugins/{id}/download` returns the folder as a zip (excluding `.venv`, `plugin.log`).
+Custom-GUI HTTP (`GET /plugins/{id}/ui/{**path}`, `GET /plugins/{id}/ui` WebSocket) is in §4.5.
 
 ## 8. SDKs
 
@@ -565,15 +606,19 @@ tests otherwise.
 
 ## 9. App
 
-- **Plugins page** (`app/(tabs)/io/plugins.tsx`, card on the IO index):
+- **Plugins page** (`app/(tabs)/program/plugins.tsx`, tile on the Program index —
+  plugins are consumed by programs, so they live under Program, not I/O):
   list of installed plugins with state pill, version, runtime tag, short
   description; actions enable/disable, start/stop/restart; **Install** from a
   zip (document picker → `POST /plugins/install`), **Reload**.
-- **Plugin detail** (`app/(tabs)/io/plugin-detail.tsx?id=`): status + message,
-  pid/uptime/restarts, contributions (steps, functions, properties with live
-  values), **Config** form rendered from `configSchema` (save → `SetPluginConfig`),
-  **Logs** viewer (tail, auto-refresh, clear), connect token + URL for
-  `external` plugins, uninstall (confirm).
+- **Plugin detail** (`app/(tabs)/program/plugin-detail.tsx?id=`): the custom GUI
+  (when `manifest.ui`, §4.5) in a WebView at the top via `PluginUiView`; then
+  status + message, pid/uptime/restarts, contributions (steps; **functions are
+  callable inline** — numeric arg inputs + a **Call** button that sends
+  `CallPluginFunction` and shows the returned value, disabled until the plugin is
+  connected; properties with live values), **Config** form rendered from `configSchema`
+  (save → `SetPluginConfig`), **Logs** viewer (tail, auto-refresh, clear),
+  connect token + URL for `external` plugins, uninstall (confirm).
 - **Builder**: `Plugin` step type. The step picker shows a **Plugins** category
   with one tile per `(plugin, step)` from `GetPluginContributions` (greyed when
   not running, hidden plugins' steps still listed if a program references
@@ -590,11 +635,16 @@ tests otherwise.
 - `RobotConnectService`: `getPlugins`, `getPlugin`, `getPluginContributions`,
   `setPluginEnabled`, `startPlugin`, `stopPlugin`, `restartPlugin`,
   `setPluginConfig`, `getPluginLogs`, `clearPluginLogs`, `uninstallPlugin`,
-  `reloadPlugins`, `rotatePluginToken`, `installPluginZip(fileUri)`.
+  `reloadPlugins`, `rotatePluginToken`, `installPluginZip(fileUri)`,
+  `pluginUiUrl(id, entry)`, `invokePluginAction(id, action, args)`,
+  `callPluginFunction(id, name, args)`.
+- **Custom GUI** (`src/components/ui/plugins/PluginUiView.tsx` + `.web.tsx`): native
+  `react-native-webview` / web+Electron `<iframe>`, pointed at `pluginUiUrl(id)`. The
+  page talks to the controller directly (§4.5); the app does not relay.
 - Models in `robotModels.tsx`: `PluginSummary`, `PluginDetail`, `PluginManifest`
-  (+ step/param/output/function/property/config-field types), `PluginContributions`;
-  `StepType` gains `'Plugin'`; `ProgramStep` gains the §6 fields; the golden
-  step JSON check is updated.
+  (+ step/param/output/function/property/config-field types, and `ui`),
+  `PluginContributions`; `StepType` gains `'Plugin'`; `ProgramStep` gains the §6
+  fields; the golden step JSON check is updated.
 
 ## 10. Reference checklist for implementers
 
