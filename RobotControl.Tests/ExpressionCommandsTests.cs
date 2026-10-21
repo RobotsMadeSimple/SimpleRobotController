@@ -9,6 +9,7 @@ namespace RobotControl.Tests;
 /// ValidateBuiltProgram, EvaluateExpression, GetExpressionSymbols. A RobotController is
 /// constructed but never started — no devices, threads or motion.
 /// </summary>
+[Collection("RobotController")]
 public class ExpressionCommandsTests
 {
     private static readonly Lazy<CommandDispatcher> Dispatcher = new(() =>

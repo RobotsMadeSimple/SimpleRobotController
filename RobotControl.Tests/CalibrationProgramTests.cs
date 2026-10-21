@@ -6,6 +6,7 @@ using Controller.RobotControl.Vision.Calibration;
 namespace RobotControl.Tests;
 
 /// <summary>RunVision's outputFrame: the coordinate conversion, validation and the $camera properties.</summary>
+[Collection("RobotController")]
 public class CalibrationProgramTests
 {
     // ── Coordinate conversion ─────────────────────────────────────────────────

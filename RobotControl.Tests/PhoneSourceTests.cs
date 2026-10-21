@@ -10,6 +10,7 @@ namespace RobotControl.Tests;
 /// Phones as a native source: the "phone" push camera (frames arrive via <see cref="CameraDevice.PushFrame"/>)
 /// and the <see cref="DeviceManager"/> data channels that surface as <c>$device.&lt;id&gt;.&lt;channel&gt;</c>.
 /// </summary>
+[Collection("RobotController")]
 public sealed class PhoneSourceTests
 {
     // ── Phone push camera ────────────────────────────────────────────────────
