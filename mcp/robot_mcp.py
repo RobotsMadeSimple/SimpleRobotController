@@ -476,7 +476,8 @@ READ_ONLY_COMMANDS = {
     "GetStatus", "GetRobotInfo", "GetRobotConfig", "GetPoints", "GetTools", "GetLocals",
     "GetGrids", "GetStacks", "GetBuiltPrograms", "GetProgramVariables", "GetProgramLogs",
     "GetProgramImages", "GetProgramVariableImage", "GetCameras", "GetVisionPrograms",
-    "GetNanoDevices", "GetRelays",
+    "GetIO", "GetRelayState",
+    "GetIoHistoryConfig", "GetIoHistoryWindow", "ListIoRecordings", "GetIoRecordingWindow",
     "GetAuxDevices", "GetAuxAxisConfig", "GetCameraResolutions",
     "GetCameraCalibration", "CalibrationPredict",
 }
@@ -660,6 +661,129 @@ def tool_robot_teach_point(args):
                 "note": "Saved at the robot's current position, in the base frame."})
 
 
+# ── Config / IO setup ──────────────────────────────────────────────────────
+# These set channels up - a Nano pin's role, an HX711 load cell, its calibration.
+# They persist to nano_config.json and apply to the device when it is connected,
+# but they move nothing and drive no load, so they are ungated like teaching a
+# point. Actuating an output is a different thing and stays on robot_set_output.
+
+PIN_TYPES       = ("Input", "Output", "Neopixel", "Unconfigured")
+LOAD_CELL_UNITS = ("g", "kg", "oz", "lb", "N")
+
+
+def _slim_pin(p):
+    """One pin, trimmed to what matters for its role (full state is behind full=true)."""
+    out = {"pin": p.get("pin"), "type": p.get("type"), "name": p.get("name")}
+    t = p.get("type")
+    if t == "LoadCell":
+        out.update({"sckPin": p.get("sckPin"), "unit": p.get("unit"),
+                    "grams": p.get("grams"), "raw": p.get("raw"),
+                    "tareOffset": p.get("tareOffset"), "countsPerGram": p.get("countsPerGram"),
+                    "sampleRateHz": p.get("sampleRateHz")})
+    elif t == "Neopixel":
+        out["pixelCount"] = p.get("pixelCount")
+    else:
+        out["value"] = p.get("value")
+    return out
+
+
+def tool_robot_io(args):
+    data  = ROBOT.send("GetIO")
+    nanos = data.get("nanos") or []
+    relay = data.get("relay") or {}
+
+    nano_id = args.get("nanoId")
+    if nano_id:
+        match = [n for n in nanos if str(n.get("id")) == nano_id]
+        if not match:
+            return _ok({"error": f"No Nano with id '{nano_id}'.",
+                        "available": [n.get("id") for n in nanos]})
+        nanos = match
+
+    if not args.get("full"):
+        nanos = [{"id": n.get("id"), "name": n.get("name"), "connected": n.get("connected"),
+                  "pins": [_slim_pin(p) for p in (n.get("pins") or [])]}
+                 for n in nanos]
+    return _ok({"nanos": nanos, "relay": relay})
+
+
+def tool_robot_configure_pin(args):
+    nano_id = args["nanoId"]
+    pin     = int(args["pin"])
+    done    = {}
+
+    ptype = args.get("type")
+    if ptype is not None:
+        if ptype not in PIN_TYPES:
+            return _ok({"error": f"type must be one of {', '.join(PIN_TYPES)} (got {ptype!r}). "
+                                 f"For an HX711 load cell use robot_load_cell action='configure'."})
+        p = {"nanoId": nano_id, "pin": pin, "type": ptype}
+        if args.get("pixelCount") is not None:
+            p["pixelCount"] = int(args["pixelCount"])
+        ROBOT.send("ConfigureNanoPin", p)   # sets the pin first, so a rename below finds it
+        done["type"] = ptype
+
+    name = args.get("name")
+    if name is not None:
+        ROBOT.send("RenameNanoPin", {"nanoId": nano_id, "pin": pin, "name": name})
+        done["name"] = name
+
+    if not done:
+        return _ok({"error": "Nothing to do - pass type and/or name."})
+    return _ok({"configured": {"nanoId": nano_id, "pin": pin, **done},
+                "note": "Saved to nano_config.json and applied to the device. ConfigureNanoPin "
+                        "needs the Nano connected; it errors if it is offline."})
+
+
+def tool_robot_load_cell(args):
+    action  = (args.get("action") or "").lower()
+    nano_id = args["nanoId"]
+
+    if action == "configure":
+        p = {"nanoId": nano_id, "dtPin": int(args["dtPin"]), "sckPin": int(args["sckPin"])}
+        unit = args.get("unit")
+        if unit:
+            if unit not in LOAD_CELL_UNITS:
+                return _ok({"error": f"unit must be one of {', '.join(LOAD_CELL_UNITS)}."})
+            p["unit"] = unit
+        ROBOT.send("ConfigureLoadCell", p)
+        return _ok({"configured": {"nanoId": nano_id, "dtPin": p["dtPin"], "sckPin": p["sckPin"],
+                                   "unit": p.get("unit", "g")},
+                    "note": "HX711 set up: DT is the data pin, SCK the clock. Saved to nano_config.json "
+                            "and CFG'd on the device (queued until it connects). It streams raw counts "
+                            "until you action='tare' then action='calibrate' to read grams."})
+
+    if action in ("tare", "calibrate", "unit"):
+        pin = int(args["pin"])  # the DT pin
+        if action == "tare":
+            r = ROBOT.send("TareLoadCell", {"nanoId": nano_id, "pin": pin})
+            return _ok({"tared": {"nanoId": nano_id, "pin": pin}, "tareOffset": r.get("tareOffset"),
+                        "note": "Zeroed at the current reading. Put a known weight on, then "
+                                "action='calibrate' with knownGrams."})
+        if action == "calibrate":
+            if args.get("knownGrams") is None:
+                return _ok({"error": "calibrate needs knownGrams - the weight now on the cell, in grams."})
+            r = ROBOT.send("CalibrateLoadCell",
+                           {"nanoId": nano_id, "pin": pin, "knownGrams": float(args["knownGrams"])})
+            return _ok({"calibrated": {"nanoId": nano_id, "pin": pin},
+                        "countsPerGram": r.get("countsPerGram"),
+                        "note": "Scale set. Readings now report grams, shown in the display unit."})
+        # unit
+        unit = args.get("unit")
+        if unit not in LOAD_CELL_UNITS:
+            return _ok({"error": f"unit must be one of {', '.join(LOAD_CELL_UNITS)}."})
+        ROBOT.send("SetLoadCellUnit", {"nanoId": nano_id, "pin": pin, "unit": unit})
+        return _ok({"unit": unit, "pin": pin})
+
+    return _ok({"error": "action must be one of: configure, tare, calibrate, unit.",
+                "actions": {
+                    "configure": "Create/update the HX711 channel. Needs dtPin, sckPin; optional unit. "
+                                 "Works offline (persists, applies on connect).",
+                    "tare":      "Zero the cell. Needs pin (the DT pin). Nano must be connected.",
+                    "calibrate": "Set the scale from a known weight. Needs pin + knownGrams. Nano must be connected.",
+                    "unit":      "Change the display unit. Needs pin + unit."}})
+
+
 # ── Gated tools ──────────────────────────────────────────────────────────────
 
 def tool_robot_move(args):
@@ -815,6 +939,41 @@ TOOLS = [
        "Stop everything now: halts the running program, hard-stops motion, cancels any jog. "
        "Always available, even when the motion gate is closed.",
        {}, handler=tool_robot_stop),
+
+    # ── Config / IO setup (ungated - sets channels up, moves nothing) ──────────
+    _t("robot_io",
+       "Read the IO config + live state: every Nano (id, connected, pins) and the USB relay board. "
+       "Start here before configuring - it gives the nanoId and current pin roles you configure "
+       "against. Trimmed per pin role by default; full=true for every field.",
+       {"nanoId": {"type": "string", "description": "Only this Nano (default: all)."},
+        "full":   {"type": "boolean", "description": "Every pin field instead of the role-trimmed set."}},
+       handler=tool_robot_io),
+
+    _t("robot_configure_pin",
+       "Set a Nano pin's role and/or name. type is Input, Output, Neopixel or Unconfigured "
+       "(for an HX711 load cell use robot_load_cell instead). Persists to nano_config.json and applies "
+       "to the device - the Nano must be connected or it errors. Does NOT actuate the pin; "
+       "robot_set_output drives an output's value.",
+       {"nanoId":     {"type": "string"},
+        "pin":        {"type": "integer", "description": "Nano pin number (Arduino D-pin)."},
+        "type":       {"type": "string", "description": "Input | Output | Neopixel | Unconfigured."},
+        "name":       {"type": "string", "description": "Friendly label for the pin."},
+        "pixelCount": {"type": "integer", "description": "Neopixel only: number of pixels."}},
+       required=["nanoId", "pin"], handler=tool_robot_configure_pin),
+
+    _t("robot_load_cell",
+       "Set up or calibrate an HX711 load cell on a Nano. action='configure' creates the channel "
+       "(dtPin = data, sckPin = clock; works offline and applies on connect); action='tare' zeroes it; "
+       "action='calibrate' sets the scale from a known weight (knownGrams); action='unit' changes the "
+       "display unit. tare/calibrate need the Nano connected and streaming.",
+       {"action":     {"type": "string", "description": "configure | tare | calibrate | unit."},
+        "nanoId":     {"type": "string"},
+        "dtPin":      {"type": "integer", "description": "configure: HX711 DT (data) pin."},
+        "sckPin":     {"type": "integer", "description": "configure: HX711 SCK (clock) pin."},
+        "pin":        {"type": "integer", "description": "tare/calibrate/unit: the DT pin of the cell."},
+        "knownGrams": {"type": "number",  "description": "calibrate: weight currently on the cell, in grams."},
+        "unit":       {"type": "string",  "description": "Display unit: g, kg, oz, lb or N."}},
+       required=["action", "nanoId"], handler=tool_robot_load_cell),
 
     # ── Gated ────────────────────────────────────────────────────────────────
     _t("robot_move",

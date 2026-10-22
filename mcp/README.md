@@ -15,7 +15,11 @@ so it works against any running controller with no changes on the controller sid
 Programs are data; running them moves a machine. The server splits on that line.
 
 **Always available** — status, points, program read/write, validation, teaching a
-point at the current position, and `robot_stop`.
+point at the current position, reading and **configuring** IO (pin roles, HX711 load
+cells and their calibration via `robot_io` / `robot_configure_pin` / `robot_load_cell`),
+and `robot_stop`. Configuration sets channels up and persists to `nano_config.json`;
+it moves nothing and drives no load, so it is ungated like teaching a point. *Actuating*
+an output is the gated `robot_set_output`.
 
 **Gated** behind `RMS_MCP_ALLOW_MOTION=1` — `robot_move`, `robot_home`,
 `robot_run_program`, `robot_set_output`, and any non-`Get*` command through
@@ -101,6 +105,9 @@ is on another subnet (e.g. over Tailscale).
 | `robot_validate_program` | | Static checks without saving. |
 | `robot_save_program` | | Create or replace a program. Validates first, refuses on errors. Does **not** run it. |
 | `robot_teach_point` | | Save the current position under a name. Records, does not move. |
+| `robot_io` | | Read IO config + state: every Nano (id, connected, pins) and the relay board. |
+| `robot_configure_pin` | | Set a Nano pin's role (Input/Output/Neopixel/Unconfigured) and/or name. Persists; applies on the connected device. |
+| `robot_load_cell` | | Configure/tare/calibrate an HX711 load cell, or change its display unit. |
 | `robot_stop` | never | Stop program + motion + jog. |
 | `robot_move` | ✓ | Single MoveL/MoveJ to a point or coordinates. |
 | `robot_home` | ✓ | Clear faults and run homing. |
