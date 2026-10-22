@@ -1,6 +1,8 @@
 using System.IO;
 using System.IO.Ports;
+using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Win32;
 
 namespace Controller.RobotControl.Serial
 {
@@ -31,11 +33,19 @@ namespace Controller.RobotControl.Serial
     {
         // ── Shared timing constants — identical across every current subclass ──────
         protected const int BaudRate             = 115200;
-        protected const int ProbeReadTimeoutMs    = 2500;
         protected const int ProbeWriteTimeoutMs   = 1000;
-        protected const int PostOpenResetDelayMs  = 2000; // Arduino reboots on DTR toggle when a port opens; wait for boot.
         protected const int SessionReadTimeoutMs  = 100;  // short so the write queue is serviced promptly
         protected const int ReconnectDelayMs      = 3000;
+
+        // ── Probe timing — overridable per device ─────────────────────────────────
+        /// <summary>Read timeout for one "ID?" probe attempt. Short + many attempts = poll across
+        /// the boot window (catch the device the instant it answers); long + one attempt = a single
+        /// shot at a fixed offset (races a slow boot).</summary>
+        protected virtual int ProbeReadTimeoutMs   => 2500;
+
+        /// <summary>Initial grace after opening a port before the first probe — the Arduino reboots on
+        /// the DTR toggle that opening causes, so give it a head start before pinging.</summary>
+        protected virtual int PostOpenResetDelayMs => 2000;
 
         // ── Per-device knobs ────────────────────────────────────────────────────
         /// <summary>Log prefix tag, e.g. "Nano" / "AuxAxis" — lines read "[{DeviceTag}:{Id}] ...".</summary>
@@ -153,17 +163,33 @@ namespace Controller.RobotControl.Serial
         }
 
         /// <summary>
-        /// Candidate ports in probe order. Skips built-in serial ports on Linux
-        /// (only USB adapters carry our devices) and tries the last known-good
-        /// port first so reconnects are near-instant.
+        /// Candidate ports in probe order. The OS knows each port's adapter type but not which
+        /// device's firmware is on it (every CH340 shares one USB VID/PID), so we still send "ID?"
+        /// to confirm identity — but we only probe ports that could plausibly be ours, and the most
+        /// likely first. Built-in UARTs (COM1) and Bluetooth SPP ports look identical to a silent
+        /// device while probing and each costs a full boot-window, so they go last (Windows) or are
+        /// dropped entirely (Linux, where only ttyUSB/ttyACM carry our devices). The last known-good
+        /// port is always tried first so reconnects are near-instant.
         /// </summary>
         private IEnumerable<string> CandidatePorts()
         {
             var all = SerialPort.GetPortNames();
             IEnumerable<string> ports = all;
 
-            if (!OperatingSystem.IsWindows())
+            if (OperatingSystem.IsWindows())
             {
+                // Our devices are USB-serial adapters (CH340). Windows lumps every port into "COMx"
+                // with no naming hint, and the CH340's SERIALCOMM device name ("\Device\Serial3") is
+                // indistinguishable from a built-in UART's — so identify USB ports by their presence
+                // under Enum\USB and probe those first; built-in UARTs (COM1) and Bluetooth go last.
+                var usb = WindowsUsbComPorts();
+                if (usb.Count > 0)
+                    ports = ports.OrderBy(p => usb.Contains(p) ? 0 : 1).ToList();
+            }
+            else
+            {
+                // Linux names make the distinction directly: USB adapters are ttyUSB*/ttyACM*,
+                // built-in UARTs are ttyS* (dropped). Equivalent to the Windows Enum\USB filter.
                 var usb = all.Where(p => p.Contains("ttyUSB") || p.Contains("ttyACM")).ToArray();
                 if (usb.Length > 0) ports = usb;
             }
@@ -171,6 +197,38 @@ namespace Controller.RobotControl.Serial
             if (_lastGoodPort != null)
                 ports = ports.OrderByDescending(p => p == _lastGoodPort);
 
+            return ports.ToList();
+        }
+
+        /// <summary>
+        /// The set of COM ports that belong to a USB device, read from the Windows registry
+        /// (HKLM\SYSTEM\CurrentControlSet\Enum\USB\&lt;vid&amp;pid&gt;\&lt;instance&gt;\Device Parameters\PortName).
+        /// A USB-serial adapter (CH340 etc.) appears here; a built-in 16550 UART (ACPI) and a
+        /// Bluetooth SPP port (BTHENUM) do not. Stale entries for ports not currently present are
+        /// harmless — they're intersected against the live port list by the caller. Empty on any
+        /// error, which degrades to "probe every port" (the prior behaviour).
+        /// </summary>
+        [SupportedOSPlatform("windows")]
+        private static HashSet<string> WindowsUsbComPorts()
+        {
+            var ports = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using var usb = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\USB");
+                if (usb == null) return ports;
+                foreach (var vidPid in usb.GetSubKeyNames())
+                {
+                    using var dev = usb.OpenSubKey(vidPid);
+                    if (dev == null) continue;
+                    foreach (var instance in dev.GetSubKeyNames())
+                    {
+                        using var parms = dev.OpenSubKey($@"{instance}\Device Parameters");
+                        if (parms?.GetValue("PortName") is string com && !string.IsNullOrEmpty(com))
+                            ports.Add(com);
+                    }
+                }
+            }
+            catch { }
             return ports;
         }
 

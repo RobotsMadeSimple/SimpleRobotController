@@ -24,9 +24,20 @@ namespace Controller.RobotControl.Nano
         // ── SerialLineDevice knobs ─────────────────────────────────────────────
         protected override string DeviceTag                    => "Nano";
         protected override string ThreadNamePrefix              => "NanoDevice";
-        protected override int    ProbeAttempts                 => 1;
-        protected override int    ProbeResponseDelayMs          => 100;
-        protected override bool   KeepProbePortOpenForSession   => false;
+        // Poll "ID?" across the boot window instead of a single ping at a fixed offset: a Nano
+        // (CH340 + old bootloader) takes ~3s to come up after the open-time DTR reset, longer than
+        // the old 2000ms wait, so one ping raced the boot, missed, and forced a full rescan — which
+        // re-opened the port, reset the Nano again, and looped (the ~1 min first-connect). Now: a
+        // short initial grace, then up to 8 short-timeout pings (~5.7s window) that catch the device
+        // the instant its sketch answers and exit immediately on match.
+        protected override int    ProbeAttempts                 => 8;
+        protected override int    ProbeResponseDelayMs          => 120;
+        protected override int    ProbeReadTimeoutMs            => 500;
+        protected override int    PostOpenResetDelayMs          => 800;
+        // Reuse the port that answered the probe for the session instead of closing it and opening a
+        // fresh one — the reopen would DTR-reset the just-booted Nano a second time and make us wait
+        // out another ~3s boot before streaming resumed.
+        protected override bool   KeepProbePortOpenForSession   => true;
 
         public NanoDevice(NanoDeviceConfig config) : base(config.Id, config.Name)
         {
