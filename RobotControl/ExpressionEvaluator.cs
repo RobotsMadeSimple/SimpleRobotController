@@ -186,11 +186,12 @@ namespace Controller.RobotControl
             string expr,
             Dictionary<string, double> variables,
             Dictionary<string, ListVar>? listVariables = null,
-            IPropertySource? properties = null)
+            IPropertySource? properties = null,
+            Func<string, string>? strings = null)
         {
             var node = GetOrParse(expr);
             if (node == null) return 0; // empty expression — 0, as it always was
-            return node.Eval(new Env(variables, listVariables, properties));
+            return node.Eval(new Env(variables, listVariables, properties, strings));
         }
 
         /// <summary>Syntax check only — no variable resolution.</summary>
@@ -397,8 +398,13 @@ namespace Controller.RobotControl
             public readonly Dictionary<string, double> Vars;
             public readonly Dictionary<string, ListVar>? Lists;
             public readonly IPropertySource? Props;
-            public Env(Dictionary<string, double> vars, Dictionary<string, ListVar>? lists, IPropertySource? props)
-            { Vars = vars; Lists = lists; Props = props; }
+            /// <summary>Resolves a `$name` reference (or a plain string) to its string value — set
+            /// where string variables exist, so the string methods (.contains/.startsWith/.endsWith)
+            /// can read them. Null elsewhere; the string methods then read "".</summary>
+            public readonly Func<string, string>? Strings;
+            public Env(Dictionary<string, double> vars, Dictionary<string, ListVar>? lists,
+                       IPropertySource? props, Func<string, string>? strings = null)
+            { Vars = vars; Lists = lists; Props = props; Strings = strings; }
         }
 
         /// <summary>Non-zero is true, matching how boolean variables are stored.</summary>
@@ -478,6 +484,36 @@ namespace Controller.RobotControl
 
             public override void Collect(List<ExprRef> refs) =>
                 refs.Add(new ExprRef(ExprRefKind.Plain, FullName, _parts, Pos));
+        }
+
+        /// <summary><c>$name.contains("foo")</c> / <c>.startsWith</c> / <c>.endsWith</c> — a text
+        /// comparison on a string variable, returning 1 (true) or 0 (false).</summary>
+        private sealed class StringMethodNode : Node
+        {
+            private readonly string _receiver;   // "$name" (or dotted)
+            private readonly string _method;     // contains | startsWith | endsWith
+            private readonly string _arg;         // a literal's text, or a "$var" reference
+            private readonly bool   _argIsVar;
+
+            public StringMethodNode(string receiver, string method, string arg, bool argIsVar, int pos)
+            { _receiver = receiver; _method = method; _arg = arg; _argIsVar = argIsVar; Pos = pos; }
+
+            public override bool IsBoolean => true;
+
+            public override double Eval(in Env e)
+            {
+                var resolve = e.Strings;
+                string hay    = resolve?.Invoke(_receiver) ?? "";
+                string needle = _argIsVar ? (resolve?.Invoke(_arg) ?? "") : _arg;
+                bool r = _method switch
+                {
+                    "contains"   => hay.Contains(needle, StringComparison.Ordinal),
+                    "startsWith" => hay.StartsWith(needle, StringComparison.Ordinal),
+                    "endsWith"   => hay.EndsWith(needle, StringComparison.Ordinal),
+                    _            => false,
+                };
+                return r ? 1 : 0;
+            }
         }
 
         private sealed class IndexNode : Node
@@ -688,7 +724,7 @@ namespace Controller.RobotControl
 
         // ── Tokenizer ─────────────────────────────────────────────────────────
 
-        private enum TokType { Number, Variable, Word, Op, LParen, RParen, LBracket, RBracket, Dot, Comma, Question, Colon, End }
+        private enum TokType { Number, Variable, Word, Op, LParen, RParen, LBracket, RBracket, Dot, Comma, Question, Colon, String, End }
 
         private readonly record struct Token(TokType Type, string Value, int Pos, string[]? Parts = null, double Num = 0);
 
@@ -711,6 +747,21 @@ namespace Controller.RobotControl
                 // Whitespace, and braces: the shared template input lets users type "{$x + 1}"
                 // into numeric fields, so braces have always been skipped here.
                 if (char.IsWhiteSpace(c) || c == '{' || c == '}') { i++; continue; }
+
+                // String literal: "..." — the argument to a string method, e.g.
+                // $name.contains("foo"). No escapes; a string cannot contain a double quote.
+                if (c == '"')
+                {
+                    int strStart = i;
+                    i++;
+                    int cs = i;
+                    while (i < expr.Length && expr[i] != '"') i++;
+                    if (i >= expr.Length)
+                        throw new ExpressionParseException("Unterminated string literal", strStart, expression: expr);
+                    tokens.Add(new Token(TokType.String, expr[cs..i], strStart));
+                    i++; // closing quote
+                    continue;
+                }
 
                 // Variable: $identifier with an optional dotted chain ($stb.in1, $relay.1,
                 // $io.Board.pin, $aux.dev.0.position). The chain only continues across a
@@ -1018,9 +1069,29 @@ namespace Controller.RobotControl
                 }
             }
 
+            private static bool IsStringMethod(string s) =>
+                s is "contains" or "startsWith" or "endsWith";
+
             private Node ParseVariableTail(Token tok)
             {
                 var parts = tok.Parts!;
+
+                // $receiver.contains("x") / .startsWith(...) / .endsWith(...) — a string method.
+                // The tokenizer folds the dotted chain into the variable, so the method name is the
+                // last part; it is a method only when a '(' follows.
+                if (parts.Length >= 2 && IsStringMethod(parts[^1]) && Cur.Type == TokType.LParen)
+                {
+                    string receiver = "$" + string.Join(".", parts, 0, parts.Length - 1);
+                    string method   = parts[^1];
+                    _i++; // '('
+                    string arg; bool argIsVar;
+                    if (Cur.Type == TokType.String)        { arg = Cur.Value; argIsVar = false; _i++; }
+                    else if (Cur.Type == TokType.Variable)  { arg = Cur.Value; argIsVar = true;  _i++; }
+                    else throw Error($".{method}() takes a string, e.g. {receiver}.{method}(\"text\")", Cur.Pos);
+                    Expect(TokType.RParen, ")");
+                    return new StringMethodNode(receiver, method, arg, argIsVar, tok.Pos);
+                }
+
                 if (Cur.Type != TokType.LBracket)
                     return new VarNode(parts, tok.Pos);
 

@@ -357,6 +357,26 @@ public class ExpressionLanguageTests
     }
 
     [Fact]
+    public void StringMethodsCompareTextVariables()
+    {
+        var scope = new VariableScope();
+        scope.SetString("name", "Widget-42");
+        scope.SetString("prefix", "Widget");
+
+        bool Cond(string expr) => scope.Eval.EvaluateCondition(
+            new ConditionGroup { Items = [new ConditionItem { Expr = expr }] });
+
+        Assert.True (Cond("$name.contains(\"get\")"));
+        Assert.False(Cond("$name.contains(\"gadget\")"));
+        Assert.True (Cond("$name.startsWith(\"Widget\")"));
+        Assert.True (Cond("$name.startsWith($prefix)"));     // the argument can be a string variable
+        Assert.True (Cond("$name.endsWith(\"42\")"));
+        Assert.False(Cond("$name.endsWith(\"43\")"));
+        // Composes with the other operators in one expression.
+        Assert.True (Cond("$name.startsWith(\"Widget\") and $name.endsWith(\"42\")"));
+    }
+
+    [Fact]
     public void TemplatesEvaluateFunctionsButStillLeaveForgottenSigils()
     {
         var scope = new VariableScope();

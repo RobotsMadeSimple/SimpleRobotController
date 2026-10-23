@@ -591,7 +591,7 @@ namespace Controller.RobotControl.Execution
             if (!string.IsNullOrWhiteSpace(item.Expr))
             {
                 double v;
-                try { v = ExpressionEvaluator.Evaluate(item.Expr, vars, _listVariables, Properties); }
+                try { v = ExpressionEvaluator.Evaluate(item.Expr, vars, _listVariables, Properties, ResolveStringValue); }
                 catch (UnknownVariableException) { throw; }
                 catch (ExpressionParseException) { throw; }
                 catch { v = 0; }
