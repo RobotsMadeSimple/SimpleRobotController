@@ -1,7 +1,7 @@
 using System.IO.Ports;
 using Controller.RobotControl.Serial;
 
-namespace Controller.RobotControl.Nano
+namespace Controller.RobotControl.Io
 {
     /// <summary>
     /// Manages the serial connection to a single Arduino Nano edge device.
@@ -9,17 +9,17 @@ namespace Controller.RobotControl.Nano
     /// </summary>
     public sealed class NanoDevice : SerialLineDevice
     {
-        private readonly NanoDeviceConfig _config;
+        private readonly IoDeviceConfig _config;
 
         // Live pin state keyed by Arduino pin number
-        private readonly Dictionary<int, NanoPinState> _pinStates = new();
+        private readonly Dictionary<int, IoPinState> _pinStates = new();
 
         /// <summary>Fired on the device thread when an Input pin changes value.</summary>
-        public event Action<NanoPinState>? InputChanged;
+        public event Action<IoPinState>? InputChanged;
 
         /// <summary>Fired on the device thread for every HX711 load-cell reading (pinState, unixMs).
         /// Carries the just-updated state (Raw/Grams/Unit/Name) so a recorder can capture every sample.</summary>
-        public event Action<NanoPinState, long>? LoadCellSampled;
+        public event Action<IoPinState, long>? LoadCellSampled;
 
         // ── SerialLineDevice knobs ─────────────────────────────────────────────
         protected override string DeviceTag                    => "Nano";
@@ -39,20 +39,20 @@ namespace Controller.RobotControl.Nano
         // out another ~3s boot before streaming resumed.
         protected override bool   KeepProbePortOpenForSession   => true;
 
-        public NanoDevice(NanoDeviceConfig config) : base(config.Id, config.Name)
+        public NanoDevice(IoDeviceConfig config) : base(config.Id, config.Name)
         {
             _config = config;
 
             // Pre-populate pin state map from config so callers can read it even before connect
             foreach (var p in config.Pins)
             {
-                _pinStates[p.Pin] = new NanoPinState
+                _pinStates[p.Pin] = new IoPinState
                 {
                     Pin           = p.Pin,
                     Type          = p.Type,
                     Name          = p.Name,
-                    NanoId        = config.Id,
-                    NanoName      = config.Name,
+                    DeviceId        = config.Id,
+                    DeviceName      = config.Name,
                     PixelCount    = p.PixelCount,
                     Value         = false,
                     SckPin        = p.SckPin,
@@ -115,7 +115,7 @@ namespace Controller.RobotControl.Nano
                     string[] parts = entry.Split(',');
                     if (parts.Length >= 3 && int.TryParse(parts[0], out int pin))
                     {
-                        NanoPinState? state;
+                        IoPinState? state;
                         lock (_lock) _pinStates.TryGetValue(pin, out state);
                         if (state == null) continue;
                         if (parts[1] == "L" && long.TryParse(parts[2], out long raw))
@@ -133,7 +133,7 @@ namespace Controller.RobotControl.Nano
                 string[] parts = line.Substring(3).Split(',');
                 if (parts.Length >= 2 && int.TryParse(parts[0], out int pin) && long.TryParse(parts[1], out long raw))
                 {
-                    NanoPinState? state;
+                    IoPinState? state;
                     lock (_lock) _pinStates.TryGetValue(pin, out state);
                     if (state != null) UpdateLoadCellRaw(state, raw);
                 }
@@ -146,7 +146,7 @@ namespace Controller.RobotControl.Nano
                 string[] parts = line.Substring(4).Split(',');
                 if (parts.Length >= 2 && int.TryParse(parts[0], out int pin))
                 {
-                    NanoPinState? state;
+                    IoPinState? state;
                     lock (_lock) _pinStates.TryGetValue(pin, out state);
                     if (state != null)
                     {
@@ -162,7 +162,7 @@ namespace Controller.RobotControl.Nano
         }
 
         /// <summary>Store a new raw HX711 reading on a load-cell pin: update grams + estimate the sample rate.</summary>
-        private void UpdateLoadCellRaw(NanoPinState state, long raw)
+        private void UpdateLoadCellRaw(IoPinState state, long raw)
         {
             state.Raw   = raw;
             state.Grams = RawToGrams(raw, state.TareOffset, state.CountsPerGram);
@@ -188,7 +188,7 @@ namespace Controller.RobotControl.Nano
         /// <summary>Queues a digital output change. Thread-safe.</summary>
         public void SetOutput(int pin, bool value)
         {
-            NanoPinState? state;
+            IoPinState? state;
             lock (_lock)
             {
                 _commandQueue.Enqueue($"SET:{pin},{(value ? 1 : 0)}");
@@ -235,12 +235,12 @@ namespace Controller.RobotControl.Nano
 
         // ── State accessors ────────────────────────────────────────────────────
 
-        public List<NanoPinState> GetPinStates()
+        public List<IoPinState> GetPinStates()
         {
             lock (_lock) return _pinStates.Values.ToList();
         }
 
-        public NanoPinState? GetPinState(int pin)
+        public IoPinState? GetPinState(int pin)
         {
             lock (_lock) return _pinStates.TryGetValue(pin, out var s) ? s : null;
         }
@@ -266,13 +266,13 @@ namespace Controller.RobotControl.Nano
                 }
                 else
                 {
-                    _pinStates[pin] = new NanoPinState
+                    _pinStates[pin] = new IoPinState
                     {
                         Pin           = pin,
                         Type          = type,
                         Name          = name,
-                        NanoId        = _config.Id,
-                        NanoName      = _config.Name,
+                        DeviceId        = _config.Id,
+                        DeviceName      = _config.Name,
                         PixelCount    = pixelCount,
                         Value         = false,
                         SckPin        = sckPin,

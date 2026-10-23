@@ -165,7 +165,7 @@ namespace Controller.RobotControl.Validation
 
         // stb.in1-4 / stb.out1-4 / relay.1-4 / nano.<board>.<pin>
         private static readonly Regex IoPattern = new(
-            @"^(stb\.(in|out)[1-4]|relay\.[1-4]|nano\.[^.\s]+\.[^.\s]+)$",
+            @"^(stb\.(in|out)[1-4]|relay\.[1-4]|io.[^.\s]+\.[^.\s]+)$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         private static readonly string[] ConditionOps =
@@ -318,7 +318,7 @@ namespace Controller.RobotControl.Validation
             {
                 foreach (var s in steps)
                 {
-                    if (s == null || !s.IsEnabled) continue;
+                    if (s == null) continue;
                     yield return s;
                     foreach (var child in Children(s))
                         foreach (var c in Descend(child.Steps)) yield return c;
@@ -644,13 +644,6 @@ namespace Controller.RobotControl.Validation
                         SetTerminator(s, ref unreachable, ref unreachableCause);
                     }
 
-                    if (!s.IsEnabled)
-                    {
-                        Add(at, ValidationCodes.DisabledStep, "Step is disabled and will be skipped",
-                            "enabled", ValidationSeverity.Warning);
-                        continue;
-                    }
-
                     ValidateStep(s, sp, at, chain, body);
 
                     if (!unreachable) SetTerminator(s, ref unreachable, ref unreachableCause);
@@ -661,7 +654,6 @@ namespace Controller.RobotControl.Validation
             /// GoToLabel, or a counted loop that runs forever.</summary>
             private static void SetTerminator(ProgramStep s, ref bool unreachable, ref string? cause)
             {
-                if (!s.IsEnabled) return;
                 if (s.Type == StepType.GoToLabel)
                 {
                     unreachable = true;
@@ -1521,6 +1513,14 @@ namespace Controller.RobotControl.Validation
                     var item = g.Items[k];
                     if (item == null) continue;
                     string f = $"{field}.items[{k}]";
+
+                    // Expression condition — validate the whole thing as one boolean expression.
+                    if (!string.IsNullOrWhiteSpace(item.Expr))
+                    {
+                        CheckExpr(item.Expr, at, f + ".expr");
+                        continue;
+                    }
+
                     if (Array.IndexOf(ConditionOps, item.Operator) < 0)
                         Add(at, ValidationCodes.ExpressionSyntax, $"Unknown comparison operator '{item.Operator}'", f + ".operator");
 

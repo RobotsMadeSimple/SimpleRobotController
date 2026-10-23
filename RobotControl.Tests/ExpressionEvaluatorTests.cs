@@ -320,7 +320,7 @@ public class ExpressionEvaluatorTests
     [Theory]
     [InlineData("$stb.in1", "stb.in1", 1)]
     [InlineData("$relay.1", "relay.1", 1)]
-    [InlineData("$nano.Board.pin1", "nano.Board.pin1", 1)]
+    [InlineData("$io.Board.pin1", "io.Board.pin1", 1)]
     public void DottedIoNamesResolve(string expr, string key, double value)
         => Assert.Equal(value, Eval(expr, Vars((key, value))), 9);
 

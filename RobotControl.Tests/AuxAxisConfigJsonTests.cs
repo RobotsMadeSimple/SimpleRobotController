@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Controller.RobotControl;
 using Controller.RobotControl.AuxAxis;
+using Controller.RobotControl.Io;
 using Controller.RobotControl.Persistence;
 
 /// <summary>
@@ -55,5 +56,38 @@ public class AuxAxisConfigJsonTests
 
         var p = JsonSerializer.Deserialize<SetAuxAxisConfigParams>("""{ "deviceId": "d", "axisIndex": 0, "axisType": "Linear" }""", JsonDefaults.File)!;
         Assert.Equal(AuxAxisType.Linear, p.AxisType);
+    }
+
+    // The Uno's spare-pin digital IO rides on the aux config as an `ioPins` list of the generic
+    // IoPinConfig (Input/Output), persisted alongside the axes.
+    [Fact]
+    public void IoPinsRoundTrip()
+    {
+        const string sample = """
+            {
+              "devices": [
+                {
+                  "id": "AUX_STEPPER_001",
+                  "name": "Aux Stepper",
+                  "axes": [],
+                  "ioPins": [
+                    { "pin": 9,  "type": "Output", "name": "Valve" },
+                    { "pin": 14, "type": "Input",  "name": "Start Button" }
+                  ]
+                }
+              ]
+            }
+            """;
+        var cfg = JsonSerializer.Deserialize<AuxAxisManagerConfig>(sample, JsonDefaults.File)!;
+        var io  = cfg.Devices[0].IoPins;
+        Assert.Equal(2, io.Count);
+        Assert.Equal(9, io[0].Pin);
+        Assert.Equal(PinType.Output, io[0].Type);
+        Assert.Equal("Valve", io[0].Name);
+        Assert.Equal(PinType.Input, io[1].Type);
+
+        var json = JsonSerializer.Serialize(cfg, JsonDefaults.File);
+        Assert.Contains("\"ioPins\"", json);
+        Assert.Contains("\"pin\": 14", json);
     }
 }

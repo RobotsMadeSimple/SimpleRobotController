@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Controller.RobotControl.Nano
+namespace Controller.RobotControl.Io
 {
     // ── Enums ─────────────────────────────────────────────────────────────────
 
@@ -9,15 +9,15 @@ namespace Controller.RobotControl.Nano
 
     // ── Config file models ────────────────────────────────────────────────────
 
-    /// <summary>Top-level nano_config.json structure.</summary>
-    public class NanoConfig
+    /// <summary>Top-level io_devices.json structure.</summary>
+    public class IoDevicesConfig
     {
-        [JsonPropertyName("nanos")]
-        public List<NanoDeviceConfig> Nanos { get; set; } = new();
+        [JsonPropertyName("ioDevices")]
+        public List<IoDeviceConfig> IoDevices { get; set; } = new();
     }
 
     /// <summary>Configuration for a single Arduino Nano device.</summary>
-    public class NanoDeviceConfig
+    public class IoDeviceConfig
     {
         /// <summary>Identifier string burned into the firmware as DEVICE_ID.</summary>
         [JsonPropertyName("id")]
@@ -28,11 +28,11 @@ namespace Controller.RobotControl.Nano
         public string Name { get; set; } = "";
 
         [JsonPropertyName("pins")]
-        public List<NanoPinConfig> Pins { get; set; } = new();
+        public List<IoPinConfig> Pins { get; set; } = new();
     }
 
     /// <summary>Configuration for a single pin on a Nano device.</summary>
-    public class NanoPinConfig
+    public class IoPinConfig
     {
         /// <summary>Arduino digital pin number (0–19).</summary>
         [JsonPropertyName("pin")]
@@ -71,14 +71,14 @@ namespace Controller.RobotControl.Nano
     // ── Runtime state models ──────────────────────────────────────────────────
 
     /// <summary>Live state of a single pin, sent to the WebSocket client.</summary>
-    public class NanoPinState
+    public class IoPinState
     {
         public int     Pin        { get; set; }
         public PinType Type       { get; set; }
         public bool    Value      { get; set; }
         public string  Name       { get; set; } = "";
-        public string  NanoId     { get; set; } = "";
-        public string  NanoName   { get; set; } = "";
+        public string  DeviceId     { get; set; } = "";
+        public string  DeviceName   { get; set; } = "";
         public int     PixelCount { get; set; }
 
         // ── Load cell runtime (Type == LoadCell) ──────────────────────────────
@@ -96,12 +96,12 @@ namespace Controller.RobotControl.Nano
     }
 
     /// <summary>Connection + pin state for a single Nano, sent to the WebSocket client.</summary>
-    public class NanoState
+    public class IoDeviceState
     {
         public string            Id        { get; set; } = "";
         public string            Name      { get; set; } = "";
         public bool              Connected { get; set; }
-        public List<NanoPinState> Pins     { get; set; } = new();
+        public List<IoPinState> Pins     { get; set; } = new();
     }
 
     // ── Colour helper ─────────────────────────────────────────────────────────

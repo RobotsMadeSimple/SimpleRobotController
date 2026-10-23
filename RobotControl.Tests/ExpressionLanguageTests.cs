@@ -337,6 +337,26 @@ public class ExpressionLanguageTests
     }
 
     [Fact]
+    public void ExpressionConditionEvaluatesAsBoolean_BareVariableIsTruthiness()
+    {
+        var scope = new VariableScope { Properties = new FakeProps(("robot.z", 40)) };
+        scope.Set("enabled", 1);
+        scope.Set("off", 0);
+        scope.Set("speed", 12);
+
+        // A bare variable reads as true when non-zero, false when zero.
+        Assert.True (scope.Eval.EvaluateCondition(new ConditionGroup { Items = [new ConditionItem { Expr = "$enabled" }] }));
+        Assert.False(scope.Eval.EvaluateCondition(new ConditionGroup { Items = [new ConditionItem { Expr = "$off" }] }));
+        // A full expression evaluates as a comparison.
+        Assert.True (scope.Eval.EvaluateCondition(new ConditionGroup { Items = [new ConditionItem { Expr = "$speed > 5" }] }));
+        Assert.False(scope.Eval.EvaluateCondition(new ConditionGroup { Items = [new ConditionItem { Expr = "$speed > 50" }] }));
+        Assert.True (scope.Eval.EvaluateCondition(new ConditionGroup { Items = [new ConditionItem { Expr = "$robot.z >= 40 and $enabled" }] }));
+        // A syntax error still propagates rather than silently taking a branch.
+        Assert.Throws<ExpressionParseException>(() =>
+            scope.Eval.EvaluateCondition(new ConditionGroup { Items = [new ConditionItem { Expr = "1 +" }] }));
+    }
+
+    [Fact]
     public void TemplatesEvaluateFunctionsButStillLeaveForgottenSigils()
     {
         var scope = new VariableScope();

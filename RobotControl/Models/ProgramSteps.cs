@@ -117,6 +117,9 @@ public class ArucoVisionStepOutput
 public class ConditionItem
 {
     [JsonPropertyName("id")]       public string Id       { get; set; } = "";
+    /// <summary>A boolean expression (`$enabled`, `$speed &gt; 5`); true when it evaluates non-zero.
+    /// When set, it replaces the legacy left/operator/right below.</summary>
+    [JsonPropertyName("expr")]     public string? Expr    { get; set; }
     [JsonPropertyName("left")]     public string Left     { get; set; } = "";
     [JsonPropertyName("operator")] public string Operator { get; set; } = "==";
     [JsonPropertyName("right")]    public string Right    { get; set; } = "";
@@ -143,18 +146,9 @@ public class ProgramStep
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
-    /// <summary>
-    /// False = the executor skips this step (it still counts toward progress). Null or
-    /// true = enabled. Lets a user park a step while debugging without deleting it.
-    /// </summary>
-    [JsonPropertyName("enabled")]
-    public bool? Enabled { get; set; }
-
     /// <summary>Free-text note shown under the step in the editor. Not executed.</summary>
     [JsonPropertyName("comment")]
     public string? Comment { get; set; }
-
-    [JsonIgnore] public bool IsEnabled => Enabled != false;
 
     [JsonPropertyName("type")]
     public StepType Type { get; set; }
@@ -214,8 +208,8 @@ public class ProgramStep
     public bool? OutputValue { get; set; }
     [JsonPropertyName("outputCard")]
     public string? OutputCard { get; set; }
-    [JsonPropertyName("outputNanoId")]
-    public string? OutputNanoId { get; set; }
+    [JsonPropertyName("outputDeviceId")]
+    public string? OutputDeviceId { get; set; }
     // Non-blocking pulse: set to OutputValue for PulseMs, then set to opposite. 0/null = hold.
     [JsonPropertyName("pulseMs")]
     public int? PulseMs { get; set; }
@@ -224,8 +218,8 @@ public class ProgramStep
     public bool? PulseBlocking { get; set; }
 
     // Load cell (Tare, ReadLoadCell, MoveWithForce) — which HX711 cell to use.
-    [JsonPropertyName("loadCellNanoId")]
-    public string? LoadCellNanoId { get; set; }
+    [JsonPropertyName("loadCellDeviceId")]
+    public string? LoadCellDeviceId { get; set; }
     [JsonPropertyName("loadCellPin")]
     public int? LoadCellPin { get; set; }
     /// <summary>ReadLoadCell: unit to store into the target variable (default grams, the master unit).</summary>
@@ -471,7 +465,7 @@ public class ProgramStep
     [JsonPropertyName("jsonInbound")]         public List<JsonInboundMapping>? JsonInbound         { get; set; }
     [JsonPropertyName("jsonImageOutbound")]   public List<JsonImageMapping>?   JsonImageOutbound   { get; set; }
 
-    // StartRecording — captures a load cell (loadCellNanoId/loadCellPin above) into this list variable
+    // StartRecording — captures a load cell (loadCellDeviceId/loadCellPin above) into this list variable
     // (filled on StopRecording as a Record list of {t,v,r}). StopRecording reuses the load-cell fields.
     [JsonPropertyName("recordVariableName")] public string? RecordVariableName { get; set; }
 

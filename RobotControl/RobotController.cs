@@ -4,7 +4,7 @@ using Controller.RobotControl.Hosting;
 using Controller.RobotControl.Persistence;
 using Controller.RobotControl.AuxAxis;
 using Controller.RobotControl.MotionProfilers;
-using Controller.RobotControl.Nano;
+using Controller.RobotControl.Io;
 using Controller.RobotControl.Robots;
 using Controller.RobotControl.Robots.ASTRO;
 using Controller.RobotControl.Robots.CNC4Axis;
@@ -267,6 +267,16 @@ namespace Controller.RobotControl
         // ── Aux Stepper Axes ──────────────────────────────────────────────────
         public AuxAxisManager AuxAxisManager { get; private set; } = null!;
 
+        /// <summary>Every IO device's live state — the Nano edge devices plus any aux-stepper
+        /// device that has spare-pin IO configured. This is the single source the GetIO response
+        /// and the GetStatus `ioDevices` field both serialize.</summary>
+        public List<Io.IoDeviceState> GetAllIoStates()
+        {
+            var states = NanoManager.GetAllStates();
+            states.AddRange(AuxAxisManager.GetAllIoStates());
+            return states;
+        }
+
         // ── USB Cameras ───────────────────────────────────────────────────────
         public Camera.CameraManager CameraManager { get; private set; } = null!;
 
@@ -338,7 +348,7 @@ namespace Controller.RobotControl
             // first motion tick and the first STB write already see the real config.
             _homing = new HomingSequencer(this);
 
-            NanoManager = new NanoManager("nano_config.json");
+            NanoManager = new NanoManager("io_devices.json");
 
             // IO value history + recordings (in-RAM rolling buffer, opt-in disk persistence).
             // Subscribes to the nano load-cell sample event; generic over any numeric channel.

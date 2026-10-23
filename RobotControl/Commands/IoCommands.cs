@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Controller.RobotControl.Nano;
+using Controller.RobotControl.Io;
 using Controller.RobotControl.UsbRelay;
 
 namespace Controller.RobotControl.Commands;
@@ -15,10 +15,10 @@ internal sealed class IoCommands
     {
         d.Add("SetSTBOutput",     SetSTBOutput);
         d.Add("GetIO",            GetIO);
-        d.Add("SetNanoOutput",    SetNanoOutput);
+        d.Add("SetIoOutput",    SetIoOutput);
         d.Add("SetNeoPixel",      SetNeoPixel);
-        d.Add("RenameNanoPin",    RenameNanoPin);
-        d.Add("ConfigureNanoPin", ConfigureNanoPin);
+        d.Add("RenameIoPin",    RenameIoPin);
+        d.Add("ConfigureIoPin", ConfigureIoPin);
         d.Add("ConfigureLoadCell", ConfigureLoadCell);
         d.Add("TareLoadCell",      TareLoadCell);
         d.Add("CalibrateLoadCell", CalibrateLoadCell);
@@ -53,22 +53,26 @@ internal sealed class IoCommands
 
     private void SetSTBOutput(CommandMessage msg)
     {
-        var p = CommandJson.LoadParams<SetNanoOutputParams>(msg); // reuse same params shape
+        var p = CommandJson.LoadParams<SetIoOutputParams>(msg); // reuse same params shape
         _robot.stb.SetOutput(p.Pin, p.Value);
     }
 
     private object? GetIO(CommandMessage msg)
     {
-        var states   = _robot.NanoManager.GetAllStates();
-        var nanoJson = JsonSerializer.Serialize(states, CommandJson.CamelCaseWithEnums);
-        var relayJson = JsonSerializer.Serialize(RelayState(), CommandJson.CamelCase);
-        return new { nanos = nanoJson, relay = relayJson };
+        var states    = _robot.GetAllIoStates();
+        var ioJson     = JsonSerializer.Serialize(states, CommandJson.CamelCaseWithEnums);
+        var relayJson  = JsonSerializer.Serialize(RelayState(), CommandJson.CamelCase);
+        return new { ioDevices = ioJson, relay = relayJson };
     }
 
-    private void SetNanoOutput(CommandMessage msg)
+    private void SetIoOutput(CommandMessage msg)
     {
-        var p = CommandJson.LoadParams<SetNanoOutputParams>(msg);
-        _robot.NanoManager.SetOutput(p.NanoId, p.Pin, p.Value);
+        var p = CommandJson.LoadParams<SetIoOutputParams>(msg);
+        // Route by id: a Nano edge device, else an aux-stepper device's spare-pin IO.
+        if (_robot.NanoManager.GetDevice(p.DeviceId) != null)
+            _robot.NanoManager.SetOutput(p.DeviceId, p.Pin, p.Value);
+        else
+            _robot.AuxAxisManager.SetIoOutput(p.DeviceId, p.Pin, p.Value);
     }
 
     private void SetNeoPixel(CommandMessage msg)
@@ -77,20 +81,23 @@ internal sealed class IoCommands
         var colors = p.Colors
             .Select(c => new NeoPixelColor(c.R, c.G, c.B))
             .ToArray();
-        _robot.NanoManager.SetNeoPixel(p.NanoId, p.Pin, colors);
+        _robot.NanoManager.SetNeoPixel(p.DeviceId, p.Pin, colors);
     }
 
-    private void RenameNanoPin(CommandMessage msg)
+    private void RenameIoPin(CommandMessage msg)
     {
-        var p = CommandJson.LoadParams<RenameNanoPinParams>(msg);
-        if (!_robot.NanoManager.RenamePin(p.NanoId, p.Pin, p.Name))
+        var p  = CommandJson.LoadParams<RenameIoPinParams>(msg);
+        bool ok = _robot.NanoManager.GetDevice(p.DeviceId) != null
+            ? _robot.NanoManager.RenamePin(p.DeviceId, p.Pin, p.Name)
+            : _robot.AuxAxisManager.RenameIoPin(p.DeviceId, p.Pin, p.Name);
+        if (!ok)
             throw new InvalidOperationException(
-                $"Nano is not connected (or pin {p.Pin} is not configured) — the name was not saved.");
+                $"Device is not connected (or pin {p.Pin} is not configured) — the name was not saved.");
     }
 
-    private void ConfigureNanoPin(CommandMessage msg)
+    private void ConfigureIoPin(CommandMessage msg)
     {
-        var p    = CommandJson.LoadParams<ConfigureNanoPinParams>(msg);
+        var p    = CommandJson.LoadParams<ConfigureIoPinParams>(msg);
         var type = p.Type switch
         {
             "Output"       => PinType.Output,
@@ -98,24 +105,27 @@ internal sealed class IoCommands
             "Unconfigured" => PinType.Unconfigured,
             _              => PinType.Input,
         };
-        // SetPinType returns false when the device isn't live — surface that
-        // instead of ACKing a save that silently changed nothing.
-        if (!_robot.NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount))
+        // Route by id: Nano edge device, else aux-stepper spare-pin IO (Input/Output only).
+        // Returns false when the device isn't live — surface that instead of ACKing a no-op.
+        bool ok = _robot.NanoManager.GetDevice(p.DeviceId) != null
+            ? _robot.NanoManager.SetPinType(p.DeviceId, p.Pin, type, p.PixelCount)
+            : _robot.AuxAxisManager.SetIoPinType(p.DeviceId, p.Pin, type);
+        if (!ok)
             throw new InvalidOperationException(
-                $"Nano is not connected — pin {p.Pin} was not saved.");
+                $"Device is not connected — pin {p.Pin} was not saved.");
     }
 
     private void ConfigureLoadCell(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<ConfigureLoadCellParams>(msg);
-        if (!_robot.NanoManager.SetLoadCellConfig(p.NanoId, p.DtPin, p.SckPin, p.Unit))
-            throw new InvalidOperationException($"Nano '{p.NanoId}' not found — load cell was not saved.");
+        if (!_robot.NanoManager.SetLoadCellConfig(p.DeviceId, p.DtPin, p.SckPin, p.Unit))
+            throw new InvalidOperationException($"Nano '{p.DeviceId}' not found — load cell was not saved.");
     }
 
     private object? TareLoadCell(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<LoadCellPinParams>(msg);
-        var offset = _robot.NanoManager.TareLoadCell(p.NanoId, p.Pin);
+        var offset = _robot.NanoManager.TareLoadCell(p.DeviceId, p.Pin);
         if (offset == null)
             throw new InvalidOperationException($"Load cell on pin {p.Pin} not found or not connected.");
         return new { tareOffset = offset.Value };
@@ -124,7 +134,7 @@ internal sealed class IoCommands
     private object? CalibrateLoadCell(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<CalibrateLoadCellParams>(msg);
-        var cpg = _robot.NanoManager.CalibrateLoadCell(p.NanoId, p.Pin, p.KnownGrams);
+        var cpg = _robot.NanoManager.CalibrateLoadCell(p.DeviceId, p.Pin, p.KnownGrams);
         if (cpg == null)
             throw new InvalidOperationException(
                 $"Load cell on pin {p.Pin} not found, not connected, or the known weight was zero.");
@@ -134,7 +144,7 @@ internal sealed class IoCommands
     private void SetLoadCellUnit(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<SetLoadCellUnitParams>(msg);
-        if (!_robot.NanoManager.SetLoadCellUnit(p.NanoId, p.Pin, p.Unit))
+        if (!_robot.NanoManager.SetLoadCellUnit(p.DeviceId, p.Pin, p.Unit))
             throw new InvalidOperationException($"Load cell on pin {p.Pin} not found.");
     }
 

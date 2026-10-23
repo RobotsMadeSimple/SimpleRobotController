@@ -1,4 +1,4 @@
-namespace Controller.RobotControl.Nano
+namespace Controller.RobotControl.Io
 {
     /// <summary>Convert between grams (the master unit) and a load cell's display/program unit.
     /// Mirrors the app's loadcell.ts. N uses standard gravity (1 kgf = 9.80665 N).</summary>

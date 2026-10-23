@@ -118,7 +118,7 @@ public class ProgramValidatorTests
             {
                 ["offsetX"] = "$typo",
                 ["offsetY"] = "$robot.nope",
-                ["offsetZ"] = "$stb.in1 + $relay.2 + $nano.Board.pin3 + $time_ms + $program.runCount + $time.hour",
+                ["offsetZ"] = "$stb.in1 + $relay.2 + $io.Board.pin3 + $time_ms + $program.runCount + $time.hour",
             };
         })]);
         var probs = Validate(p);
@@ -471,16 +471,6 @@ public class ProgramValidatorTests
                       Step(StepType.IfCondition, s => s.IfSteps = [Step(StepType.PauseProgram)])], Num("a"));
         var fields = Validate(p).Where(x => x.Code == ValidationCodes.MissingField).Select(x => x.Field).ToList();
         Assert.Equal(["outputNumber", "routineName", "labelId", "visionProgramId", "variableExpr", "forEachVariableName", "condition"], fields);
-    }
-
-    [Fact]
-    public void DisabledStepsAreAWarningAndNotCheckedFurther()
-    {
-        var p = Prog([Step(StepType.MoveL, s => { s.Enabled = false; s.PointName = "Nowhere"; })]);
-        var probs = Validate(p);
-        var prob = Single(probs, ValidationCodes.DisabledStep);
-        Assert.Equal(ValidationSeverity.Warning, prob.Severity);
-        None(probs, ValidationCodes.UnknownPoint);
     }
 
     [Fact]

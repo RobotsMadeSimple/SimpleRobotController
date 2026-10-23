@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Controller.RobotControl.Io;
 
 namespace Controller.RobotControl.AuxAxis
 {
@@ -79,6 +80,8 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("id")]             public string                    Id   { get; set; } = "AUX_STEPPER_001";
         [JsonPropertyName("name")]           public string                    Name { get; set; } = "Aux Stepper";
         [JsonPropertyName("axes")]           public List<AuxAxisChannelConfig> Axes { get; set; } = new();
+        // Digital IO on the Uno's spare pins (same model as a Nano edge device). Input/Output only.
+        [JsonPropertyName("ioPins")]         public List<IoPinConfig>         IoPins { get; set; } = new();
     }
 
     public class AuxAxisChannelConfig

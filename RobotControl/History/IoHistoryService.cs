@@ -7,7 +7,7 @@ namespace Controller.RobotControl.History;
 /// In-memory time-series history for numeric IO channels, plus explicit recordings.
 ///
 /// Generic by design: a channel is addressed by a stable string key
-/// (<c>nano/&lt;nanoId&gt;/&lt;pin&gt;</c> for load cells; <c>device/&lt;id&gt;/&lt;channel&gt;</c> reserved
+/// (<c>io/&lt;deviceId&gt;/&lt;pin&gt;</c> for load cells; <c>device/&lt;id&gt;/&lt;channel&gt;</c> reserved
 /// for phone channels). Only load cells are wired up today via <see cref="AttachNano"/>.
 ///
 /// Two concepts:
@@ -48,18 +48,18 @@ public sealed class IoHistoryService
     }
 
     /// <summary>Stable channel key for a load cell (rename-proof: nano id + DT pin).</summary>
-    public static string LoadCellKey(string nanoId, int pin) => $"nano/{nanoId}/{pin}";
+    public static string LoadCellKey(string deviceId, int pin) => $"io/{deviceId}/{pin}";
 
     // ── Live capture ────────────────────────────────────────────────────────────
 
     /// <summary>Subscribe to a nano manager's per-sample load-cell event.</summary>
-    public void AttachNano(Nano.NanoManager nano) => nano.LoadCellSampled += OnLoadCellSample;
+    public void AttachNano(Io.NanoManager nano) => nano.LoadCellSampled += OnLoadCellSample;
 
-    private void OnLoadCellSample(string nanoId, Nano.NanoPinState state, long unixMs)
+    private void OnLoadCellSample(string deviceId, Io.IoPinState state, long unixMs)
     {
         // Grams is 0 while uncalibrated; we keep raw too so the app can plot raw until then.
         Record(
-            LoadCellKey(nanoId, state.Pin), unixMs, state.Grams, state.Raw,
+            LoadCellKey(deviceId, state.Pin), unixMs, state.Grams, state.Raw,
             string.IsNullOrEmpty(state.Unit) ? "g" : state.Unit,
             string.IsNullOrEmpty(state.Name) ? $"Load Cell {state.Pin}" : state.Name);
     }

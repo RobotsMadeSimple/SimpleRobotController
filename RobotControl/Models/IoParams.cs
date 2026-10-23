@@ -8,16 +8,16 @@ namespace Controller.RobotControl;
 
 // ── Nano I/O command params ────────────────────────────────────────────────────
 
-public class SetNanoOutputParams
+public class SetIoOutputParams
 {
-    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "";
     [JsonPropertyName("pin")]    public int    Pin    { get; set; }
     [JsonPropertyName("value")]  public bool   Value  { get; set; }
 }
 
 public class SetNeoPixelParams
 {
-    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "";
     [JsonPropertyName("pin")]    public int    Pin    { get; set; }
 
     /// <summary>Array of { r, g, b } objects, one per pixel.</summary>
@@ -32,16 +32,16 @@ public class NeoPixelColorParams
     [JsonPropertyName("b")] public byte B { get; set; }
 }
 
-public class RenameNanoPinParams
+public class RenameIoPinParams
 {
-    [JsonPropertyName("nanoId")]  public string NanoId  { get; set; } = "";
+    [JsonPropertyName("deviceId")]  public string DeviceId  { get; set; } = "";
     [JsonPropertyName("pin")]     public int    Pin     { get; set; }
     [JsonPropertyName("name")]    public string Name    { get; set; } = "";
 }
 
-public class ConfigureNanoPinParams
+public class ConfigureIoPinParams
 {
-    [JsonPropertyName("nanoId")]     public string NanoId     { get; set; } = "";
+    [JsonPropertyName("deviceId")]     public string DeviceId     { get; set; } = "";
     [JsonPropertyName("pin")]        public int    Pin        { get; set; }
     [JsonPropertyName("type")]       public string Type       { get; set; } = "Input";
     [JsonPropertyName("pixelCount")] public int    PixelCount { get; set; } = 8;
@@ -51,7 +51,7 @@ public class ConfigureNanoPinParams
 
 public class ConfigureLoadCellParams
 {
-    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "";
     [JsonPropertyName("dtPin")]  public int    DtPin  { get; set; }  // HX711 data pin
     [JsonPropertyName("sckPin")] public int    SckPin { get; set; }  // HX711 clock pin
     [JsonPropertyName("unit")]   public string Unit   { get; set; } = "g";
@@ -59,20 +59,20 @@ public class ConfigureLoadCellParams
 
 public class LoadCellPinParams
 {
-    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "";
     [JsonPropertyName("pin")]    public int    Pin    { get; set; }  // the DT pin
 }
 
 public class CalibrateLoadCellParams
 {
-    [JsonPropertyName("nanoId")]     public string NanoId     { get; set; } = "";
+    [JsonPropertyName("deviceId")]     public string DeviceId     { get; set; } = "";
     [JsonPropertyName("pin")]        public int    Pin        { get; set; }
     [JsonPropertyName("knownGrams")] public double KnownGrams { get; set; }
 }
 
 public class SetLoadCellUnitParams
 {
-    [JsonPropertyName("nanoId")] public string NanoId { get; set; } = "";
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "";
     [JsonPropertyName("pin")]    public int    Pin    { get; set; }
     [JsonPropertyName("unit")]   public string Unit   { get; set; } = "g";
 }

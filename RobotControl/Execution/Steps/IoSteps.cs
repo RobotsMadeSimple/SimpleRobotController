@@ -10,16 +10,16 @@ namespace Controller.RobotControl.Execution
         }
 
         /// <summary>Applies a single output state to the correct IO card.</summary>
-        internal static void ApplyOutput(RobotController ctrl, string card, int number, bool value, string? nanoId)
+        internal static void ApplyOutput(RobotController ctrl, string card, int number, bool value, string? deviceId)
         {
             switch (card)
             {
                 case "relay":
                     ctrl.RelayManager.SetRelay(number, value);
                     break;
-                case "nano":
-                    if (!string.IsNullOrEmpty(nanoId))
-                        ctrl.NanoManager.SetOutput(nanoId, number, value);
+                case "io":
+                    if (!string.IsNullOrEmpty(deviceId))
+                        ctrl.NanoManager.SetOutput(deviceId, number, value);
                     break;
                 default: // "stb"
                     ctrl.stb.SetOutput(number, value);
@@ -40,7 +40,7 @@ namespace Controller.RobotControl.Execution
 
                 if (!frame.WaitStarted)
                 {
-                    ApplyOutput(ctx.Controller, card, number, value, step.OutputNanoId);
+                    ApplyOutput(ctx.Controller, card, number, value, step.OutputDeviceId);
 
                     if (pulse > 0 && step.PulseBlocking == true)
                     {
@@ -56,9 +56,9 @@ namespace Controller.RobotControl.Execution
                         // rather than a Task.Delay, so Stop/Reset/e-stop cancel the revert
                         // instead of it flipping the output some time after the program was halted.
                         var ctrl     = ctx.Controller;
-                        var nanoId   = step.OutputNanoId;
+                        var deviceId   = step.OutputDeviceId;
                         ctx.OutputFlips.Add((NowMs() + pulse,
-                            () => ApplyOutput(ctrl, card, number, !value, nanoId)));
+                            () => ApplyOutput(ctrl, card, number, !value, deviceId)));
                     }
 
                     return StepOutcome.Advance;
@@ -68,7 +68,7 @@ namespace Controller.RobotControl.Execution
                 var elapsed = NowMs() - frame.WaitStartMs;
                 if (elapsed >= pulse)
                 {
-                    ApplyOutput(ctx.Controller, card, number, !value, step.OutputNanoId);
+                    ApplyOutput(ctx.Controller, card, number, !value, step.OutputDeviceId);
                     frame.WaitStarted = false;
                     return StepOutcome.Advance;
                 }

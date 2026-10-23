@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Ports;
 using System.Threading;
+using Controller.RobotControl.Io;
 using Controller.RobotControl.Serial;
 
 namespace Controller.RobotControl.AuxAxis
@@ -81,11 +82,27 @@ namespace Controller.RobotControl.AuxAxis
         protected override bool   CatchIOException              => true;
         protected override string UnhandledErrorLogVerb          => "Error";
 
+        // Digital IO on the Uno's spare pins — same model/protocol as a Nano edge device
+        // (Input/Output only; no HX711/NeoPixel). Guarded by the base _lock.
+        private readonly Dictionary<int, IoPinState> _ioPins = new();
+
         public AuxAxisDevice(AuxAxisConfig config) : base(config.Id, config.Name)
         {
             _config   = config;
             _simTimer = new Timer(SimTick, null, SimTickMs, SimTickMs);
+
+            // Pre-populate IO pin state so callers can read it before the device connects.
+            foreach (var p in config.IoPins)
+                _ioPins[p.Pin] = new IoPinState
+                {
+                    Pin = p.Pin, Type = p.Type, Name = p.Name,
+                    DeviceId = config.Id, DeviceName = config.Name, Value = false,
+                };
         }
+
+        /// <summary>The firmware CFG command for an IO pin (Input/Output only).</summary>
+        private static string IoConfigCommand(int pin, PinType type) =>
+            type == PinType.Output ? $"CFG:{pin},O" : $"CFG:{pin},I";
 
         // ── Session hooks ───────────────────────────────────────────────────────
 
@@ -96,6 +113,14 @@ namespace Controller.RobotControl.AuxAxis
             // Restore the operator's chosen enable state rather than forcing it on.
             _motorEnabled = _desiredEnabled;
             SafeWrite(_desiredEnabled ? "E:1" : "E:0");
+
+            // Push IO pin configuration, then request a full state snapshot.
+            foreach (var p in _config.IoPins)
+            {
+                SafeWrite(IoConfigCommand(p.Pin, p.Type));
+                Thread.Sleep(20);
+            }
+            if (_config.IoPins.Count > 0) SafeWrite("GET");
 
             // A real board now drives the axes — abandon any offline simulation so the
             // two don't both move the tracked position.
@@ -118,6 +143,30 @@ namespace Controller.RobotControl.AuxAxis
         protected override void OnLine(string line)
         {
             if (string.IsNullOrEmpty(line)) return;
+
+            // STATE:<pin>,<I|O>,<value>;...  — full IO snapshot (response to GET)
+            if (line.StartsWith("STATE:"))
+            {
+                foreach (string entry in line.Substring(6).Split(';'))
+                {
+                    string[] parts = entry.Split(',');
+                    if (parts.Length >= 3 && int.TryParse(parts[0], out int pin))
+                        lock (_lock)
+                            if (_ioPins.TryGetValue(pin, out var s)) s.Value = parts[2] != "0";
+                }
+                return;
+            }
+
+            // CHG:<pin>,<value>  — an input changed
+            if (line.StartsWith("CHG:"))
+            {
+                string[] parts = line.Substring(4).Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int pin))
+                    lock (_lock)
+                        if (_ioPins.TryGetValue(pin, out var s)) s.Value = parts[1] != "0";
+                return;
+            }
+
             if (line.StartsWith("DONE:") && int.TryParse(line.Substring(5), out int axis))
             {
                 // Floor at zero in case of a spurious or duplicate DONE.
@@ -232,6 +281,70 @@ namespace Controller.RobotControl.AuxAxis
                 _commandQueue.Enqueue("X");
                 foreach (var q in _pendingMoves) q.Clear();
                 for (int i = 0; i < 4; i++) { _simVel[i] = 0; _simRate[i] = 0; }
+            }
+        }
+
+        // ── Digital IO API (Uno spare pins) — all thread-safe ───────────────────
+
+        /// <summary>Live state of every configured IO pin.</summary>
+        public List<IoPinState> GetIoPinStates()
+        {
+            lock (_lock) return _ioPins.Values.ToList();
+        }
+
+        /// <summary>Queue a digital output change. Optimistically updates tracked state.</summary>
+        public void SetIoOutput(int pin, bool value)
+        {
+            IoPinState? state;
+            lock (_lock)
+            {
+                _commandQueue.Enqueue($"SET:{pin},{(value ? 1 : 0)}");
+                _ioPins.TryGetValue(pin, out state);
+            }
+            if (state != null) state.Value = value;
+        }
+
+        /// <summary>Queue a pin reconfiguration (Input/Output).</summary>
+        public void ConfigureIoPin(int pin, PinType type)
+        {
+            lock (_lock) _commandQueue.Enqueue(IoConfigCommand(pin, type));
+        }
+
+        /// <summary>Add or update the tracked IO pin state without sending a firmware command.</summary>
+        public void UpsertIoPin(int pin, PinType type, string name)
+        {
+            lock (_lock)
+            {
+                if (_ioPins.TryGetValue(pin, out var existing))
+                {
+                    existing.Type = type;
+                    existing.Name = name;
+                }
+                else
+                {
+                    _ioPins[pin] = new IoPinState
+                    {
+                        Pin = pin, Type = type, Name = name,
+                        DeviceId = Id, DeviceName = Name, Value = false,
+                    };
+                }
+            }
+        }
+
+        /// <summary>Remove an IO pin from tracking.</summary>
+        public void RemoveIoPin(int pin)
+        {
+            lock (_lock) _ioPins.Remove(pin);
+        }
+
+        /// <summary>Set the tracked label of an IO pin. Returns false if the pin isn't tracked.</summary>
+        public bool RenameIoPin(int pin, string name)
+        {
+            lock (_lock)
+            {
+                if (!_ioPins.TryGetValue(pin, out var s)) return false;
+                s.Name = name;
+                return true;
             }
         }
 

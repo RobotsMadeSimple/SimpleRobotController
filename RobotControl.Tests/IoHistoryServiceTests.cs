@@ -6,7 +6,7 @@ namespace RobotControl.Tests;
 public class IoHistoryServiceTests : IDisposable
 {
     private readonly string _dir;
-    private const string Ch = "nano/n1/4";
+    private const string Ch = "io/n1/4";
 
     public IoHistoryServiceTests()
     {

@@ -428,7 +428,7 @@ namespace Controller.RobotControl.Execution
             var state = step.OutputValue == true ? "ON" : "OFF";
             var base_ = step.OutputCard switch {
                 "relay" => $"Relay {step.OutputNumber} → {state}",
-                "nano"  => $"Nano Output {step.OutputNumber} → {state}",
+                "io"  => $"IO Output {step.OutputNumber} → {state}",
                 _       => $"STB Output {step.OutputNumber} → {state}",
             };
             var pulseSuffix = (step.PulseMs ?? 0) > 0

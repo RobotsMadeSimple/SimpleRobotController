@@ -75,7 +75,7 @@ public class PluginManifestTests
 
     [Theory]
     [InlineData("robot")] [InlineData("program")] [InlineData("time")] [InlineData("aux")] [InlineData("camera")]
-    [InlineData("stb")] [InlineData("relay")] [InlineData("nano")] [InlineData("plugin")] [InlineData("global")]
+    [InlineData("stb")] [InlineData("relay")] [InlineData("io")] [InlineData("plugin")] [InlineData("global")]
     [InlineData("local")] [InlineData("list")] [InlineData("time_ms")]
     public void ReservedRootsAreRejected(string id)
     {

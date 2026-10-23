@@ -139,7 +139,7 @@ public sealed class PluginManifest
     /// <summary>Expression roots a plugin id may not take.</summary>
     public static readonly IReadOnlySet<string> ReservedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "robot", "program", "time", "aux", "camera", "stb", "relay", "nano", "plugin", "global", "local", "list", "time_ms",
+        "robot", "program", "time", "aux", "camera", "stb", "relay", "io", "plugin", "global", "local", "list", "time_ms",
     };
 
     public static readonly IReadOnlySet<string> Runtimes        = Set("python", "dotnet", "exe", "external");

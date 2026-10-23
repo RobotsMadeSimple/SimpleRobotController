@@ -76,8 +76,8 @@ namespace Controller.RobotControl
         // ── IO card visibility ────────────────────────────────────────────────
 
         /// <summary>Show Arduino Nano IO cards in the app.</summary>
-        [JsonPropertyName("enableNanoCards")]
-        public bool EnableNanoCards { get; set; } = true;
+        [JsonPropertyName("enableIoDevices")]
+        public bool EnableIoDevices { get; set; } = true;
 
         /// <summary>Show the USB relay board card in the app.</summary>
         [JsonPropertyName("enableRelayCard")]

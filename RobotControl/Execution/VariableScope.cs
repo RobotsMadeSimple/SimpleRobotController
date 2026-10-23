@@ -585,6 +585,19 @@ namespace Controller.RobotControl.Execution
 
         private bool EvaluateConditionItem(ConditionItem item, Dictionary<string, double> vars)
         {
+            // Expression condition: evaluate the whole thing as a number; non-zero is true (so a bare
+            // `$enabled` reads as a truthiness check). Unknown vars / syntax errors propagate, like
+            // the structured path — a silently-wrong condition could branch a moving machine.
+            if (!string.IsNullOrWhiteSpace(item.Expr))
+            {
+                double v;
+                try { v = ExpressionEvaluator.Evaluate(item.Expr, vars, _listVariables, Properties); }
+                catch (UnknownVariableException) { throw; }
+                catch (ExpressionParseException) { throw; }
+                catch { v = 0; }
+                return Math.Abs(v) > 1e-9;
+            }
+
             // String operator path — also used when left side is a string variable
             bool isStringOp = item.Operator is "contains" or "startsWith" or "endsWith";
             if (isStringOp || IsStringVarRef(item.Left))

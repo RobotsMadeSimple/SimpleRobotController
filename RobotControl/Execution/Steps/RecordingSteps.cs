@@ -24,8 +24,8 @@ namespace Controller.RobotControl.Execution
         }
 
         private static string? ChannelKey(ProgramStep step) =>
-            !string.IsNullOrEmpty(step.LoadCellNanoId) && step.LoadCellPin is int pin
-                ? IoHistoryService.LoadCellKey(step.LoadCellNanoId, pin)
+            !string.IsNullOrEmpty(step.LoadCellDeviceId) && step.LoadCellPin is int pin
+                ? IoHistoryService.LoadCellKey(step.LoadCellDeviceId, pin)
                 : null;
 
         /// <summary>Begin capturing the selected load cell into the named list variable.</summary>

@@ -447,7 +447,6 @@ public sealed class PluginRuntimeTests : IAsyncLifetime
         rig.Executor.Start(Prog(
         [
             new ProgramStep { Id = "set", Type = StepType.SetVariable, VariableName = "n", VariableExpr = "1" },
-            new ProgramStep { Id = "off", Type = StepType.SetVariable, VariableName = "n", VariableExpr = "2", Enabled = false },
             PluginStep("scale", "weigh"),
         ], Num("n")));
         RunToEnd(rig.Executor);
@@ -460,18 +459,17 @@ public sealed class PluginRuntimeTests : IAsyncLifetime
             var el = await _client.WaitForAsync(e => e.GetProperty("t").GetString() == "evt");
             events.Add((el.GetProperty("event").GetString()!, el.GetProperty("data")));
         }
-        Assert.Equal(new[] { "program.started", "step.completed", "step.skipped", "step.started", "step.completed", "program.finished" },
+        Assert.Equal(new[] { "program.started", "step.completed", "step.started", "step.completed", "program.finished" },
                      events.Select(e => e.Name).ToArray());
         var started = events[0].Data;
         Assert.Equal("Main", started.GetProperty("programName").GetString());
         Assert.False(started.GetProperty("isBackground").GetBoolean());
         Assert.True(started.GetProperty("runCount").GetInt32() >= 1);
         Assert.False(started.TryGetProperty("error", out _));
-        Assert.Equal("off", events[2].Data.GetProperty("stepId").GetString());
-        var plugin = events[3].Data;
+        var plugin = events[2].Data;
         Assert.Equal("Plugin", plugin.GetProperty("stepType").GetString());
         Assert.Equal("Bench Scale: Weigh item", plugin.GetProperty("description").GetString());
-        Assert.Equal(2, plugin.GetProperty("stepIndex").GetInt32());
+        Assert.Equal(1, plugin.GetProperty("stepIndex").GetInt32());
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-using Controller.RobotControl.Nano;
+using Controller.RobotControl.Io;
 
 namespace Controller.RobotControl.Execution
 {
@@ -19,8 +19,8 @@ namespace Controller.RobotControl.Execution
         {
             public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
             {
-                if (!string.IsNullOrEmpty(step.LoadCellNanoId) && step.LoadCellPin is int pin)
-                    ctx.Controller.NanoManager.TareLoadCell(step.LoadCellNanoId, pin);
+                if (!string.IsNullOrEmpty(step.LoadCellDeviceId) && step.LoadCellPin is int pin)
+                    ctx.Controller.NanoManager.TareLoadCell(step.LoadCellDeviceId, pin);
                 return StepOutcome.Advance;
             }
         }
@@ -31,9 +31,9 @@ namespace Controller.RobotControl.Execution
             public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
             {
                 if (!string.IsNullOrEmpty(step.VariableName) &&
-                    !string.IsNullOrEmpty(step.LoadCellNanoId) && step.LoadCellPin is int pin)
+                    !string.IsNullOrEmpty(step.LoadCellDeviceId) && step.LoadCellPin is int pin)
                 {
-                    double grams = ctx.Controller.NanoManager.GetLoadCellGrams(step.LoadCellNanoId, pin) ?? 0;
+                    double grams = ctx.Controller.NanoManager.GetLoadCellGrams(step.LoadCellDeviceId, pin) ?? 0;
                     ctx.Vars.Set(step.VariableName, LoadCellUnits.GramsToUnit(grams, step.LoadCellUnit));
                 }
                 return StepOutcome.Advance;
@@ -88,8 +88,8 @@ namespace Controller.RobotControl.Execution
                 double ceiling   = Math.Abs(target) + Math.Max(tol * 4, Math.Abs(target)); // ~2x target
 
                 // Nothing to control without a sensor + a positive target.
-                double? gOpt = string.IsNullOrEmpty(step.LoadCellNanoId) || step.LoadCellPin is not int lcPin
-                    ? null : ctx.Controller.NanoManager.GetLoadCellGrams(step.LoadCellNanoId, lcPin);
+                double? gOpt = string.IsNullOrEmpty(step.LoadCellDeviceId) || step.LoadCellPin is not int lcPin
+                    ? null : ctx.Controller.NanoManager.GetLoadCellGrams(step.LoadCellDeviceId, lcPin);
                 if (gOpt == null || target <= 0) { fs.Reset(); return StepOutcome.Advance; }
                 double force = gOpt.Value;
                 var cur = ctx.LivePosition();

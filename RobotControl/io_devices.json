@@ -1,5 +1,5 @@
 {
-  "nanos": [
+  "ioDevices": [
     {
       "id": "ROBOT_NANO_001",
       "name": "Arduino Nano",

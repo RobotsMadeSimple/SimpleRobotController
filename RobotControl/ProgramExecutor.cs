@@ -553,14 +553,6 @@ namespace Controller.RobotControl
 
         private void ExecuteStepInner(ProgramStep step, StepListFrame frame)
         {
-            // A step the user disabled in the editor is skipped but still counted.
-            if (!step.IsEnabled)
-            {
-                _ctx.Progress.SkippedDisabled(step);
-                _ctx.CompleteNow(step, frame);
-                return;
-            }
-
             // Background programs skip motion/tool/homing steps rather than error
             if (_isBackground && IsRestrictedInBackground(step.Type))
             {
@@ -637,7 +629,7 @@ namespace Controller.RobotControl
                 if (!string.IsNullOrEmpty(nano.Name))
                     foreach (var pin in nano.Pins)
                         if (!string.IsNullOrEmpty(pin.Name))
-                            io[$"nano.{nano.Name}.{pin.Name}"] = pin.Value ? 1.0 : 0.0;
+                            io[$"io.{nano.Name}.{pin.Name}"] = pin.Value ? 1.0 : 0.0;
         }
 
         // ── Static API kept for callers and tests ─────────────────────────────

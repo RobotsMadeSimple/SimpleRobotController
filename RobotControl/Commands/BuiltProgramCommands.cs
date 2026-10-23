@@ -507,7 +507,7 @@ internal sealed class BuiltProgramCommands
                 if (!string.IsNullOrEmpty(nano.Name))
                     foreach (var pin in nano.Pins)
                         if (!string.IsNullOrEmpty(pin.Name))
-                            list.Add(($"nano.{nano.Name}.{pin.Name}", $"Nano '{nano.Name}' pin {pin.Pin} ({pin.Type})"));
+                            list.Add(($"io.{nano.Name}.{pin.Name}", $"Nano '{nano.Name}' pin {pin.Pin} ({pin.Type})"));
         }
         catch { /* no nano manager yet — the fixed names still stand */ }
         return list;

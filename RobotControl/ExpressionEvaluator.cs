@@ -141,7 +141,7 @@ namespace Controller.RobotControl
     /// Supported syntax:
     ///   Literals     : 3.14  -5  100  1e3  true  false
     ///   Variables    : $varName
-    ///   IO           : $stb.in1  $relay.2  $nano.Board.pin    (dotted names, longest match wins)
+    ///   IO           : $stb.in1  $relay.2  $io.Board.pin    (dotted names, longest match wins)
     ///   Properties   : $robot.x  $program.runCount  $time.hour (read-only; see <see cref="IPropertySource"/>)
     ///   List count   : $listName.length  or  $listName.count
     ///   Number elem. : $listName[indexExpr]
@@ -713,7 +713,7 @@ namespace Controller.RobotControl
                 if (char.IsWhiteSpace(c) || c == '{' || c == '}') { i++; continue; }
 
                 // Variable: $identifier with an optional dotted chain ($stb.in1, $relay.1,
-                // $nano.Board.pin, $aux.dev.0.position). The chain only continues across a
+                // $io.Board.pin, $aux.dev.0.position). The chain only continues across a
                 // '.' that is immediately followed by an identifier character.
                 if (c == '$')
                 {

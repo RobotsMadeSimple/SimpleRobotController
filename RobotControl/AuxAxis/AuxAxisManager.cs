@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Controller.RobotControl.Io;
 
 namespace Controller.RobotControl.AuxAxis
 {
@@ -192,6 +193,70 @@ namespace Controller.RobotControl.AuxAxis
             // Re-pin the live device's soft bounds — role or gap limits may have just changed.
             var device = GetDevice(deviceId);
             if (device != null) ApplyAxisBounds(device, axis);
+        }
+
+        // ── Digital IO (Uno spare pins) ─────────────────────────────────────────
+
+        public bool HasDevice(string deviceId) => GetDevice(deviceId) != null;
+
+        /// <summary>IO device state for every aux device that has IO pins configured (so a plain
+        /// stepper device with no IO adds nothing to the IO stream).</summary>
+        public List<IoDeviceState> GetAllIoStates()
+        {
+            List<AuxAxisDevice> snapshot;
+            lock (_devicesLock) snapshot = new List<AuxAxisDevice>(_devices);
+
+            var result = new List<IoDeviceState>();
+            foreach (var dev in snapshot)
+            {
+                var cfg = _config.Devices.FirstOrDefault(d => d.Id == dev.Id);
+                if (cfg == null || cfg.IoPins.Count == 0) continue;
+                result.Add(new IoDeviceState
+                {
+                    Id = dev.Id, Name = dev.Name, Connected = dev.Connected, Pins = dev.GetIoPinStates(),
+                });
+            }
+            return result;
+        }
+
+        public void SetIoOutput(string deviceId, int pin, bool value) =>
+            GetDevice(deviceId)?.SetIoOutput(pin, value);
+
+        /// <summary>Add, update, or remove (type = Unconfigured) an IO pin on the device + config.
+        /// Returns false when the device isn't live.</summary>
+        public bool SetIoPinType(string deviceId, int pin, PinType type)
+        {
+            var dev = GetDevice(deviceId);
+            if (dev == null) return false;
+            var cfg = _config.Devices.FirstOrDefault(d => d.Id == deviceId);
+
+            if (type == PinType.Unconfigured)
+            {
+                dev.RemoveIoPin(pin);
+                cfg?.IoPins.RemoveAll(p => p.Pin == pin);
+                Save(_config);
+                return true;
+            }
+
+            dev.UpsertIoPin(pin, type, dev.GetIoPinStates().FirstOrDefault(s => s.Pin == pin)?.Name ?? "");
+            dev.ConfigureIoPin(pin, type);
+            if (cfg != null)
+            {
+                var pinCfg = cfg.IoPins.FirstOrDefault(p => p.Pin == pin);
+                if (pinCfg != null) pinCfg.Type = type;
+                else cfg.IoPins.Add(new IoPinConfig { Pin = pin, Type = type, Name = "" });
+                Save(_config);
+            }
+            return true;
+        }
+
+        public bool RenameIoPin(string deviceId, int pin, string name)
+        {
+            var dev = GetDevice(deviceId);
+            if (dev == null || !dev.RenameIoPin(pin, name)) return false;
+            var pinCfg = _config.Devices.FirstOrDefault(d => d.Id == deviceId)?.IoPins.FirstOrDefault(p => p.Pin == pin);
+            if (pinCfg != null) { pinCfg.Name = name; Save(_config); }
+            return true;
         }
 
         // ── Config persistence ────────────────────────────────────────────────

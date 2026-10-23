@@ -151,12 +151,12 @@ internal sealed class SystemCommands
                 Names     = relay.GetRelayNames(),
             },
 
-            // Nano edge-device state rides along in the broadcast (same shape as GetIO's
-            // `nanos`) so live values — load-cell readings especially, which stream at the
-            // HX711 rate — update every poll instead of only on page entry. Serialized to a
-            // JSON string so the app reuses its GetIO decoder; it change-detects before
-            // re-rendering so unchanging digital pins don't churn.
-            nanos = JsonSerializer.Serialize(robot.NanoManager.GetAllStates(), CommandJson.CamelCaseWithEnums),
+            // IO-device state (Nanos + any aux-stepper spare-pin IO) rides along in the broadcast
+            // (same shape as GetIO's `ioDevices`) so live values — load-cell readings especially,
+            // which stream at the HX711 rate — update every poll instead of only on page entry.
+            // Serialized to a JSON string so the app reuses its GetIO decoder; it change-detects
+            // before re-rendering so unchanging digital pins don't churn.
+            ioDevices = JsonSerializer.Serialize(robot.GetAllIoStates(), CommandJson.CamelCaseWithEnums),
 
             // Program cycle — the full summary now rides behind lastProgramUpdate (fetched via
             // GetPrograms), so it isn't re-sent every poll. Only a compact live block for the

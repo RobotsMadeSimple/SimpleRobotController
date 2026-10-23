@@ -12,7 +12,7 @@ namespace RobotControl.Tests;
 [Collection("RobotController")]
 public sealed class IoHistoryCommandsTests : IDisposable
 {
-    private const string Ch = "nano/vtest/4";
+    private const string Ch = "io/vtest/4";
     private readonly RobotController _robot = new();   // ctor only — no threads/devices started
     private readonly CommandDispatcher _d = new();
     private readonly List<string> _created = new();
