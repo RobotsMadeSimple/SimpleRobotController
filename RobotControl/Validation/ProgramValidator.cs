@@ -1514,6 +1514,9 @@ namespace Controller.RobotControl.Validation
                     if (item == null) continue;
                     string f = $"{field}.items[{k}]";
 
+                    if (item.Join != null && item.Join.ToUpperInvariant() is not ("AND" or "OR"))
+                        Add(at, ValidationCodes.ExpressionSyntax, $"Unknown joiner '{item.Join}' (use AND or OR)", f + ".join");
+
                     // Expression condition — validate the whole thing as one boolean expression.
                     if (!string.IsNullOrWhiteSpace(item.Expr))
                     {

@@ -120,6 +120,10 @@ public class ConditionItem
     /// <summary>A boolean expression (`$enabled`, `$speed &gt; 5`); true when it evaluates non-zero.
     /// When set, it replaces the legacy left/operator/right below.</summary>
     [JsonPropertyName("expr")]     public string? Expr    { get; set; }
+    /// <summary>How this item joins the one BEFORE it: "AND" or "OR". Null falls back to the group's
+    /// <see cref="ConditionGroup.Combinator"/>. AND binds tighter than OR (see
+    /// <c>VariableScope.EvaluateCondition</c>).</summary>
+    [JsonPropertyName("join")]     public string? Join    { get; set; }
     [JsonPropertyName("left")]     public string Left     { get; set; } = "";
     [JsonPropertyName("operator")] public string Operator { get; set; } = "==";
     [JsonPropertyName("right")]    public string Right    { get; set; } = "";

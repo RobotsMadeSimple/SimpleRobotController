@@ -400,7 +400,7 @@ namespace Controller.RobotControl.Execution
                 StepType.Label        => $"Label: {step.LabelName ?? step.LabelId}",
                 StepType.GoToLabel    => $"Go To: {step.LabelName ?? step.LabelId}",
                 StepType.IfCondition  => step.Condition != null
-                    ? $"If [{step.Condition.Combinator} · {step.Condition.Items.Count} condition(s)]"
+                    ? $"If [{(step.Condition.Items.Exists(i => i.Join != null) ? "AND/OR" : step.Condition.Combinator)} · {step.Condition.Items.Count} condition(s)]"
                     : "If Condition",
                 StepType.SetTool      => $"Set Tool → {(string.IsNullOrEmpty(step.ToolName) ? "None" : step.ToolName)}",
                 StepType.SetLocal     => $"Set Local → {(string.IsNullOrEmpty(step.LocalName) ? "None" : step.LocalName)}",

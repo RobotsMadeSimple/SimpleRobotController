@@ -357,6 +357,34 @@ public class ExpressionLanguageTests
     }
 
     [Fact]
+    public void ConditionJoinersArePerPair_AndBindsTighterThanOr()
+    {
+        var scope = new VariableScope();
+        scope.Set("t", 1);
+        scope.Set("f", 0);
+        static ConditionItem C(string expr, string? join = null) => new() { Expr = expr, Join = join };
+        bool Eval(string combinator, params ConditionItem[] items) =>
+            scope.Eval.EvaluateCondition(new ConditionGroup { Combinator = combinator, Items = [.. items] });
+
+        // No per-item joiner → the group combinator still rules (back-compat).
+        Assert.False(Eval("ALL", C("$t"), C("$f")));
+        Assert.True (Eval("ANY", C("$t"), C("$f")));
+
+        // (t and f) or t  → true ; (t and f) or f → false
+        Assert.True (Eval("ALL", C("$t"), C("$f", "AND"), C("$t", "OR")));
+        Assert.False(Eval("ALL", C("$t"), C("$f", "AND"), C("$f", "OR")));
+        // f or (t and f) → false ; f or (t and t) → true
+        Assert.False(Eval("ALL", C("$f"), C("$t", "OR"), C("$f", "AND")));
+        Assert.True (Eval("ALL", C("$f"), C("$t", "OR"), C("$t", "AND")));
+        // A per-item joiner overrides the group default for just that pair; case-insensitive.
+        Assert.True (Eval("ALL", C("$f"), C("$t", "or")));
+        Assert.False(Eval("ANY", C("$f"), C("$t", "and")));
+
+        // An OR short-circuits once a run is true: the later syntax error is never reached.
+        Assert.True(Eval("ALL", C("$t"), C("1 +", "OR")));
+    }
+
+    [Fact]
     public void StringMethodsCompareTextVariables()
     {
         var scope = new VariableScope();

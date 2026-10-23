@@ -570,17 +570,32 @@ namespace Controller.RobotControl.Execution
 
         // ── Conditions ────────────────────────────────────────────────────────
 
+        /// <summary>
+        /// Items are joined pairwise: each item's <see cref="ConditionItem.Join"/> ("AND"/"OR") says how
+        /// it combines with the one before it, defaulting to the group's <c>Combinator</c>. AND binds
+        /// tighter than OR, so <c>A and B or C</c> reads as <c>(A and B) or C</c> — the group is an OR
+        /// of AND-runs. Short-circuits within a run, and as soon as any run is true.
+        /// </summary>
         public bool EvaluateCondition(ConditionGroup group, Dictionary<string, double> vars)
         {
             if (group.Items.Count == 0) return true;
-            bool isAny = group.Combinator == "ANY";
-            foreach (var item in group.Items)
+            string defaultJoin = group.Combinator == "ANY" ? "OR" : "AND";
+            bool run = EvaluateConditionItem(group.Items[0], vars);   // the current AND-run so far
+            for (int i = 1; i < group.Items.Count; i++)
             {
-                bool result = EvaluateConditionItem(item, vars);
-                if (isAny && result)  return true;
-                if (!isAny && !result) return false;
+                var item = group.Items[i];
+                string join = string.IsNullOrEmpty(item.Join) ? defaultJoin : item.Join.ToUpperInvariant();
+                if (join == "OR")
+                {
+                    if (run) return true;                       // a true run makes the whole OR true
+                    run = EvaluateConditionItem(item, vars);    // start the next run
+                }
+                else if (run)
+                {
+                    run = EvaluateConditionItem(item, vars);    // extend the run while it's still alive
+                }
             }
-            return !isAny;
+            return run;
         }
 
         private bool EvaluateConditionItem(ConditionItem item, Dictionary<string, double> vars)
