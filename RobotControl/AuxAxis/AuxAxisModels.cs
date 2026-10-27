@@ -152,6 +152,10 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("deviceId")]      public string                   DeviceId      { get; set; } = "";
         [JsonPropertyName("deviceName")]    public string                   DeviceName    { get; set; } = "";
         [JsonPropertyName("portName")]      public string?                  PortName      { get; set; }
+        // Firmware from the board's "ID?" handshake: "" / null when unknown (not connected, or legacy
+        // firmware before 1.1.0 that only answers "ID:<id>").
+        [JsonPropertyName("firmwareVersion")] public string                 FirmwareVersion { get; set; } = "";
+        [JsonPropertyName("capabilities")]    public string[]?              Capabilities    { get; set; }
         [JsonPropertyName("axes")]          public List<AuxAxisChannelState> Axes         { get; set; } = new();
     }
 

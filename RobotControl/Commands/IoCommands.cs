@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Controller.RobotControl.Io;
+using Controller.RobotControl.Serial;
 using Controller.RobotControl.UsbRelay;
 
 namespace Controller.RobotControl.Commands;
@@ -65,14 +66,29 @@ internal sealed class IoCommands
         return new { ioDevices = ioJson, relay = relayJson };
     }
 
+    // ── Firmware capability gating ─────────────────────────────────────────────
+    // A board that reports its capabilities (firmware 1.1.0+) is refused a feature it lacks, with an
+    // error naming the sketch/version to flash. A legacy board (capabilities unknown) is never refused.
+
+    private const string FeatureDigitalIo = "Digital IO";
+    private const string FeatureNeopixel  = "NeoPixel";
+    private const string FeatureLoadCell  = "Load cell";
+
     private void SetIoOutput(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<SetIoOutputParams>(msg);
         // Route by id: a Nano edge device, else an aux-stepper device's spare-pin IO.
-        if (_robot.NanoManager.GetDevice(p.DeviceId) != null)
+        var nano = _robot.NanoManager.GetDevice(p.DeviceId);
+        if (nano != null)
+        {
+            nano.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
             _robot.NanoManager.SetOutput(p.DeviceId, p.Pin, p.Value);
+        }
         else
+        {
+            _robot.AuxAxisManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
             _robot.AuxAxisManager.SetIoOutput(p.DeviceId, p.Pin, p.Value);
+        }
     }
 
     private void SetNeoPixel(CommandMessage msg)
@@ -81,6 +97,7 @@ internal sealed class IoCommands
         var colors = p.Colors
             .Select(c => new NeoPixelColor(c.R, c.G, c.B))
             .ToArray();
+        _robot.NanoManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapNeopixel, FeatureNeopixel);
         _robot.NanoManager.SetNeoPixel(p.DeviceId, p.Pin, colors);
     }
 
@@ -107,9 +124,23 @@ internal sealed class IoCommands
         };
         // Route by id: Nano edge device, else aux-stepper spare-pin IO (Input/Output only).
         // Returns false when the device isn't live — surface that instead of ACKing a no-op.
-        bool ok = _robot.NanoManager.GetDevice(p.DeviceId) != null
-            ? _robot.NanoManager.SetPinType(p.DeviceId, p.Pin, type, p.PixelCount)
-            : _robot.AuxAxisManager.SetIoPinType(p.DeviceId, p.Pin, type);
+        // Removing a pin (Unconfigured) needs nothing from the firmware, so it is never gated.
+        var nano = _robot.NanoManager.GetDevice(p.DeviceId);
+        bool ok;
+        if (nano != null)
+        {
+            if (type == PinType.Neopixel)
+                nano.RequireCapability(FirmwareInfo.CapNeopixel, FeatureNeopixel);
+            else if (type != PinType.Unconfigured)
+                nano.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
+            ok = _robot.NanoManager.SetPinType(p.DeviceId, p.Pin, type, p.PixelCount);
+        }
+        else
+        {
+            if (type != PinType.Unconfigured)
+                _robot.AuxAxisManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
+            ok = _robot.AuxAxisManager.SetIoPinType(p.DeviceId, p.Pin, type);
+        }
         if (!ok)
             throw new InvalidOperationException(
                 $"Device is not connected — pin {p.Pin} was not saved.");
@@ -118,6 +149,7 @@ internal sealed class IoCommands
     private void ConfigureLoadCell(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<ConfigureLoadCellParams>(msg);
+        _robot.NanoManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapLoadCell, FeatureLoadCell);
         if (!_robot.NanoManager.SetLoadCellConfig(p.DeviceId, p.DtPin, p.SckPin, p.Unit))
             throw new InvalidOperationException($"Nano '{p.DeviceId}' not found — load cell was not saved.");
     }

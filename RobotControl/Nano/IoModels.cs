@@ -95,12 +95,19 @@ namespace Controller.RobotControl.Io
         public double  SampleRateHz  { get; set; }
     }
 
-    /// <summary>Connection + pin state for a single Nano, sent to the WebSocket client.</summary>
+    /// <summary>Connection + pin state for a single IO device (a Nano, or an aux-stepper board's
+    /// spare-pin IO), sent to the WebSocket client.</summary>
     public class IoDeviceState
     {
         public string            Id        { get; set; } = "";
         public string            Name      { get; set; } = "";
         public bool              Connected { get; set; }
+        /// <summary>Firmware version from the board's handshake ("1.1.0"); "" when unknown
+        /// (not yet connected, or legacy firmware that predates the extended handshake).</summary>
+        public string            FirmwareVersion { get; set; } = "";
+        /// <summary>Capability names the board reported (io, neopixel, loadcell, stepper); null when
+        /// unknown — the app should hint "update firmware" rather than hide features.</summary>
+        public string[]?         Capabilities    { get; set; }
         public List<IoPinState> Pins     { get; set; } = new();
     }
 

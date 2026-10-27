@@ -282,8 +282,11 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | `StopAux` | `deviceId?, axis?, decel=10000, immediate=false` | Stop an axis (or all); `immediate` halts without a decel ramp. |
 | `EnableAux` | `deviceId?, enable=true` | Enable/disable the stepper drivers. |
 | `SetAuxAxisConfig` | `deviceId?, axisIndex, name, stepsPerRev=1600, invertDirection, axisType, gearRatio=1, mmPerRev` | Configure an aux channel's physical units. |
-| `GetAuxState` | — | Returns per-axis live state (`state` JSON). |
+| `GetAuxState` | — | Returns per-device live state (`state` JSON): `connected, motorEnabled, deviceId, deviceName, portName, firmwareVersion, capabilities, axes[]`. See [Arduino firmware handshake](#arduino-firmware-handshake--capabilities). |
 | `GetAuxConfig` | — | Returns aux configuration (`config` JSON). |
+
+`MoveAux`/`JogAux` are refused (ack error) on a board whose firmware reports no `stepper`
+capability — see the handshake section below.
 
 ---
 
@@ -292,7 +295,7 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | Command | Params | Description |
 |---|---|---|
 | `SetSTBOutput` | `pin, value` | Set an STB digital output (pins 1–4). |
-| `GetIO` | — | Returns Nano card states (`nanos`) and relay state (`relay`). |
+| `GetIO` | — | Returns IO device states (`ioDevices` JSON: one row per Nano **and** per aux-stepper board, each `id, name, connected, firmwareVersion, capabilities, pins[]` — an aux board is listed even with no pins yet) and relay state (`relay`). The same `ioDevices` string rides in every `GetStatus` broadcast. |
 | `SetNanoOutput` | `nanoId, pin, value` | Set a Nano output pin. |
 | `SetNeoPixel` | `nanoId, pin, colors: [{r,g,b}, …]` | Set a NeoPixel strip's colors (one entry per pixel). |
 | `RenameNanoPin` | `nanoId, pin, name` | Give a Nano pin a friendly name. |
@@ -300,6 +303,45 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | `SetRelay` | `relay` (1–4), `value` | Set a USB relay channel. |
 | `RenameRelay` | `relay` (1–4), `name` | Name a relay channel. |
 | `GetRelayState` | — | Returns relay board state (`connected, serial, relays[], names[]`). |
+
+### Arduino firmware handshake + capabilities
+
+Every Arduino serial device (Nano edge device, aux stepper board) is discovered by
+probing COM ports with `ID?`. The reply identifies the board and, from firmware 1.1.0,
+what it can do:
+
+```
+ID:<DEVICE_ID>                                  legacy (pre-1.1.0)
+ID:<DEVICE_ID>;fw=<major.minor.patch>;caps=<cap1,cap2,...>
+```
+
+e.g. `ID:ROBOT_NANO_001;fw=1.1.0;caps=io,neopixel,loadcell` or
+`ID:AUX_STEPPER_001;fw=1.1.0;caps=stepper,io`. The id must match exactly; unknown
+`key=value` fields and surrounding whitespace are ignored. Capability names:
+
+| Capability | Meaning | Sketch |
+|---|---|---|
+| `io` | digital input/output pins (`CFG`/`SET`/`GET`) | NanoEdgeDevice, AuxStepperDriver |
+| `neopixel` | NeoPixel strips (`NEO`) | NanoEdgeDevice |
+| `loadcell` | HX711 load cell | NanoEdgeDevice |
+| `stepper` | stepper motion (`M`/`C`/`S`) | AuxStepperDriver |
+
+The controller exposes the result on every device row — `firmwareVersion` (`""` when
+unknown) and `capabilities` (string array, or `null` when unknown) — in `GetIO`
+`ioDevices`, `GetStatus` `ioDevices` and `GetAuxState`. Both are reset when the board
+disconnects, and the connect log line reads
+`[Nano:ROBOT_NANO_001] Connected on COM4 — firmware 1.1.0 (io, loadcell, neopixel)`
+or `… — firmware unknown (legacy, pre-1.1.0)`.
+
+**Gating rule.** When capabilities are known, a command that needs one the board lacks
+is refused with an ack error naming the device, its version and what to flash, e.g.
+`Load cell not supported by ROBOT_NANO_001 firmware 1.0.0 — flash NanoEdgeDevice 1.1.0 or newer`.
+When capabilities are unknown (legacy firmware) nothing is blocked — the boards in the
+field today are legacy — and the app should use the empty `firmwareVersion` to hint
+"update firmware". Gated commands: `ConfigureLoadCell` (`loadcell`), `ConfigureIoPin`
+with `type: "Neopixel"` and `SetNeoPixel` (`neopixel`), `ConfigureIoPin` with
+`Input`/`Output` and `SetIoOutput` (`io`, Nano or aux board), `MoveAux`/`JogAux`
+(`stepper`). Removing a pin (`type: "Unconfigured"`) is never gated.
 
 ---
 

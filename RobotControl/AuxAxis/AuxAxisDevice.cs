@@ -81,6 +81,7 @@ namespace Controller.RobotControl.AuxAxis
         protected override bool   KeepProbePortOpenForSession   => true;
         protected override bool   CatchIOException              => true;
         protected override string UnhandledErrorLogVerb          => "Error";
+        public    override string SketchName                    => "AuxStepperDriver";
 
         // Digital IO on the Uno's spare pins — same model/protocol as a Nano edge device
         // (Input/Output only; no HX711/NeoPixel). Guarded by the base _lock.
@@ -108,7 +109,7 @@ namespace Controller.RobotControl.AuxAxis
 
         protected override void OnSessionStarted(SerialPort port)
         {
-            Console.WriteLine($"[{LogPrefix}] Connected on {port.PortName}");
+            // (The base class has already logged "Connected on <port> — firmware …".)
 
             // Restore the operator's chosen enable state rather than forcing it on.
             _motorEnabled = _desiredEnabled;

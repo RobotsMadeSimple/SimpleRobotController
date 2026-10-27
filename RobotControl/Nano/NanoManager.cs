@@ -75,10 +75,12 @@ namespace Controller.RobotControl.Io
             {
                 result.Add(new IoDeviceState
                 {
-                    Id        = dev.Id,
-                    Name      = dev.Name,
-                    Connected = dev.Connected,
-                    Pins      = dev.GetPinStates(),
+                    Id              = dev.Id,
+                    Name            = dev.Name,
+                    Connected       = dev.Connected,
+                    FirmwareVersion = dev.Firmware.Version,
+                    Capabilities    = dev.Firmware.CapabilityArray(),
+                    Pins            = dev.GetPinStates(),
                 });
             }
             return result;

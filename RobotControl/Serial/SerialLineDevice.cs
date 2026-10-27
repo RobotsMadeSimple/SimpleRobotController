@@ -9,7 +9,8 @@ namespace Controller.RobotControl.Serial
     /// <summary>
     /// Shared plumbing for a device that talks ASCII newline-terminated lines over a
     /// serial port and is discovered by probing candidate ports with "ID?" until one
-    /// answers "ID:&lt;id&gt;". Both <c>NanoDevice</c> and <c>AuxAxisDevice</c> are
+    /// answers "ID:&lt;id&gt;" (optionally followed by ";fw=&lt;ver&gt;;caps=&lt;a,b,c&gt;" — see
+    /// <see cref="FirmwareInfo"/>). Both <c>NanoDevice</c> and <c>AuxAxisDevice</c> are
     /// this shape: auto-discover on a background thread, reconnect every 3s while
     /// disconnected, drain an outbound command queue every read-loop tick, and parse
     /// inbound lines with a device-specific protocol.
@@ -80,11 +81,29 @@ namespace Controller.RobotControl.Serial
         /// <summary>WriteTimeout applied when NanoDevice-style subclasses reopen a fresh session port.</summary>
         protected virtual int SessionWriteTimeoutMs => 2000;
 
+        /// <summary>Name of the Arduino sketch this device runs (e.g. "NanoEdgeDevice") — quoted in
+        /// capability-refusal errors so the operator knows what to flash.</summary>
+        public abstract string SketchName { get; }
+
         // ── Identity / public state ────────────────────────────────────────────
         public string  Id        { get; }
         public string  Name      { get; }
         public string? PortName  { get; private set; }
         public bool    Connected { get; private set; }
+
+        /// <summary>
+        /// Firmware version + capabilities from the board's "ID?" reply. <see cref="FirmwareInfo.Unknown"/>
+        /// before the first handshake, for a legacy board, and again after a disconnect. Settable from
+        /// tests only.
+        /// </summary>
+        public FirmwareInfo Firmware { get; internal set; } = FirmwareInfo.Unknown;
+
+        /// <summary>
+        /// Refuse <paramref name="feature"/> when this board is known to lack <paramref name="capability"/>
+        /// (see <see cref="FirmwareGate.Require"/>). A legacy board (capabilities unknown) is never refused.
+        /// </summary>
+        public void RequireCapability(string capability, string feature) =>
+            FirmwareGate.Require(Firmware, Id, capability, feature, SketchName);
 
         /// <summary>Fired on the device thread when the connection is established or lost.</summary>
         public event Action<bool>? ConnectionChanged;
@@ -155,6 +174,7 @@ namespace Controller.RobotControl.Serial
                 {
                     Connected = false;
                     PortName  = null;
+                    Firmware  = FirmwareInfo.Unknown;   // re-learned on the next handshake
                     ConnectionChanged?.Invoke(false);
                 }
 
@@ -276,9 +296,11 @@ namespace Controller.RobotControl.Serial
                             try { line = probe.ReadLine().Trim(); }
                             catch (TimeoutException) { continue; }
 
-                            if (line == $"ID:{Id}")
+                            // Legacy boards answer "ID:<id>"; 1.1.0+ append ";fw=<ver>;caps=<a,b,c>".
+                            if (FirmwareInfo.TryParseHandshake(line, Id, out var firmware))
                             {
                                 matched       = true;
+                                Firmware      = firmware;
                                 _lastGoodPort = portName;
                                 SerialPortRegistry.Claim(portName, Id);
 
@@ -325,6 +347,7 @@ namespace Controller.RobotControl.Serial
             _port     = port;
             PortName  = port.PortName;
             Connected = true;
+            Console.WriteLine($"[{LogPrefix}] Connected on {port.PortName} — {Firmware.Describe()}");
             ConnectionChanged?.Invoke(true);
 
             OnSessionStarted(port);

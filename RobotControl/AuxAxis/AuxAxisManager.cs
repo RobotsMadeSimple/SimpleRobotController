@@ -135,11 +135,13 @@ namespace Controller.RobotControl.AuxAxis
                 var cfg   = _config.Devices.FirstOrDefault(c => c.Id == device.Id);
                 result.Add(new AuxAxisState
                 {
-                    Connected    = device.Connected,
-                    MotorEnabled = device.MotorEnabled,
-                    DeviceId     = device.Id,
-                    DeviceName   = device.Name,
-                    PortName     = device.PortName,
+                    Connected       = device.Connected,
+                    MotorEnabled    = device.MotorEnabled,
+                    DeviceId        = device.Id,
+                    DeviceName      = device.Name,
+                    PortName        = device.PortName,
+                    FirmwareVersion = device.Firmware.Version,
+                    Capabilities    = device.Firmware.CapabilityArray(),
                     Axes       = cfg?.Axes.Select(a => new AuxAxisChannelState
                     {
                         AxisIndex       = a.AxisIndex,
@@ -199,8 +201,9 @@ namespace Controller.RobotControl.AuxAxis
 
         public bool HasDevice(string deviceId) => GetDevice(deviceId) != null;
 
-        /// <summary>IO device state for every aux device that has IO pins configured (so a plain
-        /// stepper device with no IO adds nothing to the IO stream).</summary>
+        /// <summary>IO device state for every aux device — including one with no IO pins configured
+        /// yet (an empty <c>pins</c> list), so the app's "Configure IO" screen can find the device and
+        /// add its first pin. Carries the board's firmware version/capabilities like a Nano row.</summary>
         public List<IoDeviceState> GetAllIoStates()
         {
             List<AuxAxisDevice> snapshot;
@@ -209,11 +212,14 @@ namespace Controller.RobotControl.AuxAxis
             var result = new List<IoDeviceState>();
             foreach (var dev in snapshot)
             {
-                var cfg = _config.Devices.FirstOrDefault(d => d.Id == dev.Id);
-                if (cfg == null || cfg.IoPins.Count == 0) continue;
                 result.Add(new IoDeviceState
                 {
-                    Id = dev.Id, Name = dev.Name, Connected = dev.Connected, Pins = dev.GetIoPinStates(),
+                    Id              = dev.Id,
+                    Name            = dev.Name,
+                    Connected       = dev.Connected,
+                    FirmwareVersion = dev.Firmware.Version,
+                    Capabilities    = dev.Firmware.CapabilityArray(),
+                    Pins            = dev.GetIoPinStates(),
                 });
             }
             return result;

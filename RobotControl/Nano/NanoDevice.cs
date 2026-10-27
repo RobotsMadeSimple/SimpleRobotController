@@ -38,6 +38,7 @@ namespace Controller.RobotControl.Io
         // fresh one — the reopen would DTR-reset the just-booted Nano a second time and make us wait
         // out another ~3s boot before streaming resumed.
         protected override bool   KeepProbePortOpenForSession   => true;
+        public    override string SketchName                    => "NanoEdgeDevice";
 
         public NanoDevice(IoDeviceConfig config) : base(config.Id, config.Name)
         {
@@ -67,7 +68,7 @@ namespace Controller.RobotControl.Io
 
         protected override void OnSessionStarted(SerialPort port)
         {
-            Console.WriteLine($"[{LogPrefix}] Session started on {port.PortName}");
+            // (The base class has already logged "Connected on <port> — firmware …".)
 
             // ── Send pin configuration ────────────────────────────────────────
             foreach (var pin in _config.Pins)
