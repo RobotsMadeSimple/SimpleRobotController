@@ -700,6 +700,16 @@ namespace Controller.RobotControl.Execution
         /// expression, so "{$index + 1}" and "{$row * 3 + $col}" also interpolate. The $
         /// stays required inside braces, matching expressions everywhere else.
         /// </remarks>
+        /// <summary>
+        /// A number as text for status messages and templated paths. Whole numbers print in full —
+        /// a <c>$time_ms</c> of 1793066899654 must not become "1.79307E+12", which is unreadable and
+        /// collides for every run within the same ~2.8 h. Fractions keep 6 significant digits.
+        /// </summary>
+        internal static string FormatNumber(double v) =>
+            Math.Abs(v) < 1e15 && v == Math.Floor(v)
+                ? ((long)v).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : v.ToString("G6", System.Globalization.CultureInfo.InvariantCulture);
+
         public string Interpolate(string template)
         {
             var allVarsForTemplate = Eval.Merged;
@@ -717,7 +727,7 @@ namespace Controller.RobotControl.Execution
                 {
                     // Plain $name — scalar → value, list → count, points → "N points", string → value
                     if (allVarsForTemplate.TryGetValue(name, out var sv))
-                        return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : sv.ToString("G6");
+                        return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : FormatNumber(sv);
                     if (_stringVariables.TryGetValue(name, out var strVal))
                         return strVal;
                     if (_listVariables.TryGetValue(name, out var bare))
@@ -727,7 +737,7 @@ namespace Controller.RobotControl.Execution
                     try
                     {
                         if (_computedSource.TryGetComputed(name, out var cv))
-                            return _booleanVariables.Contains(name) ? (cv != 0 ? "True" : "False") : cv.ToString("G6");
+                            return _booleanVariables.Contains(name) ? (cv != 0 ? "True" : "False") : FormatNumber(cv);
                     }
                     catch { /* left as written */ }
                     return null;
@@ -748,7 +758,7 @@ namespace Controller.RobotControl.Execution
                     var item = lv.Items[idx];
 
                     if (hasComp)
-                        return item.TryGetValue(compName, out var fv) ? fv.ToString("G6") : "0";
+                        return item.TryGetValue(compName, out var fv) ? FormatNumber(fv) : "0";
 
                     // No field named — render the whole element. A point keeps its familiar
                     // axis-ordered form rather than dictionary order, which is what makes
@@ -757,10 +767,10 @@ namespace Controller.RobotControl.Execution
                     // stored as — that spelling is the reason the element type exists.
                     return lv.ElementType switch
                     {
-                        ListElementType.Number  => item.Scalar.ToString("G6"),
+                        ListElementType.Number  => FormatNumber(item.Scalar),
                         ListElementType.Boolean => item.Scalar != 0 ? "True" : "False",
                         ListElementType.Point   => FormatPoint(item.ToPoint()),
-                        _ => "(" + string.Join(", ", item.Select(kv => $"{kv.Key}={kv.Value:G6}")) + ")",
+                        _ => "(" + string.Join(", ", item.Select(kv => $"{kv.Key}={FormatNumber(kv.Value)}")) + ")",
                     };
                 }
 
@@ -790,7 +800,7 @@ namespace Controller.RobotControl.Execution
                 // Anything else is an expression. A failure leaves the braces in place,
                 // which surfaces downstream (a point lookup, say) rather than silently
                 // substituting something wrong.
-                try { return ExpressionEvaluator.Evaluate(body, allVarsForTemplate, _listVariables, Properties).ToString("G6"); }
+                try { return FormatNumber(ExpressionEvaluator.Evaluate(body, allVarsForTemplate, _listVariables, Properties)); }
                 catch { return m.Value; }
             });
         }
