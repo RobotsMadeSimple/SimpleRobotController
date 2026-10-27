@@ -70,8 +70,12 @@ namespace Controller.RobotControl
         public int    MaxArgs     { get; }
         public string Signature   { get; }
         public string Description { get; }
-        /// <summary>True for the list functions (len/sum/avg/minOf/maxOf), whose one argument is a list variable.</summary>
+        /// <summary>True for the list-only functions (len/sum/avg/minOf/maxOf), whose one argument is a list
+        /// variable — <c>len($pts)</c>, or a field of each element, <c>sum($samples.v)</c>.</summary>
         public bool   TakesList   { get; }
+        /// <summary>True when a single list argument is also accepted (min/max): <c>max($vals)</c>,
+        /// <c>max($samples.v)</c>, alongside the usual <c>max(a, b, …)</c>.</summary>
+        public bool   AcceptsList => OverList != null;
 
         /// <summary>The plugin that provides this function (dotted <c>id.name</c>), or null for a built-in.</summary>
         public string? PluginId   { get; }
@@ -93,7 +97,7 @@ namespace Controller.RobotControl
                                     NumericFn? numeric = null, Func<ListVar, double>? overList = null)
         {
             Name = name; MinArgs = min; MaxArgs = max; Signature = signature; Description = description;
-            Numeric = numeric; OverList = overList; TakesList = overList != null;
+            Numeric = numeric; OverList = overList; TakesList = overList != null && numeric == null;
         }
     }
 
@@ -339,6 +343,17 @@ namespace Controller.RobotControl
             foreach (var item in l.Items) yield return item.Scalar;
         }
 
+        /// <summary><c>$list.field</c> as a number list: one field of every element (0 where absent) —
+        /// a point's axis (<c>$pts.x</c>) or a record's field (<c>$samples.v</c>). A number list
+        /// has no fields, so it is returned as is.</summary>
+        private static ListVar Project(ListVar l, string? field)
+        {
+            if (field == null || l.HasScalarElements) return l;
+            var vals = new List<double>(l.Count);
+            foreach (var item in l.Items) vals.Add(item.TryGetValue(field, out double v) ? v : 0);
+            return ListVar.OfNumbers(vals);
+        }
+
         /// <summary>The function table, in documentation order. Names are case-insensitive.</summary>
         public static IReadOnlyList<ExpressionFunction> Functions { get; } = new List<ExpressionFunction>
         {
@@ -346,8 +361,12 @@ namespace Controller.RobotControl
             new("sign",  1, 1, "sign(x)",  "-1, 0 or 1",                          a => Math.Sign(a[0])),
             new("sqrt",  1, 1, "sqrt(x)",  "Square root",                         a => Math.Sqrt(a[0])),
             new("pow",   2, 2, "pow(x, y)", "x raised to y (same as x ^ y)",      a => Math.Pow(a[0], a[1])),
-            new("min",   1, Variadic, "min(a, b, …)", "Smallest argument",        a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Min(m, a[i]); return m; }),
-            new("max",   1, Variadic, "max(a, b, …)", "Largest argument",         a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Max(m, a[i]); return m; }),
+            new("min",   1, Variadic, "min(a, b, …) / min($list) / min($list.field)", "Smallest argument, or smallest element of a list (0 when empty)",
+                                                                                   a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Min(m, a[i]); return m; },
+                                                                                   overList: l => l.Count == 0 ? 0 : Scalars(l).Min()),
+            new("max",   1, Variadic, "max(a, b, …) / max($list) / max($list.field)", "Largest argument, or largest element of a list (0 when empty)",
+                                                                                   a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Max(m, a[i]); return m; },
+                                                                                   overList: l => l.Count == 0 ? 0 : Scalars(l).Max()),
             new("clamp", 3, 3, "clamp(x, lo, hi)", "x limited to lo…hi",          a => Math.Min(Math.Max(a[0], a[1]), a[2])),
             new("round", 1, 2, "round(x) / round(x, digits)", "Round half away from zero, optionally to digits decimals",
                                                                                    a => RoundAway(a[0], a.Length > 1 ? a[1] : 0)),
@@ -372,12 +391,13 @@ namespace Controller.RobotControl
             new("if",    3, 3, "if(cond, a, b)", "a when cond is non-zero, else b (same as cond ? a : b)",
                                                                                    a => a[0] != 0 ? a[1] : a[2]),
             new("len",   1, 1, "len($list)", "Number of elements in a list",      overList: l => l.Count),
-            new("sum",   1, 1, "sum($list)", "Sum of a number list",              overList: l => Scalars(l).Sum()),
-            new("avg",   1, 1, "avg($list)", "Average of a number list (0 when empty)",
+            new("sum",   1, 1, "sum($list) / sum($list.field)", "Sum of a number list, or of one field of each element",
+                                                                                   overList: l => Scalars(l).Sum()),
+            new("avg",   1, 1, "avg($list) / avg($list.field)", "Average of a number list, or of one field of each element (0 when empty)",
                                                                                    overList: l => l.Count == 0 ? 0 : Scalars(l).Average()),
-            new("minOf", 1, 1, "minOf($list)", "Smallest element of a number list (0 when empty)",
+            new("minOf", 1, 1, "minOf($list) / minOf($list.field)", "Smallest element of a number list (0 when empty) — same as min($list)",
                                                                                    overList: l => l.Count == 0 ? 0 : Scalars(l).Min()),
-            new("maxOf", 1, 1, "maxOf($list)", "Largest element of a number list (0 when empty)",
+            new("maxOf", 1, 1, "maxOf($list) / maxOf($list.field)", "Largest element of a number list (0 when empty) — same as max($list)",
                                                                                    overList: l => l.Count == 0 ? 0 : Scalars(l).Max()),
             new("rand",  0, 2, "rand() / rand(lo, hi)", "Uniform random number in [0, 1) or [lo, hi)",
                                                                                    a => a.Length == 0 ? Random.Shared.NextDouble()
@@ -700,18 +720,20 @@ namespace Controller.RobotControl
             return $"{fn.Name}() takes {want} argument{(want == "1" ? "" : "s")}, got {got} — {fn.Signature}";
         }
 
+        /// <summary>A list-only function over <c>$list</c> or <c>$list.field</c>: <c>len($pts)</c>, <c>sum($samples.v)</c>.</summary>
         private sealed class ListCallNode : Node
         {
             private readonly ExpressionFunction _fn;
             private readonly string _list;
+            private readonly string? _field;
             private readonly int _argPos;
-            public ListCallNode(ExpressionFunction fn, string list, int pos, int argPos)
-            { _fn = fn; _list = list; Pos = pos; _argPos = argPos; }
+            public ListCallNode(ExpressionFunction fn, string list, string? field, int pos, int argPos)
+            { _fn = fn; _list = list; _field = field; Pos = pos; _argPos = argPos; }
 
             public override double Eval(in Env e)
             {
                 if (e.Lists != null && e.Lists.TryGetValue(_list, out var lv))
-                    return _fn.OverList!(lv);
+                    return _fn.OverList!(Project(lv, _field));
                 throw new UnknownVariableException(_list);
             }
 
@@ -719,6 +741,44 @@ namespace Controller.RobotControl
             {
                 refs.Add(new ExprRef(ExprRefKind.Function, _fn.Name, [_fn.Name], Pos));
                 refs.Add(new ExprRef(ExprRefKind.ListArgument, _list, [_list], _argPos));
+            }
+        }
+
+        /// <summary>
+        /// <c>min(…)</c>/<c>max(…)</c> given exactly one <c>$name</c> or <c>$name.field</c> argument. Whether
+        /// <c>$name</c> is a list is only known at evaluation (lists are runtime state), so this decides
+        /// then: a list → the function's list form (<c>max($vals)</c>, <c>max($samples.v)</c>); anything
+        /// else → the scalar form over that one value, as <c>max($x)</c> always read.
+        /// </summary>
+        private sealed class ListOrScalarCallNode : Node
+        {
+            private readonly ExpressionFunction _fn;
+            private readonly VarNode _scalar;
+            private readonly string _name;
+            private readonly string? _field;
+            private readonly int _argPos;
+            public ListOrScalarCallNode(ExpressionFunction fn, VarNode scalar, string name, string? field, int pos, int argPos)
+            { _fn = fn; _scalar = scalar; _name = name; _field = field; Pos = pos; _argPos = argPos; }
+
+            public override double Eval(in Env e)
+            {
+                // "$list.length" is the count, a scalar — leave it to the variable lookup.
+                if (e.Lists != null && !(_field != null && IsCountWord(_field)) && e.Lists.TryGetValue(_name, out var lv))
+                    return _fn.OverList!(Project(lv, _field));
+                Span<double> one = stackalloc double[1];
+                one[0] = _scalar.Eval(e);
+                return _fn.Numeric!(one);
+            }
+
+            public override void Collect(List<ExprRef> refs)
+            {
+                refs.Add(new ExprRef(ExprRefKind.Function, _fn.Name, [_fn.Name], Pos));
+                // "$name.field" only makes sense as a list projection (a plain "$list.field" is not a
+                // value), so report it as the list argument it is; a bare "$name" may be either.
+                if (_field != null && !IsCountWord(_field))
+                    refs.Add(new ExprRef(ExprRefKind.ListArgument, _name, [_name], _argPos));
+                else
+                    _scalar.Collect(refs);
             }
         }
 
@@ -1180,11 +1240,20 @@ namespace Controller.RobotControl
 
                 if (fn.TakesList)
                 {
-                    // The one argument must be a plain list reference: len($pts), not len($pts[0]).
+                    // The one argument must be a list reference, optionally with one field:
+                    // len($pts), sum($samples.v) — not len($pts[0]).
                     var at = argTokens[0];
-                    if (args[0] is not VarNode vn || at.Type != TokType.Variable || at.Parts!.Length != 1)
+                    if (args[0] is not VarNode || at.Type != TokType.Variable || at.Parts!.Length is not (1 or 2))
                         throw Error($"{fn.Name}() takes a list variable, e.g. {fn.Signature}", at.Pos);
-                    return new ListCallNode(fn, vn.FullName, nameTok.Pos, at.Pos);
+                    return new ListCallNode(fn, at.Parts[0], at.Parts.Length == 2 ? at.Parts[1] : null, nameTok.Pos, at.Pos);
+                }
+
+                // min($vals) / max($samples.v): one variable argument may be a list — decided at evaluation.
+                if (fn.AcceptsList && args.Count == 1 && args[0] is VarNode vn &&
+                    argTokens[0].Type == TokType.Variable && argTokens[0].Parts!.Length is 1 or 2)
+                {
+                    var at = argTokens[0];
+                    return new ListOrScalarCallNode(fn, vn, at.Parts![0], at.Parts.Length == 2 ? at.Parts[1] : null, nameTok.Pos, at.Pos);
                 }
 
                 return new CallNode(fn, args.ToArray(), nameTok.Pos);

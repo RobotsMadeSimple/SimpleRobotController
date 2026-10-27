@@ -138,6 +138,15 @@ public class ProgramValidatorTests
     }
 
     [Fact]
+    public void ListFunctionsMayNameAFieldOfTheList()
+    {
+        // max($pts.x) / sum($pts.y) are list projections, not the bare "$pts.x" the test above rejects.
+        var p = Prog([Step(StepType.SetVariable, s => { s.VariableName = "a"; s.VariableExpr = "max($pts.x) + sum($pts.y) + min($a)"; })],
+                     Num("a"), List("pts", ListElementType.Point));
+        Assert.DoesNotContain(Validate(p), x => x.Code == ValidationCodes.UnknownVariable);
+    }
+
+    [Fact]
     public void StringVariablesHaveNoNumericValue()
     {
         var p = Prog([Step(StepType.SetVariable, s => { s.VariableName = "a"; s.VariableExpr = "$label + 1"; })],

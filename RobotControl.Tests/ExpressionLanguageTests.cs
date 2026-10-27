@@ -127,6 +127,50 @@ public class ExpressionLanguageTests
     }
 
     [Fact]
+    public void MinMaxTakeAListInOneLine()
+    {
+        var lists = Nums("vals", 4, 1, 7);
+        Assert.Equal(7, Eval("max($vals)", lists: lists), 9);
+        Assert.Equal(1, Eval("min($vals)", lists: lists), 9);
+        Assert.Equal(7, Eval("max($vals) + 0", lists: lists), 9);
+        Assert.Equal(0, Eval("max($e)", lists: Nums("e")), 9);          // empty list → 0, like maxOf
+        Assert.Equal(3, Eval("max($vals.length)", lists: lists), 9);    // .length stays the count
+
+        // One scalar argument still reads as that value (and the variadic form is unchanged).
+        Assert.Equal(5, Eval("max($a)", Vars(("a", 5))), 9);
+        Assert.Equal(6, Eval("max($a, 6)", Vars(("a", 5))), 9);
+        Assert.Throws<UnknownVariableException>(() => Eval("max($nope)"));
+    }
+
+    [Fact]
+    public void ListFunctionsProjectAFieldOfEachElement()
+    {
+        // A recording: {t, v, r} records. max($samples.v) is the peak in one line.
+        var recs = new Dictionary<string, ListVar>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["samples"] = ListVar.OfRecords([
+                new ObjectRecord { ["t"] = 0, ["v"] = 12.5, ["r"] = 100 },
+                new ObjectRecord { ["t"] = 1, ["v"] = 40.0, ["r"] = 300 },
+                new ObjectRecord { ["t"] = 2, ["v"] = 7.0,  ["r"] = 50  },
+            ]),
+            ["pts"] = ListVar.OfPoints([new Vector6Val { X = 1, Y = 10 }, new Vector6Val { X = 3, Y = 20 }]),
+        };
+        Assert.Equal(40,   Eval("max($samples.v)",   lists: recs), 9);
+        Assert.Equal(7,    Eval("min($samples.v)",   lists: recs), 9);
+        Assert.Equal(40,   Eval("maxOf($samples.v)", lists: recs), 9);
+        Assert.Equal(59.5, Eval("sum($samples.v)",   lists: recs), 9);
+        Assert.Equal(150,  Eval("avg($samples.r)",   lists: recs), 9);
+        Assert.Equal(3,    Eval("len($samples.v)",   lists: recs), 9);
+        Assert.Equal(0,    Eval("max($samples.nope)", lists: recs), 9);  // missing field reads 0
+        Assert.Equal(30,   Eval("sum($pts.y) - sum($pts.x) + 4", lists: recs), 9);
+
+        // Validation sees "$samples.v" inside the call as a list argument, not a bad dotted name.
+        var refs = ExpressionEvaluator.References("max($samples.v) + sum($pts.x)");
+        Assert.Equal(2, refs.Count(r => r.Kind == ExprRefKind.ListArgument));
+        Assert.DoesNotContain(refs, r => r.Kind == ExprRefKind.Plain);
+    }
+
+    [Fact]
     public void ListFunctionOnAnUnknownListThrowsUnknownVariable()
     {
         var ex = Assert.Throws<UnknownVariableException>(() => Eval("len($nope)"));

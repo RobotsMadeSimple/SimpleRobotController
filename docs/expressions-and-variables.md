@@ -38,13 +38,13 @@ place above comparison (`not $a > 5` is `not ($a > 5)`, as it always was); a
 | Function | Notes |
 |---|---|
 | `abs(x)` `sign(x)` `sqrt(x)` `pow(x,y)` | |
-| `min(a,b,…)` `max(a,b,…)` `clamp(x,lo,hi)` | variadic min/max |
+| `min(a,b,…)` `max(a,b,…)` `clamp(x,lo,hi)` | variadic min/max; `min($list)` / `max($list.field)` take a list (see below) |
 | `round(x)` `round(x,digits)` `floor(x)` `ceil(x)` `trunc(x)` | round half away from zero |
 | `mod(a,b)` | same as `%` |
 | `sin(deg)` `cos(deg)` `tan(deg)` `asin(x)` `acos(x)` `atan(x)` `atan2(y,x)` | degrees in and out |
 | `deg(rad)` `rad(deg)` `hypot(x,y)` `dist(x1,y1,x2,y2)` `dist3(x1,y1,z1,x2,y2,z2)` | |
 | `if(cond,a,b)` | same as `cond ? a : b` |
-| `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | number lists |
+| `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | number lists; for a point/record list name the field — `sum($pts.x)`, `max($samples.v)` (missing field reads 0) |
 | `rand()` `rand(lo,hi)` | uniform |
 | `map(x,inLo,inHi,outLo,outHi)` `lerp(a,b,t)` | |
 
