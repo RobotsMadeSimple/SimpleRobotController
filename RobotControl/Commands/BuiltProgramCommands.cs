@@ -57,6 +57,17 @@ internal sealed class BuiltProgramCommands
     private void SaveBuiltProgram(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<SaveBuiltProgramParams>(msg);
+
+        // A save that says nothing about the display page (no displayPage* keys at all — the step
+        // builder, older apps, scripts) keeps the page the program already has. Only a save that
+        // carries the keys (the display-page editor) replaces or clears it.
+        bool mentionsPage = Param(msg, "displayPageHtml")   != null
+                         || Param(msg, "displayPageMode")   != null
+                         || Param(msg, "displayPageLayout") != null;
+        var prior = mentionsPage ? null
+            : (!string.IsNullOrEmpty(p.Id) ? _robot.builtProgramRepo.GetById(p.Id) : null)
+              ?? _robot.builtProgramRepo.Get(p.Name);
+
         _robot.builtProgramRepo.Save(new BuiltProgram
         {
             Id                  = p.Id,
@@ -64,9 +75,9 @@ internal sealed class BuiltProgramCommands
             Description         = p.Description,
             Steps               = p.Steps,
             Variables           = p.Variables,
-            DisplayPageHtml     = p.DisplayPageHtml,
-            DisplayPageMode     = p.DisplayPageMode,
-            DisplayPageLayout   = p.DisplayPageLayout,
+            DisplayPageHtml     = mentionsPage ? p.DisplayPageHtml   : prior?.DisplayPageHtml,
+            DisplayPageMode     = mentionsPage ? p.DisplayPageMode   : prior?.DisplayPageMode,
+            DisplayPageLayout   = mentionsPage ? p.DisplayPageLayout : prior?.DisplayPageLayout,
             IsRoutine           = p.IsRoutine,
             IsBackground        = p.IsBackground,
             KillBackgroundOnStop = p.KillBackgroundOnStop,
