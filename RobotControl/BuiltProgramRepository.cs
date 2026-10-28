@@ -302,6 +302,30 @@ public class BuiltProgramRepository
 
     // ── Public API ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Upgrades legacy steps in every stored program (see <see cref="ProgramMigrations"/>) and
+    /// writes back the ones that changed, archiving the pre-migration content as a revision.
+    /// Called once at startup, after the IO devices are known. Returns one note per step that
+    /// was left as is or lost something, prefixed with its program's name.
+    /// </summary>
+    public List<string> MigrateLegacySteps(ProgramMigrations.LoadCellResolver resolveLoadCell)
+    {
+        var notes = new List<string>();
+        lock (_lock)
+        {
+            foreach (var p in _programs.Values.ToList())
+            {
+                var programNotes = new List<string>();
+                int changed = ProgramMigrations.MigrateSteps(p.Steps, resolveLoadCell, programNotes);
+                notes.AddRange(programNotes.Select(n => $"{p.Name}: {n}"));
+                if (changed == 0) continue;
+                ArchiveRevisionIfChanged(p);
+                WriteFile(p);
+            }
+        }
+        return notes;
+    }
+
     public void Save(BuiltProgram program)
     {
         lock (_lock)
