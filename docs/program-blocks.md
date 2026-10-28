@@ -383,18 +383,9 @@ Rules:
 - An unknown variable or a syntax error in the condition ends the program with
   `Stop condition on <step>: …`, like a while-loop condition.
 
-**Removed block — `MoveWithForce`.** The old "Move with Force" block (press along an
-axis until a load cell reads a target, then hold) is no longer offered by the editor;
-a stop condition on a normal move covers it. Saved programs are upgraded
-automatically — at controller start and whenever a program is saved — into the move
-they were shorthand for: a `MoveL` from the current position, offset along the old
-axis by the old max travel at the old approach speed, with
-`moveStopCondition` = `$io.<nano>.<cell> >= <grams>` in `stop` mode. The step keeps
-its id, name and comment; the pre-migration program is archived as a revision. A step
-whose load cell is not a *named* load cell on a *named* nano, or that has no target
-force, cannot be expressed and is left as `MoveWithForce`, which the executor still
-runs through its legacy handler; the hold phase has no equivalent and is dropped.
-Each such case is logged at start as `[programs] migration: …`.
+The old `MoveWithForce` block (press along an axis until a load cell reads a target)
+was removed in favour of this; a program still holding one loads it as an `Unknown`
+step, which the executor skips.
 
 ### ThreadMove — synchronized rotary/linear thread
 Drives a coordinated threading move (e.g. screwing into a hole).

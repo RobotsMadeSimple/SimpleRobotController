@@ -135,7 +135,6 @@ namespace Controller.RobotControl.Execution
         public ThreadMoveState ThreadMove { get; } = new();
         public HomingState Homing { get; } = new();
         public VisionState Vision { get; } = new();
-        public ForceMoveState Force { get; } = new();
         public HttpState   Http   { get; } = new();
         public PluginStepState PluginState { get; } = new();
 

@@ -355,12 +355,6 @@ namespace Controller.RobotControl
 
             NanoManager = new NanoManager("io_devices.json");
 
-            // Programs saved with blocks the editor no longer has (Move with Force) become their
-            // modern equivalent now that the load-cell names are known; what could not convert
-            // is logged and still runs through its legacy handler.
-            foreach (var note in builtProgramRepo.MigrateLegacySteps(ProgramMigrations.Resolver(NanoManager.GetAllStates())))
-                Console.WriteLine($"[programs] migration: {note}");
-
             // IO value history + recordings (in-RAM rolling buffer, opt-in disk persistence).
             // Subscribes to the nano load-cell sample event; generic over any numeric channel.
             IoHistory = new History.IoHistoryService("io_history");

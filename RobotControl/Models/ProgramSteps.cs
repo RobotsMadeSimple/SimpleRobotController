@@ -9,7 +9,7 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, MoveWithForce, StartRecording, StopRecording, ExportData, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, StartRecording, StopRecording, ExportData, Unknown }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -221,7 +221,7 @@ public class ProgramStep
     [JsonPropertyName("pulseBlocking")]
     public bool? PulseBlocking { get; set; }
 
-    // Load cell (Tare, ReadLoadCell, MoveWithForce) — which HX711 cell to use.
+    // Load cell (Tare, ReadLoadCell) — which HX711 cell to use.
     [JsonPropertyName("loadCellDeviceId")]
     public string? LoadCellDeviceId { get; set; }
     [JsonPropertyName("loadCellPin")]
@@ -229,32 +229,6 @@ public class ProgramStep
     /// <summary>ReadLoadCell: unit to store into the target variable (default grams, the master unit).</summary>
     [JsonPropertyName("loadCellUnit")]
     public string? LoadCellUnit { get; set; }
-
-    // MoveWithForce — approach an axis/direction and continuously hold a target contact force.
-    /// <summary>Axis to control force along: X/Y/Z/RX/RY/RZ (tool or base frame per the executor).</summary>
-    [JsonPropertyName("forceAxis")]
-    public string? ForceAxis { get; set; }
-    /// <summary>Push direction along the axis: +1 or -1.</summary>
-    [JsonPropertyName("forceDirection")]
-    public int? ForceDirection { get; set; }
-    /// <summary>Target contact force in grams (the master unit).</summary>
-    [JsonPropertyName("forceTargetGrams")]
-    public double? ForceTargetGrams { get; set; }
-    /// <summary>Acceptable force deadband in grams.</summary>
-    [JsonPropertyName("forceToleranceGrams")]
-    public double? ForceToleranceGrams { get; set; }
-    /// <summary>Safety: maximum distance (mm) to travel while seeking/holding force.</summary>
-    [JsonPropertyName("forceMaxTravelMm")]
-    public double? ForceMaxTravelMm { get; set; }
-    /// <summary>Approach/correction speed (mm/s).</summary>
-    [JsonPropertyName("forceApproachSpeed")]
-    public double? ForceApproachSpeed { get; set; }
-    /// <summary>How long (ms) to actively maintain the force once reached (0 = just reach then finish).</summary>
-    [JsonPropertyName("forceHoldMs")]
-    public int? ForceHoldMs { get; set; }
-    /// <summary>Safety: overall timeout (ms) for the whole force move.</summary>
-    [JsonPropertyName("forceTimeoutMs")]
-    public int? ForceTimeoutMs { get; set; }
 
     // Move stop condition (MoveL / MoveJ / JumpL / JumpJ / AuxMove / GripperAction) — evaluated
     // every executor tick while the move is in flight. A force limit is just the condition

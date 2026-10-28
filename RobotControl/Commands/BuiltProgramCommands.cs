@@ -68,11 +68,6 @@ internal sealed class BuiltProgramCommands
             : (!string.IsNullOrEmpty(p.Id) ? _robot.builtProgramRepo.GetById(p.Id) : null)
               ?? _robot.builtProgramRepo.Get(p.Name);
 
-        // An older app may still send blocks the editor no longer has; store the modern form.
-        var migrationNotes = new List<string>();
-        if (ProgramMigrations.MigrateSteps(p.Steps, ProgramMigrations.Resolver(_robot.NanoManager.GetAllStates()), migrationNotes) > 0)
-            foreach (var note in migrationNotes) Console.WriteLine($"[programs] migration ({p.Name}): {note}");
-
         _robot.builtProgramRepo.Save(new BuiltProgram
         {
             Id                  = p.Id,
