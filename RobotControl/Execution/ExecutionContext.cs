@@ -198,6 +198,95 @@ namespace Controller.RobotControl.Execution
             Motion.PendingAuxStep = step;
         }
 
+        /// <summary>
+        /// <see cref="AwaitAuxMove(ProgramStep, StepListFrame)"/> for a step that may carry a
+        /// stop condition (AuxMove, GripperAction): the watch needs the axis to read its position
+        /// from and <paramref name="decelHz"/> (steps/s²) to stop it smoothly with.
+        /// </summary>
+        public void AwaitAuxMove(ProgramStep step, StepListFrame frame, string deviceId, int axis, int decelHz)
+        {
+            AwaitAuxMove(step, frame);
+            Motion.ArmWatch(MoveStopConditions.Create(step, isAux: true, deviceId, axis, Math.Max(1, decelHz)));
+        }
+
+        // ── Move stop condition ───────────────────────────────────────────────
+
+        /// <summary>
+        /// Arms the stop condition of a robot move step (MoveL/MoveJ single move, Jump at its
+        /// first leg) that was just dispatched. No condition on the step = no watch.
+        /// </summary>
+        public void ArmMoveWatch(ProgramStep step) =>
+            Motion.ArmWatch(MoveStopConditions.Create(step, isAux: false));
+
+        /// <summary>
+        /// One tick of the armed watch: evaluates the condition (against this tick's fresh IO)
+        /// and, the first time it is true, captures the position and — in stop mode — ends the
+        /// move. Returns false when the program was finished with an error (an unknown
+        /// variable or a syntax error in the condition), true otherwise.
+        /// </summary>
+        public bool TickMoveWatch()
+        {
+            if (Motion.Watch is not { Fired: false } w) return true;
+
+            bool hit;
+            try
+            {
+                hit = Eval.EvaluateCondition(w.Condition);
+            }
+            catch (UnknownVariableException ex)
+            {
+                Finish(ProgramStatus.Error,
+                    $"Stop condition on {ProgressReporter.StepDescription(w.Step)}: unknown variable '${ex.VariableName}'");
+                return false;
+            }
+            catch (ExpressionParseException ex)
+            {
+                Finish(ProgramStatus.Error,
+                    $"Stop condition on {ProgressReporter.StepDescription(w.Step)}: {ProgressReporter.DescribeParseError(ex)}");
+                return false;
+            }
+            if (!hit) return true;
+
+            w.Fired = true;
+            if (w.IsAux)
+            {
+                var aux = Controller.AuxAxisManager;
+                string dev = w.AuxDeviceId ?? "";
+                if (w.PositionVar != null)
+                {
+                    // Physical unit when the axis has one, raw steps otherwise — the same
+                    // convention as auxDistance/auxUnit on the move itself.
+                    long   steps = aux.GetPosition(dev, w.AuxAxis);
+                    double spu   = aux.GetAxisConfig(dev, w.AuxAxis)?.StepsPerUnit() ?? 0;
+                    Vars.Set(w.PositionVar, spu > 0 ? steps / spu : steps);
+                }
+                if (w.Mode == MoveStopMode.Stop) aux.StopSmooth(dev, w.AuxAxis, w.AuxDecelHz);
+            }
+            else
+            {
+                if (w.PositionVar != null)
+                {
+                    // Exactly one element, so $var[0] is the contact pose whatever the list held.
+                    var p = LivePosition();
+                    Vars.SetList(w.PositionVar, ListVar.OfPoints([new Vector6Val
+                    {
+                        X = p.X, Y = p.Y, Z = p.Z, RX = p.RX, RY = p.RY, RZ = p.RZ,
+                    }]));
+                }
+                if (w.Mode == MoveStopMode.Stop) Controller.RequestMotionStop();
+            }
+            return true;
+        }
+
+        /// <summary>The watched move completed: writes the fired flag (1 / 0) and clears the watch.</summary>
+        public void CompleteMoveWatch(MoveWatch w)
+        {
+            // Cleared first: a refused flag write (computed variable) ends the program anyway,
+            // and the watch must not outlive its move either way.
+            Motion.ClearWatch();
+            if (w.FlagVar != null) Vars.Set(w.FlagVar, w.Fired ? 1 : 0);
+        }
+
         // ── Shared helpers ────────────────────────────────────────────────────
 
         /// <summary>Resolves a move target (see <see cref="MoveTargetResolver"/>); on failure

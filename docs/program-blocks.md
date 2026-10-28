@@ -354,6 +354,35 @@ target. `JumpL` uses linear legs, `JumpJ` joint legs.
 
 Blend fields apply to the traverse leg.
 
+### Stop or record on condition (MoveL, MoveJ, JumpL, JumpJ, AuxMove, GripperAction)
+
+Any of these move blocks can watch a condition while the move is in flight —
+"move with force" is the common case: push until a load cell reads a limit, then
+stop there. All four fields are optional; no `moveStopCondition` rows = off.
+
+| Field | Meaning |
+|---|---|
+| `moveStopCondition` | A ConditionGroup (same shape as `waitCondition`), evaluated every executor tick while the move runs, against live IO. |
+| `moveStopMode` | `"stop"` (default) or `"record"`. **stop**: the move ends where it is the first time the condition is true and the program continues with the next step — no pause, no error. **record**: the move runs on to its target; only the position at the first true evaluation is captured. |
+| `moveStopPositionVariableName` | Where to write the position at the moment the condition first became true. Robot moves: a **Points list** variable, replaced with exactly one element (the live TCP pose), so `$var[0]` / `$var[0].z` read it. Aux moves: a **number** variable receiving the axis position in its physical unit (mm / deg), or raw steps when the axis has no unit. |
+| `moveStopFlagVariableName` | A number / boolean variable set when the step completes: `1` if the condition fired during the move, `0` if not. Created on first use, like `waitTimeoutVariableName`. |
+
+A force limit is just the condition `$io.Arduino_Nano.Load_Cell >= 2000` — load
+cells read in grams, and a nano or pin name with spaces is reachable through its
+underscore alias (see [expressions-and-variables.md](expressions-and-variables.md) §2).
+
+Rules:
+- A `MoveL` with a stop condition never blends, and a blended run stops gathering
+  before one; a `JumpL` with a stop condition takes the stepped (non-blended)
+  path. The watch on a Jump spans all three legs: in stop mode the remaining legs
+  are skipped; in record mode the Jump finishes normally.
+- `AuxMove` only watches when `auxWaitForDone` is true (the validator warns
+  otherwise). An aux stop is a smooth stop at the move's own deceleration.
+- A user Stop / Continue mid-move keeps the watch (a fired record-mode watch does
+  not fire again after Continue).
+- An unknown variable or a syntax error in the condition ends the program with
+  `Stop condition on <step>: …`, like a while-loop condition.
+
 ### ThreadMove — synchronized rotary/linear thread
 Drives a coordinated threading move (e.g. screwing into a hole).
 
@@ -463,7 +492,8 @@ the configured aux board; `auxAxisIndex` selects the channel.
 
 | Block | Key params | Description |
 |---|---|---|
-| `AuxMove` | `auxSteps` **or** `auxDistance`+`auxUnit`; `auxVelocity`, `auxAccel`, `auxDecel`; `auxWaitForDone`; `auxAbsolute` | Indexed move. Sign of steps/distance = direction. `auxWaitForDone` (default true) blocks the program until the motor finishes; false = fire-and-forget. `auxAbsolute` moves to an absolute position instead of relative. |
+| `AuxMove` | `auxSteps` **or** `auxDistance`+`auxUnit`; `auxVelocity`, `auxAccel`, `auxDecel`; `auxWaitForDone`; `auxAbsolute`; `moveStop*` | Indexed move. Sign of steps/distance = direction. `auxWaitForDone` (default true) blocks the program until the motor finishes; false = fire-and-forget. `auxAbsolute` moves to an absolute position instead of relative. Takes the [stop-condition fields](#stop-or-record-on-condition-movel-movej-jumpl-jumpj-auxmove-gripperaction) when it waits. |
+| `GripperAction` | `gripperAction` (`Open` / `Close` / `GripTo`), `gripTargetMm`, `auxVelocity`, `auxAccel`; `moveStop*` | Drive a gripper-role axis to its open / closed gap or to `gripTargetMm`. Takes the stop-condition fields — e.g. close until a load cell reads a grip force. |
 | `AuxContinuous` | `auxVelocity`, `auxAccel` | Start continuous jogging at a velocity until stopped. |
 | `AuxStop` | `auxDecel`, `auxImmediate` | Stop the axis; `auxImmediate` halts without a decel ramp. |
 | `AuxEnable` | `auxEnable` (bool) | Enable or disable the stepper drivers. |

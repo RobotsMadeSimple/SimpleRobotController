@@ -18,7 +18,7 @@ Expressions are numeric (doubles). Booleans are 1/0. Existing syntax stays valid
 ```
 Literals      3.14  -5  true  false
 Variables     $name                 program, global, persistent variables
-IO            $stb.in1 $stb.out2 $relay.3 $nano.<board>.<pin>
+IO            $stb.in1 $stb.out2 $relay.3 $io.<nano>.<pin>
 Properties    $robot.x  $program.runCount  $time.hour     (read-only, section 3)
 Lists         $list.length  $list.count  $list[i]  $pts[i].x  $pts[i][0]  $recs[i].field
 Arithmetic    +  -  *  /  %  ^        (% = remainder, ^ = power, right-assoc)
@@ -27,6 +27,15 @@ Logic         and or not  && || !
 Conditional   cond ? a : b            (lowest precedence, right-assoc)
 Grouping      ( … )
 ```
+
+**Nano pins** read as `$io.<nano name>.<pin name>`: a digital pin as 1/0, a
+**load cell** as its calibrated weight in grams (the master unit — convert in the
+expression if you think in kg or N). Identifiers are `[A-Za-z0-9_]` only, so a
+name with other characters is also published under an identifier-safe alias with
+every run of such characters replaced by one `_`: nano "Arduino Nano", pin "Load
+Cell" → `$io.Arduino_Nano.Load_Cell`. `GetExpressionSymbols` lists the alias
+(the typed form cannot be written), and the app composes the same alias when it
+offers a load-cell chip. The sanitizer lives in `IoVariableNames.Sanitize`.
 
 Precedence, tightest first: `^` · unary `-` · `* / %` · `+ -` ·
 comparison · `not` · `and` · `or` · `? :`. A leading `not` keeps its existing

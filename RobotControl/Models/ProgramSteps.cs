@@ -256,6 +256,32 @@ public class ProgramStep
     [JsonPropertyName("forceTimeoutMs")]
     public int? ForceTimeoutMs { get; set; }
 
+    // Move stop condition (MoveL / MoveJ / JumpL / JumpJ / AuxMove / GripperAction) — evaluated
+    // every executor tick while the move is in flight. A force limit is just the condition
+    // `$io.<nano>.<loadcell> >= <grams>` (load cells read in grams). Null / no rows = off.
+    /// <summary>Condition watched during the move; same shape as <see cref="WaitCondition"/>.</summary>
+    [JsonPropertyName("moveStopCondition")]
+    public ConditionGroup? MoveStopCondition { get; set; }
+    /// <summary>
+    /// "stop" (default): the move ends where it is the first time the condition is true and the
+    /// program continues with the next step — no pause, no error. "record": the move runs on to
+    /// its target; only the position at the first true evaluation is captured.
+    /// </summary>
+    [JsonPropertyName("moveStopMode")]
+    public string? MoveStopMode { get; set; }
+    /// <summary>
+    /// Where to write the position at the moment the condition first became true. Robot moves:
+    /// a Points list variable, replaced with exactly one element (the live TCP pose), so
+    /// <c>$var[0]</c> reads it. Aux moves: a numeric variable receiving the axis position in its
+    /// physical unit (mm / deg), or raw steps when the axis has no unit.
+    /// </summary>
+    [JsonPropertyName("moveStopPositionVariableName")]
+    public string? MoveStopPositionVariableName { get; set; }
+    /// <summary>Numeric / boolean variable set when the move step completes: 1 if the condition
+    /// fired during the move, 0 if not.</summary>
+    [JsonPropertyName("moveStopFlagVariableName")]
+    public string? MoveStopFlagVariableName { get; set; }
+
     // Wait
     [JsonPropertyName("waitMs")]
     public int? WaitMs { get; set; }

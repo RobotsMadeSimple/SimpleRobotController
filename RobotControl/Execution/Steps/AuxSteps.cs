@@ -78,10 +78,12 @@ namespace Controller.RobotControl.Execution
                 // regardless of a positive or negative distance.
                 ctrl.StartAuxMove(deviceId, axisIndex, steps, velocity, accel, decel);
 
+                // Fire-and-forget: nothing waits on the move, so a stop condition cannot be
+                // watched either (the validator warns about that combination).
                 bool wait = step.AuxWaitForDone ?? true;
                 if (!wait) return StepOutcome.Advance;
 
-                ctx.AwaitAuxMove(step, frame);
+                ctx.AwaitAuxMove(step, frame, deviceId, axisIndex, (int)Math.Min(int.MaxValue, Math.Max(1, decel)));
                 if (Diag.Enabled) Diag.AuxDispatch(ctrl.IsAuxMoving);
                 return StepOutcome.Yield;
             }
@@ -223,7 +225,7 @@ namespace Controller.RobotControl.Execution
                 double accSteps = Math.Max(1, accelMm * spu);
 
                 ctrl.StartAuxMove(deviceId, axisIndex, steps, velSteps, accSteps, accSteps);
-                ctx.AwaitAuxMove(step, frame);
+                ctx.AwaitAuxMove(step, frame, deviceId, axisIndex, (int)Math.Min(int.MaxValue, accSteps));
                 return StepOutcome.Yield;
             }
         }

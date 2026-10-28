@@ -30,6 +30,21 @@ namespace Controller.RobotControl.Execution
         /// <summary>Program default blend radius (set by SetBlendRadius); per-move BlendRadius overrides it.</summary>
         public double DefaultBlendRadius { get; set; }
 
+        // ── Stop-condition watch ──────────────────────────────────────────────
+
+        /// <summary>
+        /// The stop condition of the move in flight (robot or aux), or null. Armed when the
+        /// move step dispatches, evaluated every tick by the executor, cleared when the move
+        /// completes. One slot is enough: a robot move and an aux move are never awaited at once.
+        /// </summary>
+        public MoveWatch? Watch { get; private set; }
+
+        /// <summary>Arms <paramref name="watch"/> for the move being dispatched (null = none).</summary>
+        public void ArmWatch(MoveWatch? watch) => Watch = watch;
+
+        /// <summary>The watched move completed (or the run ended): nothing to evaluate any more.</summary>
+        public void ClearWatch() => Watch = null;
+
         // ── Pause/resume snapshot ─────────────────────────────────────────────
         // The last dispatched motion, remembered so a user Stop can pause the
         // program and Continue can re-dispatch the interrupted move. The saved
@@ -48,6 +63,7 @@ namespace Controller.RobotControl.Execution
         private List<double>?      _resumeRunRadii;
         private ProgramStep?       _resumePendingStep;
         private List<ProgramStep>? _resumePendingSteps;
+        private MoveWatch?         _resumeWatch;        // the interrupted move's stop condition, Fired state included
 
         /// <summary>
         /// Set by Resume() (WebSocket thread, under the executor lock); consumed by Update()
@@ -121,8 +137,16 @@ namespace Controller.RobotControl.Execution
             _resumeRunRadii     = null;
             _resumePendingStep  = null;
             _resumePendingSteps = null;
+            _resumeWatch        = null;
             if (AwaitingMove)
             {
+                // The stop condition travels with the move (a fired record-mode watch must not
+                // fire again after Continue). An aux watch is left armed with its aux wait.
+                if (Watch is { IsAux: false } w)
+                {
+                    _resumeWatch = w;
+                    Watch        = null;
+                }
                 if (_lastRunWaypoints is { Count: > 0 })
                 {
                     // Continuous (blended) path: find the segment the robot
@@ -165,6 +189,7 @@ namespace Controller.RobotControl.Execution
                     _lastRunSpeed, _lastRunAccel, _lastRunDecel);
                 PendingStep  = _resumePendingStep;
                 PendingSteps = _resumePendingSteps;
+                Watch        = _resumeWatch;
                 AwaitingMove = true;
             }
             else if (_resumeCommand != null)
@@ -172,6 +197,7 @@ namespace Controller.RobotControl.Execution
                 Enqueue(_resumeCommand);
                 PendingStep  = _resumePendingStep;
                 PendingSteps = _resumePendingSteps;
+                Watch        = _resumeWatch;
                 AwaitingMove = true;
             }
             _resumeCommand      = null;
@@ -179,6 +205,7 @@ namespace Controller.RobotControl.Execution
             _resumeRunRadii     = null;
             _resumePendingStep  = null;
             _resumePendingSteps = null;
+            _resumeWatch        = null;
         }
 
         /// <summary>A PauseProgram step: drop the move and aux waits (blended-run steps are kept).</summary>
@@ -188,6 +215,7 @@ namespace Controller.RobotControl.Execution
             PendingStep    = null;
             AwaitingAux    = false;
             PendingAuxStep = null;
+            Watch          = null; // nothing is awaited any more, so nothing to watch
         }
 
         /// <summary>Back to idle for a new run.</summary>
@@ -200,6 +228,7 @@ namespace Controller.RobotControl.Execution
             PendingSteps          = null;
             AwaitingAux           = false;
             PendingAuxStep        = null;
+            Watch                 = null;
 
             _lastMotionCommand    = null;
             _lastRunWaypoints     = null;
@@ -211,6 +240,7 @@ namespace Controller.RobotControl.Execution
             _resumeRunRadii       = null;
             _resumePendingStep    = null;
             _resumePendingSteps   = null;
+            _resumeWatch          = null;
             ResumeDispatchPending = false;
         }
     }

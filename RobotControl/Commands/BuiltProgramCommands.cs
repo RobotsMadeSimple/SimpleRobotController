@@ -514,11 +514,9 @@ internal sealed class BuiltProgramCommands
         for (int n = 1; n <= 4; n++) list.Add(($"relay.{n}",  $"USB relay {n}"));
         try
         {
-            foreach (var nano in _robot.NanoManager.GetAllStates())
-                if (!string.IsNullOrEmpty(nano.Name))
-                    foreach (var pin in nano.Pins)
-                        if (!string.IsNullOrEmpty(pin.Name))
-                            list.Add(($"io.{nano.Name}.{pin.Name}", $"Nano '{nano.Name}' pin {pin.Pin} ({pin.Type})"));
+            // Same naming as the executor's AddIoVariables (IoVariableNames): a name with
+            // spaces is listed in its identifier-safe form only, since that is what can be typed.
+            list.AddRange(IoVariableNames.Symbols(_robot.NanoManager.GetAllStates()));
         }
         catch { /* no nano manager yet — the fixed names still stand */ }
         return list;

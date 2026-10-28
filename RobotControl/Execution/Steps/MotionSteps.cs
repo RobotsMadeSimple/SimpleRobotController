@@ -49,8 +49,10 @@ namespace Controller.RobotControl.Execution
             bool hasToolOffset = MoveTargetResolver.HasToolOffset(step);
 
             // Blended MoveL run: gather consecutive blendable MoveL steps into one
-            // continuous path so the robot rounds the corners instead of stopping.
-            if (step.Type == StepType.MoveL && MotionSteps.EffectivelyBlends(step, ctx) && !hasToolOffset)
+            // continuous path so the robot rounds the corners instead of stopping. A move
+            // with a stop condition never blends — its end point is decided mid-move.
+            if (step.Type == StepType.MoveL && MotionSteps.EffectivelyBlends(step, ctx) && !hasToolOffset
+                && !MoveStopConditions.HasCondition(step))
             {
                 if (TryDispatchBlendedRun(step, target, frame, ctx) is { } outcome) return outcome;
             }
@@ -82,6 +84,7 @@ namespace Controller.RobotControl.Execution
 
             ctx.Motion.Enqueue(cmd);
             ctx.AwaitMove(step, frame);
+            ctx.ArmMoveWatch(step);
             return StepOutcome.Yield;
         }
 
@@ -100,8 +103,10 @@ namespace Controller.RobotControl.Execution
             while (prevBlend && j < steps.Count)
             {
                 var nxt = steps[j];
-                // Only plain MoveL steps without a per-step tool offset can join the path.
-                if (nxt.Type != StepType.MoveL || MoveTargetResolver.HasToolOffset(nxt)) break;
+                // Only plain MoveL steps without a per-step tool offset or a stop condition can
+                // join the path (a watched move must be dispatched on its own).
+                if (nxt.Type != StepType.MoveL || MoveTargetResolver.HasToolOffset(nxt)
+                    || MoveStopConditions.HasCondition(nxt)) break;
                 // Resolve relative to the previous waypoint so "current position" moves chain
                 // off where the robot actually ends up, not where the blend started.
                 if (!ctx.ResolveMoveTarget(nxt, out Vector6 t, waypoints[^1])) return StepOutcome.Finished;
@@ -191,10 +196,16 @@ namespace Controller.RobotControl.Execution
                 jump.Accel    = ev.OptionalField(step, "accel", step.Accel);
                 jump.Decel    = ev.OptionalField(step, "decel", step.Decel);
 
+                // The stop condition spans every leg: armed once here, evaluated by the
+                // executor until the last leg completes (or the move is stopped).
+                ctx.ArmMoveWatch(step);
+
                 // Blended JumpL: run lift → traverse → lower as one continuous path,
                 // rounding the two apex corners instead of stopping at each leg. (JumpJ's
-                // traverse is a joint move, so it keeps the stepped behaviour for now.)
-                if (step.Type == StepType.JumpL && MotionSteps.EffectivelyBlends(step, ctx))
+                // traverse is a joint move, so it keeps the stepped behaviour for now; a
+                // JumpL with a stop condition takes the stepped path too.)
+                if (step.Type == StepType.JumpL && MotionSteps.EffectivelyBlends(step, ctx)
+                    && !MoveStopConditions.HasCondition(step))
                 {
                     double r = MotionSteps.EffectiveBlendRadius(step, ctx);
                     var s = jump.StartPos;

@@ -100,6 +100,11 @@ namespace Controller.RobotControl
         // Hard-stop flag — set from any thread, consumed exclusively on the control loop thread
         private volatile bool _hardStopRequested;
 
+        // Motion-stop flag (a move step's stop condition fired) — set from the program thread,
+        // consumed exclusively on the control loop thread. Ends the program move only: no aux
+        // stop, no jog stop, no homing reset, unlike a hard stop.
+        private volatile bool _motionStopRequested;
+
         // Drain-queue flag — set from any thread, consumed exclusively on the control loop thread in RunCommands()
         private volatile bool _drainQueueRequested;
 
@@ -454,6 +459,10 @@ namespace Controller.RobotControl
                     // Consume hard-stop flag before anything else touches the profilers
                     if (_hardStopRequested)
                         ExecuteHardStop();
+
+                    // A move step's stop condition fired: drop the program move in flight
+                    if (_motionStopRequested)
+                        ExecuteMotionStop();
 
                     // Apply motion-state changes posted from other threads (tool/local
                     // selection, StopJog, fault/bypass, SetHomed, kinematics reconfig)
@@ -1448,6 +1457,18 @@ namespace Controller.RobotControl
         }
 
         /// <summary>
+        /// Thread-safe: ends the program move in flight where it is (a move step's stop
+        /// condition fired). Consumed at the top of the next control loop iteration like
+        /// <see cref="HardStop"/>, but touches only the move profilers and the command queue
+        /// — aux axes, jogs and homing carry on. <c>MotionBusy</c> then clears on that tick, so
+        /// the executor sees the move complete and continues with the next step.
+        /// </summary>
+        public void RequestMotionStop()
+        {
+            _motionStopRequested = true;
+        }
+
+        /// <summary>
         /// If a different built program is currently running in the executor, stops it and
         /// resets its status to Ready so the UI returns to the Start button state.
         /// Call this before starting a new built program.
@@ -1490,6 +1511,20 @@ namespace Controller.RobotControl
             {
                 Console.WriteLine($"[HardStop] Aux device stop failed: {ex}");
             }
+        }
+
+        /// <summary>
+        /// Must only be called from the control loop thread. Drops the move profilers and the
+        /// queued commands (a blended run or a jump's remaining legs) and nothing else — the
+        /// robot stays where the profile had it this tick.
+        /// </summary>
+        private void ExecuteMotionStop()
+        {
+            _motionStopRequested = false;
+            linearMotionProfiler = null;
+            jointMotionProfiler  = null;
+            continuousProfiler   = null;
+            QueuedCommands.Clear();
         }
 
         /// <summary>

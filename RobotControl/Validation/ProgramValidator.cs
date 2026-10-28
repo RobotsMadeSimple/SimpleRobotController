@@ -352,6 +352,10 @@ namespace Controller.RobotControl.Validation
                     case StepType.StopwatchControl: Implicit(s.StopwatchVariableName, SymKind.Stopwatch); break;
                     case StepType.CaptureImage:     Implicit(s.CaptureImageVariableName, SymKind.Image); break;
                     case StepType.Wait:             Implicit(s.WaitTimeoutVariableName, SymKind.Boolean); break;
+                    // A move's stop-condition flag is created like Wait's timeout flag (1 / 0).
+                    case StepType.MoveL: case StepType.MoveJ: case StepType.JumpL: case StepType.JumpJ:
+                    case StepType.AuxMove: case StepType.GripperAction:
+                        Implicit(s.MoveStopFlagVariableName, SymKind.Boolean); break;
                 }
                 foreach (var o in s.VisionOutputs ?? [])
                 {
@@ -688,6 +692,19 @@ namespace Controller.RobotControl.Validation
                         if ((!string.IsNullOrEmpty(s.LocalId) || !string.IsNullOrEmpty(s.LocalName)) &&
                             _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalId, s.LocalName))
                             Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName ?? s.LocalId}' does not exist", "localName");
+                        CheckMoveStop(s, at, aux: false);
+                        break;
+
+                    case StepType.AuxMove:
+                        CheckMoveStop(s, at, aux: true);
+                        if (MoveStopConditions.HasCondition(s) && s.AuxWaitForDone == false)
+                            Add(at, ValidationCodes.MissingField,
+                                "Stop condition is ignored because the step does not wait for the move to finish (auxWaitForDone is false)",
+                                "moveStopCondition", ValidationSeverity.Warning);
+                        break;
+
+                    case StepType.GripperAction:
+                        CheckMoveStop(s, at, aux: true);
                         break;
 
                     case StepType.SetOutput:
@@ -1496,6 +1513,54 @@ namespace Controller.RobotControl.Validation
                     ? $" — properties need braces in text: {{${name}.…}}"
                     : "";
                 Add(at, ValidationCodes.UnknownVariable, $"Unknown variable '${name}' — it is left as written{hint}", field, severity);
+            }
+
+            // ── Move stop condition ───────────────────────────────────────────
+
+            /// <summary>
+            /// A move step's optional stop condition (docs/program-blocks.md, "Stop or record on
+            /// condition"): the condition rows, the mode, and the two variables it writes — a
+            /// Points list (robot) or number (aux) for the position, a number/boolean for the flag.
+            /// Both count as uses of their variables.
+            /// </summary>
+            private void CheckMoveStop(ProgramStep s, At at, bool aux)
+            {
+                bool hasCondition = MoveStopConditions.HasCondition(s);
+                CheckCondition(s.MoveStopCondition, at, "moveStopCondition", required: false);
+
+                if (!string.IsNullOrWhiteSpace(s.MoveStopMode) && !MoveStopConditions.TryParseMode(s.MoveStopMode, out _))
+                    Add(at, ValidationCodes.MissingField,
+                        $"Stop mode must be 'stop' or 'record', not '{s.MoveStopMode}'", "moveStopMode");
+
+                if (!string.IsNullOrWhiteSpace(s.MoveStopPositionVariableName)
+                    && CheckTarget(s.MoveStopPositionVariableName, at, "moveStopPositionVariableName", requireDeclared: false))
+                {
+                    var name = s.MoveStopPositionVariableName.Trim().TrimStart('$');
+                    if (!aux)
+                        CheckPointList(name, at, "moveStopPositionVariableName");
+                    else if (Lookup(name) is not { } sym)
+                        Add(at, ValidationCodes.UnknownVariable, $"Unknown variable '${name}'", "moveStopPositionVariableName");
+                    else if (sym.Kind is not (SymKind.Number or SymKind.Boolean))
+                        Add(at, ValidationCodes.UnknownVariable,
+                            $"'${name}' is not a number variable — an aux move records its position as a number",
+                            "moveStopPositionVariableName");
+                }
+
+                if (!string.IsNullOrWhiteSpace(s.MoveStopFlagVariableName)
+                    && CheckTarget(s.MoveStopFlagVariableName, at, "moveStopFlagVariableName", requireDeclared: false))
+                {
+                    var name = s.MoveStopFlagVariableName.Trim().TrimStart('$');
+                    if (Lookup(name) is { } sym && sym.Kind is not (SymKind.Number or SymKind.Boolean))
+                        Add(at, ValidationCodes.UnknownVariable,
+                            $"'${name}' is not a number or boolean variable", "moveStopFlagVariableName");
+                }
+
+                if (!hasCondition && (!string.IsNullOrWhiteSpace(s.MoveStopMode)
+                                      || !string.IsNullOrWhiteSpace(s.MoveStopPositionVariableName)
+                                      || !string.IsNullOrWhiteSpace(s.MoveStopFlagVariableName)))
+                    Add(at, ValidationCodes.MissingField,
+                        "Stop condition has no rows — the stop mode and variables do nothing without one",
+                        "moveStopCondition", ValidationSeverity.Warning);
             }
 
             // ── Conditions ────────────────────────────────────────────────────

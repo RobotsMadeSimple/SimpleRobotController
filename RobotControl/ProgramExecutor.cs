@@ -395,6 +395,10 @@ namespace Controller.RobotControl
             // If we dispatched a robot move, wait until the queue is clear and the robot is idle
             if (motion.AwaitingMove)
             {
+                // The move's stop condition, evaluated every tick it is in flight (the
+                // snapshot is rebuilt per tick, so each evaluation sees fresh IO).
+                if (motion.Watch is { Fired: false, IsAux: false } && !_ctx.TickMoveWatch()) return;
+
                 if (!motion.MoveFinished) return;
 
                 motion.AwaitingMove = false;
@@ -418,11 +422,14 @@ namespace Controller.RobotControl
                     foreach (var s in run) _ctx.Progress.StepCompleted(s);
                     motion.PendingSteps = null;
                 }
+                if (motion.Watch is { IsAux: false } watch) CompleteRobotMoveWatch(watch);
             }
 
             // If we dispatched an aux indexed move with WaitForDone=true, block until it completes
             if (motion.AwaitingAux)
             {
+                if (motion.Watch is { Fired: false, IsAux: true } && !_ctx.TickMoveWatch()) return;
+
                 if (_ctx.Controller.IsAuxMoving) return;
 
                 motion.AwaitingAux = false;
@@ -432,6 +439,7 @@ namespace Controller.RobotControl
                     _ctx.Progress.StepCompleted(auxStep);
                     motion.PendingAuxStep = null;
                 }
+                if (motion.Watch is { IsAux: true } watch) _ctx.CompleteMoveWatch(watch);
             }
 
             // Nothing left to execute?
@@ -455,6 +463,36 @@ namespace Controller.RobotControl
             long execTs = Diag.Enabled ? Diag.Now() : 0;
             ExecuteStep(step, frame);
             if (Diag.Enabled) Diag.StepExec(step.Type, frame.Index, execTs);
+        }
+
+        /// <summary>
+        /// A robot move leg finished with a stop condition armed. A single move (or a blended
+        /// Jump) is done: write the flag and clear. A stepped Jump still has legs to dispatch
+        /// (<see cref="JumpState.SubStep"/> 1 or 2): a watch that fired in stop mode ends the
+        /// Jump here — the remaining legs are skipped and the step is completed — while an
+        /// unfired or record-mode watch stays armed across the next leg.
+        /// </summary>
+        private void CompleteRobotMoveWatch(MoveWatch watch)
+        {
+            var jump = _ctx.Jump;
+            bool legsRemain = jump.SubStep is 1 or 2;
+            if (!legsRemain)
+            {
+                _ctx.CompleteMoveWatch(watch);
+                return;
+            }
+            if (!watch.Fired || watch.Mode != MoveStopMode.Stop) return;
+
+            jump.Reset();
+            _ctx.CompleteMoveWatch(watch);
+            // The stepped Jump never advanced the frame (it re-runs its handler per leg), so
+            // the frame index still points at the step: complete it so the next step runs.
+            if (_ctx.Frames.Count > 0)
+            {
+                var frame = _ctx.Frames.Peek();
+                if (frame.Index < frame.Steps.Count && ReferenceEquals(frame.Steps[frame.Index], watch.Step))
+                    _ctx.CompleteNow(watch.Step, frame);
+            }
         }
 
         /// <summary>
@@ -608,7 +646,11 @@ namespace Controller.RobotControl
             _ctx.Progress.Finished(status, description, finalStepIndex);
         }
 
-        /// <summary>Writes live IO values (stb.inN/outN, relay.N, nano.name.pin) into <paramref name="io"/>.</summary>
+        /// <summary>
+        /// Writes live IO values (stb.inN/outN, relay.N, io.nano.pin) into <paramref name="io"/>.
+        /// Nano pins follow <see cref="IoVariableNames"/>: a load cell reads in grams, and a name
+        /// that is not an identifier is also published under its identifier-safe alias.
+        /// </summary>
         internal static void AddIoVariables(RobotController controller, Dictionary<string, double> io)
         {
             io["stb.in1"]  = controller.stb.Input1  ? 1.0 : 0.0;
@@ -625,11 +667,7 @@ namespace Controller.RobotControl
                 for (int ri = 0; ri < relays.Length && ri < 4; ri++)
                     io[$"relay.{ri + 1}"] = relays[ri] ? 1.0 : 0.0;
 
-            foreach (var nano in controller.NanoManager.GetAllStates())
-                if (!string.IsNullOrEmpty(nano.Name))
-                    foreach (var pin in nano.Pins)
-                        if (!string.IsNullOrEmpty(pin.Name))
-                            io[$"io.{nano.Name}.{pin.Name}"] = pin.Value ? 1.0 : 0.0;
+            IoVariableNames.AddPins(controller.NanoManager.GetAllStates(), io);
         }
 
         // ── Static API kept for callers and tests ─────────────────────────────
