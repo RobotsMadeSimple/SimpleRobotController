@@ -319,6 +319,12 @@ namespace Controller.RobotControl
         {
             _running  = false;
             _isPaused = false;
+            // A recording the run started but never stopped (an error, a reset after Stop, or
+            // no StopRecording step) ends with the run; it stays in the Recordings browser. A
+            // pause keeps it going, so a resumed test is still one recording.
+            foreach (var (_, rec) in _ctx.ProgramRecordings)
+                _ctx.Controller.IoHistory.StopRecording(rec.RecordingId);
+            _ctx.ProgramRecordings.Clear();
             _ctx.ResetRunState(pluginCancelReason);
         }
 

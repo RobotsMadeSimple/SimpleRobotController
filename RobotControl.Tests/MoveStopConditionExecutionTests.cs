@@ -558,4 +558,25 @@ public sealed class MoveStopConditionExecutionTests : IDisposable
         Assert.Equal("moveStopPositionVariableName", problem.Field);
         Assert.Contains("not a points list", problem.Message);
     }
+
+    // ── Recordings end with the run ───────────────────────────────────────────
+
+    [Fact]
+    public void AResetRunEndsTheRecordingItStarted()
+    {
+        _exec.Start(Prog([new ProgramVariable { Id = "log", Name = "log", ElementType = ListElementType.Record, Items = [] }],
+            new ProgramStep { Id = "rec", Type = StepType.StartRecording, LoadCellDeviceId = _nano.Id,
+                              LoadCellPin = LoadCellPin, RecordVariableName = "log" },
+            new ProgramStep { Id = "w", Type = StepType.Wait, WaitMs = 60_000 }));
+
+        _exec.Update();   // StartRecording
+        _exec.Update();   // into the wait
+        var rec = Assert.Single(_robot.IoHistory.ListRecordings(), r => r.Active);
+
+        _exec.Stop();     // a main program pauses: the test can resume, so it keeps recording
+        Assert.True(_robot.IoHistory.GetRecordingMeta(rec.Id)!.Active);
+
+        _exec.Reset();    // the run is over without a StopRecording step
+        Assert.False(_robot.IoHistory.GetRecordingMeta(rec.Id)!.Active);
+    }
 }
