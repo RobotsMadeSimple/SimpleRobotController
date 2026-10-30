@@ -113,6 +113,9 @@ namespace Controller.RobotControl.Io
                 pinCfg = new IoPinConfig { Pin = dtPin, Name = "Load Cell" };
                 nanoCfg.Pins.Add(pinCfg);
             }
+            // A pin still wearing a default name ("Input 2", "D3") would hide the load cell in the
+            // expression picker as `$io.Arduino_Nano.Input_2`; a name the user chose is kept.
+            if (IsDefaultPinName(pinCfg.Name)) pinCfg.Name = "Load Cell";
             pinCfg.Type   = PinType.LoadCell;
             pinCfg.SckPin = sckPin;
             pinCfg.Unit   = string.IsNullOrEmpty(unit) ? "g" : unit;
@@ -123,6 +126,11 @@ namespace Controller.RobotControl.Io
             SaveConfig();
             return true;
         }
+
+        /// <summary>Empty, or one of the generated names: "Input N", "Output N", "D&lt;pin&gt;".</summary>
+        internal static bool IsDefaultPinName(string? name) =>
+            string.IsNullOrWhiteSpace(name)
+            || System.Text.RegularExpressions.Regex.IsMatch(name.Trim(), @"^(?:(?:Input|Output)\s+\d+|D\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         /// <summary>Zero the load cell: capture its current raw reading as the tare offset. Returns the new offset.</summary>
         public long? TareLoadCell(string deviceId, int pin)

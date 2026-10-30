@@ -83,7 +83,19 @@ public class MoveStopConditionTests
         // The symbol list offers only what can be typed, and says a load cell is in grams.
         var symbols = IoVariableNames.Symbols([nano]).ToList();
         Assert.Equal(new[] { "io.Arduino_Nano.Load_Cell", "io.Arduino_Nano.D2" }, symbols.Select(s => s.Name).ToArray());
-        Assert.Equal("Nano 'Arduino Nano' pin 10 (LoadCell, grams)", symbols[0].Description);
+        Assert.Equal("Load cell weight in grams — 'Arduino Nano' pin 10", symbols[0].Description);
+    }
+
+    [Theory]
+    [InlineData("Input 2", true)]
+    [InlineData("output 1", true)]
+    [InlineData("D3", true)]
+    [InlineData("", true)]
+    [InlineData("Scale", false)]
+    [InlineData("Input 2 scale", false)]
+    public void ALoadCellRenamesOnlyAGeneratedPinName(string name, bool isDefault)
+    {
+        Assert.Equal(isDefault, Controller.RobotControl.Io.NanoManager.IsDefaultPinName(name));
     }
 
     // ── Validation ────────────────────────────────────────────────────────────

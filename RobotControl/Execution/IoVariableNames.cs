@@ -87,8 +87,9 @@ namespace Controller.RobotControl.Execution
                 {
                     if (string.IsNullOrEmpty(pin.Name)) continue;
                     var name = Alias(nano.Name, pin.Name) ?? Key(nano.Name, pin.Name);
-                    var type = pin.Type == PinType.LoadCell ? "LoadCell, grams" : pin.Type.ToString();
-                    yield return (name, $"Nano '{nano.Name}' pin {pin.Pin} ({type})");
+                    yield return (name, pin.Type == PinType.LoadCell
+                        ? $"Load cell weight in grams — '{nano.Name}' pin {pin.Pin}"
+                        : $"Nano '{nano.Name}' pin {pin.Pin} ({pin.Type})");
                 }
             }
         }
