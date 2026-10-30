@@ -819,6 +819,18 @@ namespace Controller.RobotControl.Validation
                             CheckTarget(s.JsonInbound![j]?.VariableName, at, $"jsonInbound[{j}].variableName", requireDeclared: false);
                         break;
 
+                    case StepType.StartRecording:
+                        // The list the samples land in on StopRecording counts as a use.
+                        if (!string.IsNullOrWhiteSpace(s.RecordVariableName)) Use(s.RecordVariableName);
+                        break;
+
+                    case StepType.ExportData:
+                        if (string.IsNullOrWhiteSpace(s.ExportPath))
+                            Add(at, ValidationCodes.MissingField, "No export path is set", "exportPath");
+                        else CheckTemplate(s.ExportPath, at, "exportPath", ValidationSeverity.Warning);
+                        CheckColumns(s.ExportColumns, "exportColumns", at);
+                        break;
+
                     case StepType.HttpReceive:
                         if (string.IsNullOrWhiteSpace(s.HttpReceiveName))
                             Add(at, ValidationCodes.MissingField, "No receive name is set", "httpReceiveName");
@@ -1020,11 +1032,27 @@ namespace Controller.RobotControl.Validation
 
             private void CheckOutbound(ProgramStep s, At at)
             {
-                for (int j = 0; j < (s.JsonOutbound?.Count ?? 0); j++)
+                CheckColumns(s.JsonOutbound, "jsonOutbound", at);
+                for (int j = 0; j < (s.JsonImageOutbound?.Count ?? 0); j++)
                 {
-                    var kv = s.JsonOutbound![j];
+                    var m = s.JsonImageOutbound![j];
+                    if (m == null || string.IsNullOrWhiteSpace(m.VariableName)) continue;
+                    Use(m.VariableName);
+                    if (Lookup(m.VariableName.Trim()) is not { Kind: SymKind.Image })
+                        Add(at, ValidationCodes.UnknownVariable, $"'${m.VariableName.Trim()}' is not an image variable",
+                            $"jsonImageOutbound[{j}].variableName");
+                }
+            }
+
+            /// <summary>Key/value rows (HttpRequest's outbound body, ExportData's columns): each
+            /// reads a list, an image or an expression.</summary>
+            private void CheckColumns(List<JsonKeyValue>? cols, string field, At at)
+            {
+                for (int j = 0; j < (cols?.Count ?? 0); j++)
+                {
+                    var kv = cols![j];
                     if (kv == null || string.IsNullOrWhiteSpace(kv.Key)) continue;
-                    string f = $"jsonOutbound[{j}]";
+                    string f = $"{field}[{j}]";
                     if (!string.IsNullOrWhiteSpace(kv.ListVar))
                     {
                         Use(kv.ListVar);
@@ -1039,15 +1067,6 @@ namespace Controller.RobotControl.Validation
                     }
                     else if (!string.IsNullOrWhiteSpace(kv.Expr))
                         CheckExpr(kv.Expr, at, f + ".expr");
-                }
-                for (int j = 0; j < (s.JsonImageOutbound?.Count ?? 0); j++)
-                {
-                    var m = s.JsonImageOutbound![j];
-                    if (m == null || string.IsNullOrWhiteSpace(m.VariableName)) continue;
-                    Use(m.VariableName);
-                    if (Lookup(m.VariableName.Trim()) is not { Kind: SymKind.Image })
-                        Add(at, ValidationCodes.UnknownVariable, $"'${m.VariableName.Trim()}' is not an image variable",
-                            $"jsonImageOutbound[{j}].variableName");
                 }
             }
 

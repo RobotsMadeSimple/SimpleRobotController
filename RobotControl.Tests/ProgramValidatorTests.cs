@@ -501,6 +501,22 @@ public class ProgramValidatorTests
     }
 
     [Fact]
+    public void ARecordedAndExportedListIsUsedAndExportColumnsAreChecked()
+    {
+        var log = new ProgramVariable { Id = "log", Name = "log", ElementType = ListElementType.Record, Items = [] };
+        var p = Prog(
+        [
+            Step(StepType.StartRecording, s => { s.LoadCellDeviceId = "n"; s.LoadCellPin = 3; s.RecordVariableName = "log"; }),
+            Step(StepType.ExportData, s => { s.ExportPath = "exports/a.csv";
+                                             s.ExportColumns = [new() { Key = "log", ListVar = "log" }, new() { Key = "x", ListVar = "nope" }]; }),
+        ], log);
+        var probs = Validate(p);
+        Assert.DoesNotContain(probs, x => x.Code == ValidationCodes.UnusedVariable);
+        var bad = Single(probs, ValidationCodes.UnknownVariable);
+        Assert.Equal("exportColumns[1].listVar", bad.Field);
+    }
+
+    [Fact]
     public void UnusedVariablesAreAWarningExceptGlobals()
     {
         var p = Prog([Step(StepType.SetVariable, s => { s.VariableName = "used"; s.VariableExpr = "1"; })],
