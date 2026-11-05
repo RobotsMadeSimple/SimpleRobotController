@@ -263,6 +263,12 @@ internal sealed class BuiltProgramCommands
             LocalExists         = (id, n) => _robot.localRepo.GetById(id) != null || (!string.IsNullOrEmpty(n) && _robot.localRepo.Get(n) != null),
             GridExists          = id => _robot.gridRepo.Get(id) != null,
             StackExists         = id => _robot.stackRepo.Get(id) != null,
+            GridBase            = id => _robot.gridRepo.Get(id) is { } g
+                ? (g.BasePointName, g.RowOffsetX != 0 || g.RowOffsetY != 0 || g.RowOffsetZ != 0 || g.ColOffsetX != 0 || g.ColOffsetY != 0 || g.ColOffsetZ != 0)
+                : null,
+            StackBase           = id => _robot.stackRepo.Get(id) is { } st
+                ? (st.BasePointName, st.OffsetX != 0 || st.OffsetY != 0 || st.OffsetZ != 0)
+                : null,
             VisionProgramExists = vision == null ? null : id => vision.Get(id) != null,
             VisionProgramCamera = vision == null || _robot.CalibrationRepo == null ? null
                 : id => vision.Get(id) is { } vp ? (vp.CameraId, _robot.CalibrationRepo.IsCalibrated(vp.CameraId)) : null,

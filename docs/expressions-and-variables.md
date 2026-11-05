@@ -144,7 +144,10 @@ loop/vision/HTTP output variables — or declared as a variable), `unknownProgra
 `unknownStepType(warning)` (a step type the controller does not know; it is skipped),
 `cameraNotCalibrated` (RunVision `outputFrame: "robot"` for a vision program whose
 camera has no calibration) and `badOutputFrame` (an `outputFrame` other than
-`pixel`, `normalized` or `robot`).
+`pixel`, `normalized` or `robot`). A move to a grid or stack cell also checks the
+grid/stack's base point (`unknownPoint` when it is missing — every cell resolves from
+it) and reports `untaughtGrid(warning)` when its row/column (or layer) steps are all
+zero, i.e. every cell is the same position.
 
 Plugins ([plugins.md](plugins.md) §6), checked when the controller has a plugin
 manager: `unknownPlugin` (Plugin step `pluginId` not installed),

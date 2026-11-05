@@ -18,6 +18,9 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import robot_mcp as r  # noqa: E402  (only for the expected tool count)
+
 HERE   = os.path.dirname(os.path.abspath(__file__))
 SERVER = os.path.join(HERE, "robot_mcp.py")
 
@@ -85,7 +88,7 @@ def main():
         check("initialize", init["serverInfo"]["name"] == "simple-robot-controller")
 
         tools = c.rpc("tools/list")["tools"]
-        check("tools/list", len(tools) == 14, f"{len(tools)} tools")
+        check("tools/list", len(tools) == len(r.TOOLS), f"{len(tools)} tools")
         check("no private keys leak", not any(k.startswith("_") for t in tools for k in t))
 
         # ── reads ────────────────────────────────────────────────────────────
@@ -119,15 +122,20 @@ def main():
         check("robot_raw_command (Get* ungated)", not err, text.replace("\n", " ")[:70])
 
         # ── validation ───────────────────────────────────────────────────────
-        text, err = c.call("robot_validate_program", {"program": {
-            "name": "lint me",
-            "steps": [{"id": "x", "type": "MoveL", "expressions": {"speed": "baseSpeed * 2"}}],
-        }})
+        lint = {"name": "lint me",
+                "steps": [{"id": "x", "type": "MoveL", "expressions": {"speed": "baseSpeed * 2"}}]}
+        text, err = c.call("robot_validate_program", {"program": lint, "check_robot": False})
         v = json.loads(text)
-        check("validator flags a missing $", not v["valid"] and
+        check("offline validator flags a missing $", not v["valid"] and
               any("without $" in e for e in v["errors"]))
-        check("validator warns, not errors, on an untargeted move",
+        check("offline validator warns, not errors, on an untargeted move",
               any("no target" in w for w in v["warnings"]))
+        text, err = c.call("robot_validate_program", {"program": lint})
+        v = json.loads(text)
+        check("validation with the robot rejects it too (same gate as save)",
+              v.get("source") == "controller" and not v["valid"], str([p.get("code") for p in v.get("problems", [])]))
+        text, err = c.call("robot_save_program", {"program": lint})
+        check("robot_save_program refuses it", json.loads(text).get("saved") is False)
 
         # ── write round trip ─────────────────────────────────────────────────
         prog = {

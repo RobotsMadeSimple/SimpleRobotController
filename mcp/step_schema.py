@@ -273,6 +273,52 @@ STEPS = {
                   "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "auxEnable": "bool."}},
 
     # ── CNC ───────────────────────────────────────────────────────────────
+    "GripperAction": {
+        "what": "Drive an aux axis configured as a gripper: Open/Close to its configured gap limits, or GripTo a gap.",
+        "fields": {
+            "auxDeviceId": "string. Aux device id (default: the first).",
+            "auxAxisIndex": "int. The gripper's axis index.",
+            "gripperAction": '"Open" | "Close" | "GripTo".',
+            "gripTargetMm": "number. GripTo: absolute jaw gap (mm), clamped to [closed, open]. expressions.gripTargetMm overrides.",
+            "auxVelocity": "number, mm/s (optional - the axis default otherwise).",
+            "auxAccel": "number, mm/s^2 (optional).",
+            "moveStopCondition": "CONDITION_GROUP - stop the jaws early when it holds (e.g. a load cell reading).",
+            "moveStopMode": '"stop" | "record".',
+            "moveStopFlagVariableName": "string. Set to 1 when the stop condition fired.",
+        },
+    },
+    "ConveyorAction": {"what": "Run/stop an aux axis configured as a conveyor.",
+                       "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "conveyorAction": "string, e.g. Start | Stop."}},
+    "RotaryIndex": {"what": "Index an aux axis configured as a rotary table.",
+                    "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "rotaryDirection": "int, +1 / -1.", "rotaryCount": "int, positions to index."}},
+    "SetJointPosition": {"what": "Redefine one joint's current position (re-reference it); moves nothing.",
+                         "fields": {"jointIndex": "int.", "jointValue": "number. expressions.jointValue overrides."}},
+    "Tare": {"what": "Zero a load cell (nothing on it).",
+             "fields": {"loadCellDeviceId": "string. IO device id, e.g. ROBOT_NANO_001.", "loadCellPin": "int. The cell's DT pin."}},
+    "ReadLoadCell": {"what": "Read a load cell into a variable.",
+                     "fields": {"loadCellDeviceId": "string.", "loadCellPin": "int.", "variableName": "string. Target variable.",
+                                "loadCellUnit": '"g" | "kg" | "oz" | "lb" | "N".'}},
+    "StartRecording": {"what": "Record a load cell's samples into a Record-list variable until StopRecording (or the run ends).",
+                       "fields": {"loadCellDeviceId": "string.", "loadCellPin": "int.",
+                                  "recordVariableName": "string. A list variable with elementType Record ({t, v, r} samples)."}},
+    "StopRecording": {"what": "Stop the recording started on this load cell.",
+                      "fields": {"loadCellDeviceId": "string.", "loadCellPin": "int."}},
+    "ExportData": {"what": "Write variables to a file on the controller (CSV or JSON).",
+                   "fields": {"exportFormat": '"csv" | "json".',
+                              "exportPath": "string. Relative to the data dir; $variable and $time_ms interpolate.",
+                              "exportColumns": "array of {key, expr? | listVar? | imageVar?} - the HttpRequest outbound row shape."}},
+    "Plugin": {
+        "what": "Run a step contributed by an installed plugin (see the controller's GetPlugins / plugin.json).",
+        "fields": {
+            "pluginId": "string. The plugin's id, e.g. checkers.",
+            "pluginStepId": "string. The step id in its manifest, e.g. aiMove.",
+            "pluginParams": "object {paramKey: text}. number/boolean: an expression; string: interpolated text; "
+                            "enum: one of its options; list/image/variable: a $variable name; point: a point name, "
+                            "grid:Name[r,c] or stack:Name[i].",
+            "pluginOutputs": "array of {key, variableName} - copies a step output into a program variable.",
+            "pluginTimeoutMs": "int. Overrides the manifest's timeout (0 = none).",
+        },
+    },
     "CncProgram": {
         "what": "Run a DXF-derived toolpath. Steps are generated at run time from cncSpec.",
         "fields": {"cncDxfFile": "string.", "cncSafeZ": "number, mm.",

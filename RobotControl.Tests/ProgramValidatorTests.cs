@@ -350,6 +350,41 @@ public class ProgramValidatorTests
     }
 
     [Fact]
+    public void AGridOrStackWithAMissingBasePointOrNoSpacingIsReported()
+    {
+        var ctx = new ValidationContext
+        {
+            PointExists = (id, n) => n != null && Points.Contains(n),
+            GridExists  = id => id is "taught" or "noBase" or "flat",
+            StackExists = id => id is "pile",
+            GridBase    = id => id switch
+            {
+                "taught" => ("Home", true),
+                "noBase" => ("Board origin", true),
+                "flat"   => ("Pick", false),
+                _        => null,
+            },
+            StackBase   = id => id == "pile" ? ("Gone", false) : null,
+        };
+        var p = Prog(
+        [
+            Step(StepType.MoveL, s => s.GridPoint = new GridPointRef { GridId = "taught" }),
+            Step(StepType.MoveL, s => s.GridPoint = new GridPointRef { GridId = "noBase" }),
+            Step(StepType.MoveL, s => s.GridPoint = new GridPointRef { GridId = "flat" }),
+            Step(StepType.MoveL, s => s.StackPoint = new StackPointRef { StackId = "pile" }),
+        ]);
+        var probs = Validate(p, ctx);
+        var missing = probs.Where(x => x.Code == ValidationCodes.UnknownPoint).ToList();
+        Assert.Equal(2, missing.Count);
+        Assert.Contains(missing, x => x.Message.Contains("'Board origin'") && x.Severity == ValidationSeverity.Error);
+        Assert.Contains(missing, x => x.Message.Contains("'Gone'"));
+        var flat = probs.Where(x => x.Code == ValidationCodes.UntaughtGrid).ToList();
+        Assert.Equal(2, flat.Count);
+        Assert.All(flat, x => Assert.Equal(ValidationSeverity.Warning, x.Severity));
+        Assert.DoesNotContain(probs, x => x.StepPath == "steps[0]");
+    }
+
+    [Fact]
     public void PointsVariableTargetsMustBePointLists()
     {
         var p = Prog([Step(StepType.MoveL, s => s.VarPointName = "vals"),

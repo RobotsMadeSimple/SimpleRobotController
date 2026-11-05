@@ -58,6 +58,9 @@ namespace Controller.RobotControl.Validation
         public const string BadArity             = "badArity";
         /// <summary>A write (SetVariable, loop/vision/HTTP target, variable declaration) to a property or IO name.</summary>
         public const string ReadOnlyProperty     = "readOnlyProperty";
+        /// <summary>A grid/stack whose row/column (or layer) step is all zero: every cell is the same
+        /// position, so it has not been taught yet (warning).</summary>
+        public const string UntaughtGrid         = "untaughtGrid";
         /// <summary>Start/Stop/WaitForBackground naming a program that does not exist.</summary>
         public const string UnknownProgram       = "unknownProgram";
         /// <summary>A step type this controller does not know (it would be skipped) — warning.</summary>
@@ -124,6 +127,10 @@ namespace Controller.RobotControl.Validation
         public Func<string, bool>? GridExists          { get; init; }
         /// <summary>By stack id (what StackPointRef carries).</summary>
         public Func<string, bool>? StackExists         { get; init; }
+        /// <summary>A grid's (by id) base point name and whether its row/column steps are set.</summary>
+        public Func<string, (string BasePointName, bool HasSpacing)?>? GridBase  { get; init; }
+        /// <summary>A stack's (by id) base point name and whether its layer step is set.</summary>
+        public Func<string, (string BasePointName, bool HasSpacing)?>? StackBase { get; init; }
         /// <summary>By vision program id.</summary>
         public Func<string, bool>? VisionProgramExists { get; init; }
         /// <summary>A vision program's camera and whether it has a camera-to-robot calibration; null for an unknown program.</summary>
@@ -1070,6 +1077,20 @@ namespace Controller.RobotControl.Validation
                 }
             }
 
+            /// <summary>A grid/stack resolves every cell from its base point, so a missing base point
+            /// fails the move just like a missing point; all-zero steps mean it was never taught.</summary>
+            private void CheckBase((string BasePointName, bool HasSpacing)? info, string kind, string id, At at, string field)
+            {
+                if (info is not { } b) return;
+                if (string.IsNullOrWhiteSpace(b.BasePointName))
+                    Add(at, ValidationCodes.MissingField, $"{kind} '{id}' has no base point", field);
+                else if (_ctx.PointExists != null && !_ctx.PointExists(null, b.BasePointName))
+                    Add(at, ValidationCodes.UnknownPoint, $"{kind} '{id}' base point '{b.BasePointName}' does not exist", field);
+                if (!b.HasSpacing)
+                    Add(at, ValidationCodes.UntaughtGrid,
+                        $"{kind} '{id}' has no {(kind == "Grid" ? "row/column" : "layer")} spacing — every cell is the same position; teach it first", field, ValidationSeverity.Warning);
+            }
+
             private void CheckMoveTarget(ProgramStep s, At at)
             {
                 // Only the target the executor will use is checked — same precedence order.
@@ -1079,6 +1100,8 @@ namespace Controller.RobotControl.Validation
                         Add(at, ValidationCodes.MissingField, "No grid is selected", "gridPoint.gridId");
                     else if (_ctx.GridExists != null && !_ctx.GridExists(s.GridPoint.GridId))
                         Add(at, ValidationCodes.UnknownGrid, $"Grid '{s.GridPoint.GridId}' does not exist", "gridPoint.gridId");
+                    else
+                        CheckBase(_ctx.GridBase?.Invoke(s.GridPoint.GridId), "Grid", s.GridPoint.GridId, at, "gridPoint.gridId");
                 }
                 else if (s.StackPoint != null)
                 {
@@ -1086,6 +1109,8 @@ namespace Controller.RobotControl.Validation
                         Add(at, ValidationCodes.MissingField, "No stack is selected", "stackPoint.stackId");
                     else if (_ctx.StackExists != null && !_ctx.StackExists(s.StackPoint.StackId))
                         Add(at, ValidationCodes.UnknownStack, $"Stack '{s.StackPoint.StackId}' does not exist", "stackPoint.stackId");
+                    else
+                        CheckBase(_ctx.StackBase?.Invoke(s.StackPoint.StackId), "Stack", s.StackPoint.StackId, at, "stackPoint.stackId");
                 }
                 else if (!string.IsNullOrEmpty(s.VarPointName))
                 {

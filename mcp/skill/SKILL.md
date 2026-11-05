@@ -20,9 +20,15 @@ setup: `SimpleRobotController/mcp/README.md`. Full command reference:
 3. **`robot_step_schema`** before writing steps you have not written before. Call it
    with no arguments for the type list, then with `types=['MoveL','Loop']` for fields.
    Guessing field names produces steps the executor silently ignores.
-4. **Editing an existing program: `robot_get_program` first.** `robot_save_program`
-   replaces the program wholesale. Fetch, modify, save — never reconstruct from memory.
-5. **`robot_save_program`** validates and refuses on errors. It does **not** run anything.
+4. **Editing an existing program: `robot_get_program`, then `robot_modify_program`.** It
+   applies targeted edits by step id (set/replace/insert/remove, setVariable, …) and
+   shows the problems your edit introduced (`newProblems`) or fixed. Use `dry_run: true`
+   to preview. Never reconstruct a program from memory and re-save it wholesale.
+5. **`robot_save_program`** validates on the controller and refuses on errors. Points,
+   grids or routines that will be taught later: `allow_untaught: true` (they come back
+   as `pending` — tell the operator what to teach). Check `droppedFields` after every
+   save: anything listed there was silently discarded (a misspelt field). It does
+   **not** run anything.
 6. **`robot_run_program`** only when the operator has asked for it and is watching.
 
 ## The `$` rule — the one that bites

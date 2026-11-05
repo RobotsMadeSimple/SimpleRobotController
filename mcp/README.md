@@ -102,10 +102,11 @@ is on another subnet (e.g. over Tailscale).
 | `robot_programs` | | Summary of every built program. |
 | `robot_get_program` | | Full JSON of one program. |
 | `robot_step_schema` | | Field reference for step types. No args → type list + program shape; `types=[...]` → full fields. |
-| `robot_validate_program` | | Static checks without saving. |
-| `robot_save_program` | | Create or replace a program. Validates first, refuses on errors. Does **not** run it. |
+| `robot_validate_program` | | The controller's checks (offline structural checks if it is unreachable), without saving. |
+| `robot_save_program` | | Create or replace a program. Validates on the controller first and refuses on errors; `allow_untaught` saves missing points/grids/routines as *pending*; `dry_run` only checks. Reads the program back and lists `droppedFields`. Does **not** run it. |
+| `robot_modify_program` | | Targeted edits to a saved program (`set` / `replace` / `insert` / `remove` steps by id, `setVariable` / `removeVariable`, `setProgram`), validated like a save, with `newProblems` / `fixedProblems` against the saved version. `dry_run` previews. |
 | `robot_teach_point` | | Save the current position under a name. Records, does not move. |
-| `robot_io` | | Read IO config + state: every Nano (id, connected, pins) and the relay board. |
+| `robot_io` | | Read IO config + state: every IO device (Nano etc.: id, connected, pins) and the relay board. `deviceId` and `nanoId` are accepted interchangeably. |
 | `robot_configure_pin` | | Set a Nano pin's role (Input/Output/Neopixel/Unconfigured) and/or name. Persists; applies on the connected device. |
 | `robot_load_cell` | | Configure/tare/calibrate an HX711 load cell, or change its display unit. |
 | `robot_stop` | never | Stop program + motion + jog. |
@@ -119,28 +120,40 @@ is on another subnet (e.g. over Tailscale).
 
 ## Validation
 
-`robot_validate_program` (and the check `robot_save_program` runs first) splits
-findings two ways, and the split is the point:
+`robot_save_program` and `robot_modify_program` run every program through the
+**controller's** `ValidateBuiltProgram` before saving — it knows the expression
+language, the property/function tables, plugin manifests and every point, tool,
+local, grid, stack, routine and vision program on the robot — plus this server's
+offline structural checks (missing/duplicate step ids, `$`-less names, …).
 
-**Errors** block a save — things that are structurally broken or *silently* wrong:
+- **Errors block the save.** Expression syntax, unknown variables/properties/functions,
+  read-only writes, routine recursion, labels, empty loops, missing fields, plugin
+  param/output mismatches, a grid whose base point is missing, …
+- **Missing references** — `unknownPoint`, `unknownGrid`, `unknownStack`, `unknownTool`,
+  `unknownLocal`, `unknownRoutine`, `unknownVisionProgram` — are errors too (the run
+  would fault there), but writing a program before teaching its points is normal:
+  pass `allow_untaught: true` and they are saved and reported as `pending`.
+- **Warnings never block**: disabled/unreachable steps, unused variables, a grid or
+  stack with no spacing (`untaughtGrid`), a plugin that is not running, …
+- `dry_run: true` checks (and diffs) without saving; `force: true` skips the gate and
+  should only be used when a check is provably wrong.
 
-- a step `type` the executor does not recognise (it stores these as `Unknown` and skips them)
-- duplicate or missing step ids
-- a `GoToLabel` with no matching `Label`
-- `SetVariable` assigning a name not declared in `variables`
-- a `forEach` loop with no variable, a `while` loop with no condition
-- **a variable reference missing its `$`** — `baseSpeed * 2` evaluates to `0`, not to the
-  variable, so a forgotten sigil is a plausible-looking wrong answer rather than an error
-- motion steps inside a program marked `isBackground` (the executor skips them)
+After a save the program is **read back** and compared with what was sent:
+`droppedFields` lists anything the controller did not keep — a misspelt field name or
+a value of the wrong type is otherwise silently discarded, so the program saves "fine"
+and the setting just isn't there.
 
-**Warnings** do not block — legal but probably unintended:
+When a save replaces an existing program, or `robot_modify_program` edits one, the
+result carries `newProblems` (introduced by the change) and `fixedProblems` (resolved
+by it), so an edit can be judged on its own effect rather than on the program's
+existing debt.
 
-- a move with no target (falls back to the current TCP, so it does not move)
-- a point that is not taught yet — writing the program before teaching its points is a
-  normal way to work, and the run fails loudly rather than moving somewhere wrong
-- unconfigured steps, empty loop bodies, `loopCount: 0` (which means forever)
+If the controller cannot be reached, validation falls back to the offline checks
+(and says so with `controllerChecked: false`); with the controller up, an offline
+"unknown step type" defers to the controller, which knows its own step types.
 
-Validated against all 14 programs currently on the robot: zero false-positive errors.
+`program_tools_check.py` exercises all of this against a live controller (and checks
+that `step_schema.py` lists every `StepType` the controller has).
 
 ---
 
@@ -149,9 +162,10 @@ Validated against all 14 programs currently on the robot: zero false-positive er
 | File | |
 |---|---|
 | `robot_mcp.py` | The server — MCP over stdio, the WebSocket link, the tools, the validator. |
-| `step_schema.py` | Per-step-type field reference served by `robot_step_schema`. Mirrors `RobotControl/Models.cs`; **nothing enforces the link**, so a field added there needs adding here or the agent writes steps the executor ignores. |
+| `step_schema.py` | Per-step-type field reference served by `robot_step_schema`. Mirrors `RobotControl/Models/ProgramSteps.cs`; `program_tools_check.py` fails when a step type is missing, and `droppedFields` catches a misspelt field at save time. |
 | `stdio_check.py` | End-to-end check — spawns the server as a subprocess and drives it over stdio the way a client does. Covers reads, the save round trip, validation, and every gate refusal. `python stdio_check.py [host]`, default `localhost`. Moves nothing. |
 | `selftest.py` | Narrower in-process round trip: saves `_mcp_selftest`, reads it back, deletes it. Moves nothing. |
+| `program_tools_check.py` | The save gate, `allow_untaught`, `droppedFields`, `robot_modify_program` edits/diffs, and step-schema drift against `ProgramSteps.cs`. Writes and deletes `_mcp_program_check`. Moves nothing. |
 | `skill/SKILL.md` | Agent context — copy into `.claude/skills/robot-programming/`. |
 
 MCP is spoken directly over stdio rather than through the `mcp` SDK, so the only
