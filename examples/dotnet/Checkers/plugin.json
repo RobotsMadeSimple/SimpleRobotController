@@ -77,6 +77,28 @@
       "timeoutMs": 0
     },
     {
+      "id": "detectMove",
+      "label": "Detect human move (camera)",
+      "description": "Compare a camera reading of the board (colour inspections on an 8x8 grid zone) with the tracked game and find the legal move the side to move made. Does not apply it: confirm it over a few reads, then Apply opponent move.",
+      "params": [
+        { "key": "whiteCells",  "label": "White cells (vision)", "type": "list", "required": true },
+        { "key": "blackCells",  "label": "Black cells (vision)", "type": "list", "required": true },
+        { "key": "minCoverage", "label": "Min coverage % (0 = inspection pass/fail)", "type": "number", "default": 0 },
+        { "key": "orientation", "label": "Camera grid",          "type": "enum", "default": "normal", "options": ["normal", "rotated180"] }
+      ],
+      "outputs": [
+        { "key": "status",    "label": "same / move / unclear",     "type": "string" },
+        { "key": "from",      "label": "From square",               "type": "number" },
+        { "key": "to",        "label": "To square",                 "type": "number" },
+        { "key": "captured",  "label": "Captured squares",          "type": "list" },
+        { "key": "changed",   "label": "Squares that differ",       "type": "number" },
+        { "key": "whiteSeen", "label": "White pieces seen",         "type": "number" },
+        { "key": "blackSeen", "label": "Black pieces seen",         "type": "number" },
+        { "key": "moveText",  "label": "Status text",               "type": "string" }
+      ],
+      "timeoutMs": 0
+    },
+    {
       "id": "aiMove",
       "label": "Robot move",
       "description": "Compute and apply the robot's move for the side to move. Outputs the squares the arm must act on.",

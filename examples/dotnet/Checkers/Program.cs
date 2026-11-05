@@ -62,6 +62,23 @@ plugin.Step("applyMove", (ctx, p) =>
     return Task.FromResult(result);
 });
 
+// Compare a camera view of the board with the tracked game and work out the move the
+// human (the side to move) made, without applying it. whiteCells/blackCells are the
+// per-cell results of a colour inspection on an 8x8 grid zone (records with
+// row/col/coverage/passed, or plain coverage numbers / booleans, row-major).
+// status: "same" (board unchanged), "move" (matches exactly one legal move's result
+// — from/to/captured are set; confirm it over a few reads, then applyMove), or
+// "unclear" (changed but matches no legal move: mid-move, a hand over the board, a
+// captured piece not yet removed, or an illegal move).
+plugin.Step("detectMove", (ctx, p) =>
+{
+    double minCoverage = p.GetDouble("minCoverage", 0);   // 0 = use each inspection's own pass/fail
+    var white = ReadCells(p, "whiteCells", minCoverage);
+    var black = ReadCells(p, "blackCells", minCoverage);
+    bool rotated = string.Equals(p.GetString("orientation", "normal"), "rotated180", StringComparison.OrdinalIgnoreCase);
+    return Task.FromResult(game.DetectMove(white, black, rotated));
+});
+
 // Compute and apply the robot's move for the side to move. Outputs the squares the
 // arm must act on: fromSquare/toSquare, the full path (multi-jumps), captured
 // squares to clear, whether the piece was crowned, and game-over/winner.
@@ -163,6 +180,39 @@ static bool[] ReadBoolList(StepParams p, string key)
     return outList;
 }
 
+// Reads an 8x8 row-major cell list into "occupied" per 8x8 cell index. A record cell
+// counts when it passed its inspection (each colour has its own tuned range), or, when
+// minCoverage > 0, when its coverage reaches that; plain numbers are coverages (or 0/1
+// flags when minCoverage is 0) and booleans are taken as-is.
+static bool[] ReadCells(StepParams p, string key, double minCoverage)
+{
+    var cells = new bool[64];
+    if (!p.TryGet(key, out var v) || v.ValueKind != JsonValueKind.Array) return cells;
+    int i = 0;
+    foreach (var e in v.EnumerateArray())
+    {
+        int idx = i++;
+        bool on;
+        switch (e.ValueKind)
+        {
+            case JsonValueKind.Object:
+                if (e.TryGetProperty("index", out var ix) && ix.ValueKind == JsonValueKind.Number) idx = ix.GetInt32();
+                else if (e.TryGetProperty("row", out var r) && e.TryGetProperty("col", out var c)
+                         && r.ValueKind == JsonValueKind.Number && c.ValueKind == JsonValueKind.Number)
+                    idx = r.GetInt32() * 8 + c.GetInt32();
+                on = minCoverage > 0 && e.TryGetProperty("coverage", out var cov) && cov.ValueKind == JsonValueKind.Number
+                    ? cov.GetDouble() >= minCoverage
+                    : e.TryGetProperty("passed", out var ps) && ps.ValueKind == JsonValueKind.True;
+                break;
+            case JsonValueKind.Number: on = minCoverage > 0 ? e.GetDouble() >= minCoverage : e.GetDouble() != 0; break;
+            case JsonValueKind.True:   on = true; break;
+            default:                   on = false; break;
+        }
+        if (idx >= 0 && idx < 64) cells[idx] = on;
+    }
+    return cells;
+}
+
 /// <summary>One tracked game. All mutation goes through the lock because the session
 /// dispatches inbound step/function requests on the thread pool.</summary>
 sealed class Game
@@ -239,6 +289,58 @@ sealed class Game
             if (mv == null)
                 return new StepResult { ["legal"] = false, ["moveText"] = $"Illegal move {from}->{to}", ["gameOver"] = false };
             return Commit(mv, legal: true);
+        }
+    }
+
+    /// <summary>Works out which legal move of the side to move turns the tracked board into the
+    /// observed one (piece colours per dark square). Does not apply it.</summary>
+    public StepResult DetectMove(bool[] whiteCells, bool[] blackCells, bool rotated)
+    {
+        uint seenW = 0, seenB = 0;
+        for (int sq = 0; sq < CheckersEngine.BoardSquares; sq++)
+        {
+            var (r, c) = CheckersEngine.IdxToRc(rotated ? CheckersEngine.BoardSquares - 1 - sq : sq);
+            int cell = r * 8 + c;
+            // A cell that reads as both colours is ambiguous — treat it as neither so it can't match.
+            if (whiteCells[cell] && !blackCells[cell]) seenW |= 1u << sq;
+            if (blackCells[cell] && !whiteCells[cell]) seenB |= 1u << sq;
+        }
+        lock (_gate)
+        {
+            int changed = CheckersEngine.PopCount((seenW ^ _board.White) | (seenB ^ _board.Black));
+            var result = new StepResult
+            {
+                ["changed"] = (double)changed,
+                ["whiteSeen"] = (double)CheckersEngine.PopCount(seenW),
+                ["blackSeen"] = (double)CheckersEngine.PopCount(seenB),
+                ["turn"] = (double)(int)_turn,
+                ["from"] = -1.0,
+                ["to"] = -1.0,
+                ["captured"] = Array.Empty<double>(),
+            };
+            if (changed == 0)
+            {
+                result["status"] = "same";
+                result["moveText"] = "Board unchanged";
+                return result;
+            }
+            var match = CheckersEngine.LegalMoves(_board, _turn).FirstOrDefault(m =>
+            {
+                var after = CheckersEngine.ApplyMove(_board, _turn, m);
+                return after.White == seenW && after.Black == seenB;
+            });
+            if (match == null)
+            {
+                result["status"] = "unclear";
+                result["moveText"] = $"{changed} square(s) differ but no legal {Name(_turn)} move matches";
+                return result;
+            }
+            result["status"] = "move";
+            result["from"] = (double)match.Start;
+            result["to"] = (double)match.End;
+            result["captured"] = match.Captures.Select(x => (double)x).ToArray();
+            result["moveText"] = $"Saw {Name(_turn)} {string.Join(match.Captures.Length > 0 ? "x" : "->", match.Path)}";
+            return result;
         }
     }
 

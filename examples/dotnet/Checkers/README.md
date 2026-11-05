@@ -34,6 +34,7 @@ Black starts on rows 0–2 (squares 0–11) and moves down; white on rows 5–7
 | `newGame` | `firstPlayer` (black/white) | `turn`, `moveText` |
 | `setBoard` | `white`,`black`,`whiteKings`,`blackKings` (32-bool lists), `turn` | `legal`, `whiteCount`, `blackCount`, `winner` |
 | `applyMove` | `from`, `to` (squares) | `legal`, `captured` (list), `path`, `kinged`, `gameOver`, `winner` |
+| `detectMove` | `whiteCells`, `blackCells` (vision cell lists), `minCoverage?`, `orientation` (normal/rotated180) | `status` (same/move/unclear), `from`, `to`, `captured`, `changed`, `moveText` |
 | `aiMove` | `maxDepth?`, `timeBudgetMs?` | `fromSquare`, `toSquare`, `path` (list), `captured` (list), `kinged`, `gameOver`, `winner`, `moveText` |
 
 **Functions:** `checkers.pieceAt(square)` (0 empty, ±1 man, ±2 king; + white / − black),
@@ -57,6 +58,27 @@ Loop:
     If $checkers.gameOver: break
     (wait for the human's move, then) Plugin: checkers.applyMove(from,to)
 ```
+
+### Spotting the human's move with the camera
+
+`detectMove` takes the per-cell results of two colour inspections (white and black
+pieces) run on an **8x8 grid zone** over the board, works out which dark squares hold
+which colour, and compares that with the tracked game. If the change is exactly what
+one legal move of the side to move would produce, it reports `status: "move"` with
+`from`/`to`/`captured` — but does not apply it. Read it a few times in a row (so a hand
+still over the board, or a half-finished multi-jump, can't trigger it), then call
+`applyMove`. Anything else is `"same"` (nothing moved) or `"unclear"` (changed, no
+legal match: mid-move, hand in view, a jumped piece not yet removed, an illegal move).
+
+A cell counts as a piece when it **passed** its inspection (each colour keeps its own
+tuned coverage range); set `minCoverage` > 0 to use one threshold instead. The camera
+grid's row 0 / col 0 must be the board's row 0 / col 0 (black's side); if the camera
+sees the board the other way round, set `orientation` to `rotated180`.
+
+The ready-made program **"Checkers Game (camera)"** does all of this: the robot plays
+black on a taught 8x8 grid named *Checkers Board* (row r, col c = the board square),
+clears jumped pieces to the point *Checkers Discard*, parks above it while you move,
+and replies once the camera has seen your move.
 
 `point(square)` is the integration point you own: a saved **grid** over the
 board, or 32 named points `sq0..sq31`. The plugin only ever gives you the square
