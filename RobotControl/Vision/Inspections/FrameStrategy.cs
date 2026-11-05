@@ -148,33 +148,198 @@ namespace Controller.RobotControl.Vision.Inspections
             return Order(hull);
         }
 
-        private readonly record struct Line2(Point2f P, Point2f D);   // point + unit direction
+        internal readonly record struct Line2(Point2f P, Point2f D);   // point + unit direction
 
+        // Scored-quad search limits: candidate lines kept per direction, and the share of a
+        // side that must sit on edge pixels (a hand or a piece over a corner still passes).
+        private const int    MaxLinesPerFamily = 20;
+        private const double MinSideSupport    = 0.6;
+
+        /// <summary>
+        /// Edges → Hough segments → two direction families → each family's segments merged into
+        /// whole lines → every pair of lines from one family with every pair from the other makes
+        /// a candidate quad → keep the largest quad whose four sides are really on edges.
+        ///
+        /// Taking the two outermost lines of each family is not enough on a real table: wood
+        /// grain or a ruler gives long straight edges outside the board, and pieces cut the
+        /// board's own lines into short pieces. A grain line never closes a quad with the
+        /// board's sides — the sides' extensions to it are not on any edge — so it scores low.
+        /// </summary>
         private static Point2f[]? ByLines(FrameContext ctx, FrameInspection insp, VisionZone? zone, Mat mask)
         {
             int w = ctx.Width, h = ctx.Height;
             var bounds = zone != null ? ZoneGeometry.ZoneBounds(zone.Geometry, w, h) : new Rect(0, 0, w, h);
             double minLen = Math.Max(5, Math.Min(bounds.Width, bounds.Height) * Math.Max(0, insp.MinLineLengthPct) / 100.0);
             using var edges = MaskedEdges(ctx, insp.CannyLow, insp.CannyHigh, mask);
-            var segs = Cv2.HoughLinesP(edges, 1, Math.PI / 180, Math.Max(1, insp.HoughThreshold), minLen, Math.Max(0, insp.MaxLineGap));
+            // Hough runs on edges thickened to 3 px: a long one-pixel edge a fraction of a degree
+            // off the 1° angle grid otherwise breaks into short pieces under minLen and vanishes,
+            // while perfectly level clutter (wood grain) survives.
+            using var thick = new Mat();
+            using (var k3 = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(3, 3)))
+                Cv2.Dilate(edges, thick, k3);
+            var segs = Cv2.HoughLinesP(thick, 1, Math.PI / 180, Math.Max(1, insp.HoughThreshold), minLen, Math.Max(0, insp.MaxLineGap));
             if (segs.Length < 4) return null;
 
             var (famA, famB) = SplitDirections(segs);
-            var outA = Outermost(famA);
-            var outB = Outermost(famB);
-            if (outA == null || outB == null) return null;
+            var linesA = MergeLines(famA);
+            var linesB = MergeLines(famB);
+            if (linesA.Count < 2 || linesB.Count < 2) return null;
 
-            var corners = new List<Point2f>();
-            foreach (var la in new[] { outA.Value.Lo, outA.Value.Hi })
-            foreach (var lb in new[] { outB.Value.Lo, outB.Value.Hi })
+            using var support = new Mat();
+            using (var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(5, 5)))
+                Cv2.Dilate(edges, support, kernel);   // a line a pixel or two off its edge still counts
+
+            double minArea = Cv2.CountNonZero(mask) * Math.Max(0, insp.MinAreaPct) / 100.0;
+            Point2f[]? best = null;
+            double bestArea = 0;
+            for (int i = 0; i < linesA.Count; i++)
+            for (int j = i + 1; j < linesA.Count; j++)
+            for (int k = 0; k < linesB.Count; k++)
+            for (int l = k + 1; l < linesB.Count; l++)
             {
-                var p = Intersect(la, lb);
-                if (p == null) return null;
-                // A corner far outside the frame means the "edges" were not a frame.
-                if (p.Value.X < -0.25 * w || p.Value.X > 1.25 * w || p.Value.Y < -0.25 * h || p.Value.Y > 1.25 * h) return null;
-                corners.Add(p.Value);
+                var corners = new List<Point2f>(4);
+                foreach (var la in new[] { linesA[i], linesA[j] })
+                foreach (var lb in new[] { linesB[k], linesB[l] })
+                    if (Intersect(la, lb) is { } p) corners.Add(p);
+                if (corners.Count != 4) continue;
+                var q = Order(corners);
+                if (q == null || !ZoneGeometry.Convex(q)) continue;
+                if (q.Any(p => p.X < -2 || p.X > w + 2 || p.Y < -2 || p.Y > h + 2)) continue;
+                double area = Math.Abs(Cv2.ContourArea(q));
+                if (area < minArea || area <= bestArea) continue;
+                if (Enumerable.Range(0, 4).Any(s => SideSupport(support, q[s], q[(s + 1) % 4]) < MinSideSupport)) continue;
+                // A frame's corners are real: lines extended past the board into empty table
+                // (to meet a grain line) leave the stretch next to the corner bare. One corner may
+                // be hidden (a hand), so three of four must be on edges.
+                if (Enumerable.Range(0, 4).Count(i => CornerSupported(support, q, i)) < 3) continue;
+                best = q; bestArea = area;
             }
-            return Order(corners);
+            return best == null ? null : RefineSides(edges, best) ?? best;
+        }
+
+        /// <summary>
+        /// Re-fits each side of a found quad to the edge pixels in a narrow band around it, and
+        /// intersects the refits: Hough lines are quantised to a degree and a pixel, and a corner
+        /// a few pixels off moves every aligned grid cell with it.
+        /// </summary>
+        private static Point2f[]? RefineSides(Mat edges, Point2f[] q)
+        {
+            const double band = 3;
+            var lines = new Line2[4];
+            for (int s = 0; s < 4; s++)
+            {
+                var a = q[s]; var b = q[(s + 1) % 4];
+                double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+                if (len < 10) return null;
+                double ux = dx / len, uy = dy / len;
+                var pts = new List<Point2f>();
+                int x0 = (int)Math.Max(0, Math.Min(a.X, b.X) - band), x1 = (int)Math.Min(edges.Width - 1, Math.Max(a.X, b.X) + band);
+                int y0 = (int)Math.Max(0, Math.Min(a.Y, b.Y) - band), y1 = (int)Math.Min(edges.Height - 1, Math.Max(a.Y, b.Y) + band);
+                for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++)
+                {
+                    if (edges.At<byte>(y, x) == 0) continue;
+                    double rx = x - a.X, ry = y - a.Y;
+                    double t = rx * ux + ry * uy, d = Math.Abs(rx * uy - ry * ux);
+                    if (d <= band && t > 0.08 * len && t < 0.92 * len) pts.Add(new Point2f(x, y));
+                }
+                if (pts.Count < 10) return null;
+                var fl = Cv2.FitLine(pts, DistanceTypes.Huber, 0, 0.01, 0.01);
+                lines[s] = new Line2(new Point2f((float)fl.X1, (float)fl.Y1), new Point2f((float)fl.Vx, (float)fl.Vy));
+            }
+            var outQ = new Point2f[4];
+            for (int i = 0; i < 4; i++)
+            {
+                if (Intersect(lines[(i + 3) % 4], lines[i]) is not { } p) return null;
+                if (Math.Abs(p.X - q[i].X) > 8 || Math.Abs(p.Y - q[i].Y) > 8) return null;   // refits only nudge
+                outQ[i] = p;
+            }
+            return outQ;
+        }
+
+        /// <summary>
+        /// True when corner i is a real corner: both sides lie on edges for the stretch next to
+        /// it, and neither carries on past it — a board edge ends at the board's corner, while a
+        /// table-grain line it was intersected with keeps going.
+        /// </summary>
+        private static bool CornerSupported(Mat edges, Point2f[] q, int i)
+        {
+            var c = q[i];
+            foreach (var other in new[] { q[(i + 1) % 4], q[(i + 3) % 4] })
+            {
+                var near   = new Point2f(c.X + (other.X - c.X) * 0.15f, c.Y + (other.Y - c.Y) * 0.15f);
+                var beyond = new Point2f(c.X - (other.X - c.X) * 0.12f, c.Y - (other.Y - c.Y) * 0.12f);
+                if (SideSupport(edges, c, near, 0.1, 0.9) < 0.75) return false;
+                // A line that carries on gives one long unbroken run; lines merely crossing the
+                // stretch (grain, a ruler) give short blips.
+                if (LongestRun(edges, c, beyond, 0.25, 1.0) > 0.5) return false;
+            }
+            return true;
+        }
+
+        /// <summary>The longest unbroken run of edge pixels along a→b (between t0..t1), as a share of the samples.</summary>
+        private static double LongestRun(Mat edges, Point2f a, Point2f b, double t0, double t1)
+        {
+            const int samples = 40;
+            int run = 0, best = 0, n = 0;
+            for (int i = 0; i < samples; i++)
+            {
+                double t = t0 + (t1 - t0) * i / (samples - 1);
+                int x = (int)Math.Round(a.X + (b.X - a.X) * t), y = (int)Math.Round(a.Y + (b.Y - a.Y) * t);
+                if (x < 0 || y < 0 || x >= edges.Width || y >= edges.Height) { run = 0; continue; }
+                n++;
+                run = edges.At<byte>(y, x) != 0 ? run + 1 : 0;
+                best = Math.Max(best, run);
+            }
+            return n == 0 ? 0 : best / (double)n;
+        }
+
+        /// <summary>Share of points along a→b (between fractions t0..t1) that land on an edge pixel.</summary>
+        private static double SideSupport(Mat edges, Point2f a, Point2f b, double t0 = 0.05, double t1 = 0.95)
+        {
+            const int samples = 40;
+            int on = 0, n = 0;
+            for (int i = 0; i < samples; i++)
+            {
+                double t = t0 + (t1 - t0) * i / (samples - 1);
+                int x = (int)Math.Round(a.X + (b.X - a.X) * t), y = (int)Math.Round(a.Y + (b.Y - a.Y) * t);
+                if (x < 0 || y < 0 || x >= edges.Width || y >= edges.Height) continue;
+                n++;
+                if (edges.At<byte>(y, x) != 0) on++;
+            }
+            return n == 0 ? 0 : on / (double)n;
+        }
+
+        /// <summary>
+        /// Segments of one direction family merged into whole lines: segments at about the same
+        /// angle and offset are pieces of one line (cut by pieces, a hand, gaps). Longest first.
+        /// </summary>
+        internal static List<Line2> MergeLines(List<LineSegmentPoint> fam)
+        {
+            double Len(LineSegmentPoint s) => Math.Sqrt(Math.Pow(s.P2.X - s.P1.X, 2) + Math.Pow(s.P2.Y - s.P1.Y, 2));
+            var groups = new List<(double Angle, double Offset, List<LineSegmentPoint> Segs, double Total)>();
+            foreach (var sgm in fam.OrderByDescending(Len))
+            {
+                double ang = LineStrategy.SegmentAngle(sgm) * Math.PI / 180;
+                double nx = -Math.Sin(ang), ny = Math.Cos(ang);
+                double off = (sgm.P1.X + sgm.P2.X) / 2.0 * nx + (sgm.P1.Y + sgm.P2.Y) / 2.0 * ny;
+                int gi = groups.FindIndex(g =>
+                {
+                    double d = Math.Abs(g.Angle - ang) % Math.PI; d = Math.Min(d, Math.PI - d);
+                    if (d > 3 * Math.PI / 180) return false;
+                    double gnx = -Math.Sin(g.Angle), gny = Math.Cos(g.Angle);
+                    double o = (sgm.P1.X + sgm.P2.X) / 2.0 * gnx + (sgm.P1.Y + sgm.P2.Y) / 2.0 * gny;
+                    return Math.Abs(o - g.Offset) < 3;
+                });
+                if (gi < 0) groups.Add((ang, off, new List<LineSegmentPoint> { sgm }, Len(sgm)));
+                else { var g = groups[gi]; g.Segs.Add(sgm); groups[gi] = (g.Angle, g.Offset, g.Segs, g.Total + Len(sgm)); }
+            }
+            return groups.OrderByDescending(g => g.Total).Take(MaxLinesPerFamily).Select(g =>
+            {
+                var pts = g.Segs.SelectMany(x => new[] { new Point2f(x.P1.X, x.P1.Y), new Point2f(x.P2.X, x.P2.Y) }).ToArray();
+                var fl = Cv2.FitLine(pts, DistanceTypes.L2, 0, 0.01, 0.01);
+                return new Line2(new Point2f((float)fl.X1, (float)fl.Y1), new Point2f((float)fl.Vx, (float)fl.Vy));
+            }).ToList();
         }
 
         /// <summary>
@@ -215,33 +380,6 @@ namespace Controller.RobotControl.Vision.Inspections
             // Two "families" pointing nearly the same way are one family: not a frame.
             if (ca.X * cb.X + ca.Y * cb.Y > Math.Cos(2 * 30 * Math.PI / 180)) b.Clear();
             return (a, b);
-        }
-
-        /// <summary>The two lines of a family furthest apart along the family's normal.</summary>
-        private static (Line2 Lo, Line2 Hi)? Outermost(List<LineSegmentPoint> fam)
-        {
-            if (fam.Count < 2) return null;
-            // Mean direction (doubled-angle average handles the 0/180 wrap).
-            double sx = 0, sy = 0;
-            foreach (var s in fam)
-            {
-                double a = 2 * Math.Atan2(s.P2.Y - s.P1.Y, s.P2.X - s.P1.X);
-                double len = Math.Sqrt(Math.Pow(s.P2.X - s.P1.X, 2) + Math.Pow(s.P2.Y - s.P1.Y, 2));
-                sx += Math.Cos(a) * len; sy += Math.Sin(a) * len;
-            }
-            double mean = Math.Atan2(sy, sx) / 2;
-            double nx = -Math.Sin(mean), ny = Math.Cos(mean);
-            double Offset(LineSegmentPoint s) => ((s.P1.X + s.P2.X) / 2.0) * nx + ((s.P1.Y + s.P2.Y) / 2.0) * ny;
-            var lo = fam.OrderBy(Offset).First();
-            var hi = fam.OrderByDescending(Offset).First();
-            if (Math.Abs(Offset(hi) - Offset(lo)) < 10) return null;   // only one edge of the frame seen
-            return (ToLine(lo), ToLine(hi));
-        }
-
-        private static Line2 ToLine(LineSegmentPoint s)
-        {
-            double dx = s.P2.X - s.P1.X, dy = s.P2.Y - s.P1.Y, len = Math.Sqrt(dx * dx + dy * dy);
-            return new Line2(new Point2f(s.P1.X, s.P1.Y), new Point2f((float)(dx / len), (float)(dy / len)));
         }
 
         private static Point2f? Intersect(Line2 a, Line2 b)

@@ -152,6 +152,20 @@ public class VisionAlignmentTests
     }
 
     [Fact]
+    public void LinesIgnoreTableGrainOutsideTheBoard()
+    {
+        // Long, perfectly level "grain" lines just above and below the board: intersected with
+        // the board's sides they make a bigger quad, but its corners are not real corners.
+        using var img = Render(PoseA);
+        foreach (int y in new[] { 85, 95 - 18, 428, 440 })
+            Cv2.Line(img, new Point(0, y), new Point(W - 1, y), new Scalar(150, 190, 215), 1);
+        using var ctx = new FrameContext(img);
+        var d = InspectionPlan.Frame.Run(ctx, new FrameInspection { Id = "f", Method = "lines" }, null);
+        Assert.True(d.Result.Found);
+        AssertNear(PoseA, d.Result.Corners, 6);
+    }
+
+    [Fact]
     public void NoFrameOnABlankImage()
     {
         using var img = new Mat(H, W, MatType.CV_8UC3, Scalar.All(0));

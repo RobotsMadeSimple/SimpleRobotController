@@ -202,7 +202,9 @@ static bool[] ReadCells(StepParams p, string key, double minCoverage)
                     idx = r.GetInt32() * 8 + c.GetInt32();
                 on = minCoverage > 0 && e.TryGetProperty("coverage", out var cov) && cov.ValueKind == JsonValueKind.Number
                     ? cov.GetDouble() >= minCoverage
-                    : e.TryGetProperty("passed", out var ps) && ps.ValueKind == JsonValueKind.True;
+                    // A RunVision cells list stores passed as 1/0 (program values are numbers).
+                    : e.TryGetProperty("passed", out var ps) && (ps.ValueKind == JsonValueKind.True
+                        || (ps.ValueKind == JsonValueKind.Number && ps.GetDouble() != 0));
                 break;
             case JsonValueKind.Number: on = minCoverage > 0 ? e.GetDouble() >= minCoverage : e.GetDouble() != 0; break;
             case JsonValueKind.True:   on = true; break;
