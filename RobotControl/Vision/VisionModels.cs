@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Controller.RobotControl.Vision
 {
     [JsonConverter(typeof(JsonStringEnumConverter))]
-    public enum VisionZoneShape { Rectangle, Circle, Polygon }
+    public enum VisionZoneShape { Rectangle, Circle, Polygon, Quad }
 
     /// <summary>Normalized (0–1) zone geometry relative to the camera frame.</summary>
     public class VisionZoneGeometry
@@ -34,7 +34,9 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("cy")]     public double Cy     { get; set; } = 0.5;
         [JsonPropertyName("radius")] public double Radius { get; set; } = 0.25;
 
-        // Polygon — list of [x, y] pairs (0-1 each)
+        // Polygon — list of [x, y] pairs (0-1 each).
+        // Quad — exactly 4 corners TL, TR, BR, BL: a skewed (perspective) zone whose grid cells
+        // follow the perspective, for a board seen at an angle.
         [JsonPropertyName("points")] public List<double[]> Points { get; set; } = new();
     }
 
@@ -75,6 +77,12 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("name")]     public string             Name     { get; set; } = "";
         [JsonPropertyName("geometry")] public VisionZoneGeometry Geometry { get; set; } = new();
         [JsonPropertyName("grid")]     public VisionZoneGrid?    Grid     { get; set; }
+        /// <summary>
+        /// Id of a frame inspection that aligns this zone each frame: the zone is warped by the
+        /// homography from the frame's reference corners to the corners detected this frame.
+        /// Null = the zone is used as drawn.
+        /// </summary>
+        [JsonPropertyName("alignTo")]  public string?            AlignTo  { get; set; }
     }
 
     /// <summary>
@@ -281,6 +289,109 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("codes")]        public List<BarcodeCodeResult> Codes        { get; set; } = new();
     }
 
+    // ── Frame / corner / edge inspections ────────────────────────────────────────
+
+    /// <summary>
+    /// Finds a four-cornered frame (a board's outline) so other zones can be aligned to it.
+    /// method: "contour" (largest 4-sided contour), "lines" (two pairs of dominant edges,
+    /// intersected) or "corners" (Shi-Tomasi corners, the four extreme hull points).
+    /// </summary>
+    public class FrameInspection : IVisionInspection
+    {
+        [JsonPropertyName("id")]                public string  Id                { get; set; } = "";
+        [JsonPropertyName("name")]              public string  Name              { get; set; } = "";
+        [JsonPropertyName("enabled")]           public bool    Enabled           { get; set; } = true;
+        [JsonPropertyName("zoneId")]            public string? ZoneId            { get; set; }
+        [JsonPropertyName("method")]            public string  Method            { get; set; } = "contour";
+        [JsonPropertyName("cannyLow")]          public double  CannyLow          { get; set; } = 50;
+        [JsonPropertyName("cannyHigh")]         public double  CannyHigh         { get; set; } = 150;
+        /// <summary>contour: smallest frame accepted, as % of the search area.</summary>
+        [JsonPropertyName("minAreaPct")]        public double  MinAreaPct        { get; set; } = 10;
+        /// <summary>contour: approxPolyDP epsilon as a fraction of the contour perimeter.</summary>
+        [JsonPropertyName("approxEpsilon")]     public double  ApproxEpsilon     { get; set; } = 0.02;
+        [JsonPropertyName("houghThreshold")]    public int     HoughThreshold    { get; set; } = 60;
+        /// <summary>lines: shortest segment, as % of the search area's smaller side.</summary>
+        [JsonPropertyName("minLineLengthPct")]  public double  MinLineLengthPct  { get; set; } = 20;
+        [JsonPropertyName("maxLineGap")]        public double  MaxLineGap        { get; set; } = 10;
+        [JsonPropertyName("maxCorners")]        public int     MaxCorners        { get; set; } = 200;
+        [JsonPropertyName("cornerQuality")]     public double  CornerQuality     { get; set; } = 0.01;
+        [JsonPropertyName("minCornerDistance")] public double  MinCornerDistance { get; set; } = 10;
+        /// <summary>The frame's corners (TL, TR, BR, BL, normalized) when the aligned zones were
+        /// drawn. Aligned zones are warped from these to the corners detected each frame.</summary>
+        [JsonPropertyName("referenceCorners")]  public List<double[]>? ReferenceCorners { get; set; }
+    }
+
+    public class FrameResult
+    {
+        [JsonPropertyName("inspectionId")] public string         InspectionId { get; set; } = "";
+        [JsonPropertyName("name")]         public string         Name         { get; set; } = "";
+        [JsonPropertyName("found")]        public bool           Found        { get; set; }
+        /// <summary>TL, TR, BR, BL, normalized; empty when not found.</summary>
+        [JsonPropertyName("corners")]      public List<double[]> Corners      { get; set; } = new();
+        /// <summary>Angle of the TL→TR edge against +x, degrees (pixel space).</summary>
+        [JsonPropertyName("angle")]        public double         Angle        { get; set; }
+        /// <summary>Frame area as % of the image.</summary>
+        [JsonPropertyName("areaPct")]      public double         AreaPct      { get; set; }
+        [JsonPropertyName("method")]       public string         Method       { get; set; } = "";
+    }
+
+    /// <summary>Corner (feature point) detection: Shi-Tomasi or Harris.</summary>
+    public class CornerInspection : IVisionInspection
+    {
+        [JsonPropertyName("id")]          public string  Id          { get; set; } = "";
+        [JsonPropertyName("name")]        public string  Name        { get; set; } = "";
+        [JsonPropertyName("enabled")]     public bool    Enabled     { get; set; } = true;
+        [JsonPropertyName("zoneId")]      public string? ZoneId      { get; set; }
+        [JsonPropertyName("method")]      public string  Method      { get; set; } = "shiTomasi";
+        [JsonPropertyName("maxCorners")]  public int     MaxCorners  { get; set; } = 50;
+        [JsonPropertyName("quality")]     public double  Quality     { get; set; } = 0.01;
+        [JsonPropertyName("minDistance")] public double  MinDistance { get; set; } = 10;
+        [JsonPropertyName("blockSize")]   public int     BlockSize   { get; set; } = 3;
+        /// <summary>found = at least this many corners.</summary>
+        [JsonPropertyName("minCount")]    public int     MinCount    { get; set; } = 1;
+    }
+
+    public class CornerResult
+    {
+        [JsonPropertyName("inspectionId")] public string         InspectionId { get; set; } = "";
+        [JsonPropertyName("name")]         public string         Name         { get; set; } = "";
+        [JsonPropertyName("count")]        public int            Count        { get; set; }
+        [JsonPropertyName("found")]        public bool           Found        { get; set; }
+        /// <summary>Normalized [x, y], strongest first.</summary>
+        [JsonPropertyName("points")]       public List<double[]> Points       { get; set; } = new();
+    }
+
+    /// <summary>Edge detection (Canny): how much of the zone is edge, and its dominant direction.</summary>
+    public class EdgeInspection : IVisionInspection
+    {
+        [JsonPropertyName("id")]         public string  Id         { get; set; } = "";
+        [JsonPropertyName("name")]       public string  Name       { get; set; } = "";
+        [JsonPropertyName("enabled")]    public bool    Enabled    { get; set; } = true;
+        [JsonPropertyName("zoneId")]     public string? ZoneId     { get; set; }
+        [JsonPropertyName("cannyLow")]   public double  CannyLow   { get; set; } = 50;
+        [JsonPropertyName("cannyHigh")]  public double  CannyHigh  { get; set; } = 150;
+        /// <summary>passed when the edge density (% of zone pixels) is within [min, max].</summary>
+        [JsonPropertyName("minDensity")] public double? MinDensity { get; set; } = 0;
+        [JsonPropertyName("maxDensity")] public double? MaxDensity { get; set; }
+    }
+
+    public class EdgeResult
+    {
+        [JsonPropertyName("inspectionId")]  public string  InspectionId  { get; set; } = "";
+        [JsonPropertyName("name")]          public string  Name          { get; set; } = "";
+        [JsonPropertyName("density")]       public double  Density       { get; set; }
+        [JsonPropertyName("passed")]        public bool    Passed        { get; set; }
+        /// <summary>Direction of the strongest straight edge, 0–180°, null when none.</summary>
+        [JsonPropertyName("dominantAngle")] public double? DominantAngle { get; set; }
+    }
+
+    /// <summary>The outline a zone was actually used with this frame, after alignment.</summary>
+    public class AlignedZone
+    {
+        [JsonPropertyName("zoneId")] public string         ZoneId { get; set; } = "";
+        [JsonPropertyName("points")] public List<double[]> Points { get; set; } = new();
+    }
+
     public class VisionProgram
     {
         [JsonPropertyName("id")]                  public string                        Id                 { get; set; } = "";
@@ -294,6 +405,9 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("arucoInspections")]    public List<ArucoInspection>         ArucoInspections    { get; set; } = new();
         [JsonPropertyName("lineInspections")]     public List<LineInspection>          LineInspections     { get; set; } = new();
         [JsonPropertyName("barcodeInspections")] public List<BarcodeInspection>       BarcodeInspections  { get; set; } = new();
+        [JsonPropertyName("frameInspections")]  public List<FrameInspection>         FrameInspections    { get; set; } = new();
+        [JsonPropertyName("cornerInspections")] public List<CornerInspection>        CornerInspections   { get; set; } = new();
+        [JsonPropertyName("edgeInspections")]   public List<EdgeInspection>          EdgeInspections     { get; set; } = new();
         // Order of inspections as a flat list of ids across all the typed lists above. The
         // editor lets the user drag inspections into any order; the processor runs (and
         // stacks labels) in this order. Ids missing from the list run after the listed ones,
@@ -302,8 +416,8 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("lastUpdatedUnixMs")]   public long                          LastUpdatedUnixMs   { get; set; }
 
         /// <summary>
-        /// Every inspection across the six typed lists, in type order: blob, color, polygon,
-        /// ArUco, line, barcode — each list in its stored order. Ignores InspectionOrder.
+        /// Every inspection across the typed lists, in type order: blob, color, polygon,
+        /// ArUco, line, barcode, frame, corner, edge — each list in its stored order. Ignores InspectionOrder.
         /// A list sent as JSON null is treated as empty.
         /// </summary>
         public IEnumerable<IVisionInspection> AllInspections()
@@ -314,6 +428,9 @@ namespace Controller.RobotControl.Vision
             foreach (var i in ArucoInspections ?? [])   yield return i;
             foreach (var i in LineInspections ?? [])    yield return i;
             foreach (var i in BarcodeInspections ?? []) yield return i;
+            foreach (var i in FrameInspections ?? [])   yield return i;
+            foreach (var i in CornerInspections ?? [])  yield return i;
+            foreach (var i in EdgeInspections ?? [])    yield return i;
         }
     }
 
@@ -346,6 +463,11 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("arucoResults")]    public List<ArucoResult>    ArucoResults    { get; set; } = new();
         [JsonPropertyName("lineResults")]     public List<LineResult>     LineResults     { get; set; } = new();
         [JsonPropertyName("barcodeResults")] public List<BarcodeResult>  BarcodeResults  { get; set; } = new();
+        [JsonPropertyName("frameResults")]   public List<FrameResult>    FrameResults    { get; set; } = new();
+        [JsonPropertyName("cornerResults")]  public List<CornerResult>   CornerResults   { get; set; } = new();
+        [JsonPropertyName("edgeResults")]    public List<EdgeResult>     EdgeResults     { get; set; } = new();
+        /// <summary>Zones warped by a frame inspection this frame, as the outline actually used.</summary>
+        [JsonPropertyName("alignedZones")]   public List<AlignedZone>    AlignedZones    { get; set; } = new();
         // How long each inspection took to run this frame, in milliseconds, keyed by
         // inspection id. Shown on the editor's inspection cards.
         [JsonPropertyName("timings")]         public Dictionary<string, double> Timings { get; set; } = new();

@@ -517,11 +517,26 @@ program variables.
 | `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar, cellsVar, cellsPassedVar }`. |
 | `polygonOutputs` | Polygon/shape → `{ inspectionId, countVar, foundVar, angleVar, centerXVar, centerYVar }`. |
 | `arucoOutputs` | ArUco markers → `{ inspectionId, countVar, foundVar, firstIdVar, firstCenterXVar, firstCenterYVar }`. |
-| `outputFrame` | Frame of the positions written above (blob `pointsVar` points, polygon `centerXVar`/`centerYVar`, ArUco `firstCenterXVar`/`firstCenterYVar`): `"pixel"`, `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Unset keeps the original mix: blob points in pixels, polygon/ArUco centers normalized. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
+| `frameOutputs` | Frame (alignment) → `{ inspectionId, foundVar, cornersVar, angleVar }`. `cornersVar` receives a `Point` list TL, TR, BR, BL (emptied when the frame is not found). |
+| `cornerOutputs` | Corners → `{ inspectionId, countVar, foundVar, pointsVar }`. `pointsVar` receives a `Point` list, strongest first. |
+| `edgeOutputs` | Edges → `{ inspectionId, densityVar, passedVar, angleVar }` (edge density % of the zone, its pass/fail, the dominant edge's angle 0–180°). |
+| `outputFrame` | Frame of the positions written above (blob `pointsVar` points, polygon `centerXVar`/`centerYVar`, ArUco `firstCenterXVar`/`firstCenterYVar`, frame `cornersVar`, corner `pointsVar`): `"pixel"`, `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Unset keeps the original mix: blob points in pixels, polygon/ArUco centers normalized. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
 | `waitTimeoutMs` | Max time to wait for a fresh vision result (default 30 000 ms; `0` or less waits forever). Expiry ends the program with an error. |
 
 Each `*Var` names a program variable that receives that result (counts, points,
 booleans, angles, coordinates).
+
+**Skewed grids and alignment.** A zone can be a **Quad** — four corners TL, TR, BR,
+BL — and a gridded Quad lays its cells out with the perspective, so a board seen at an
+angle from the side still reads square by square (row-major index, row 0 along TL→TR).
+A zone can also be **aligned** (`alignTo`) to a **frame inspection**, which finds a
+four-cornered outline each frame by its edges (`contour`), its straight edge lines
+(`lines` — still works with a corner hidden behind a hand) or its corners (`corners`).
+The zone is warped by the homography from the frame's `referenceCorners` (set in the
+editor while the zones are drawn) to the corners found now, so the grid follows the
+board if it or the camera moves. Frame inspections always run first. When the frame
+is not found, inspections on its zones are skipped for that frame (an `errors` entry
+says so) rather than read cells from a guessed position.
 
 If an inspection throws while processing a frame, the vision result carries an
 `errors` entry (`"<inspectionId>: <message>"`) and that inspection reports no

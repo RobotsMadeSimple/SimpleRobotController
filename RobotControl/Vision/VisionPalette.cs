@@ -34,6 +34,12 @@ namespace Controller.RobotControl.Vision
         public static readonly Scalar LineSegment    = new(168, 85, 247);
         /// <summary>Dodger blue.</summary>
         public static readonly Scalar Barcode        = new(30, 144, 255);
+        /// <summary>Hot pink — a detected alignment frame and its corners.</summary>
+        public static readonly Scalar Frame          = new(180, 105, 255);
+        /// <summary>Gold — detected corner points.</summary>
+        public static readonly Scalar Corner         = new(0, 215, 255);
+        /// <summary>Light cyan — edge pixels.</summary>
+        public static readonly Scalar Edge           = new(255, 230, 120);
 
         // ── Debug frames ────────────────────────────────────────────────────────
         public static readonly Scalar DebugMatched   = new(0, 210, 0);

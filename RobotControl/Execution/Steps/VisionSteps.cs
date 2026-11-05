@@ -234,6 +234,60 @@ namespace Controller.RobotControl.Execution
                         vars.Set(output.CenterYVar, pcy);
                 }
 
+                foreach (var output in step.FrameOutputs ?? [])
+                {
+                    var fr = result.FrameResults.Find(r => r.InspectionId == output.InspectionId);
+                    if (fr == null) continue;
+
+                    if (!string.IsNullOrEmpty(output.FoundVar))
+                        vars.Set(output.FoundVar, fr.Found ? 1 : 0);
+
+                    // Not found → emptied, so a program never acts on last frame's corners.
+                    if (!string.IsNullOrEmpty(output.CornersVar))
+                        vars.SetList(output.CornersVar, ListVar.OfPoints(fr.Corners.Select(c =>
+                        {
+                            var (x, y, z) = frame.FromNormalized(c[0], c[1]);
+                            return new Vector6Val { X = x, Y = y, Z = z };
+                        })));
+
+                    if (!string.IsNullOrEmpty(output.AngleVar))
+                        vars.Set(output.AngleVar, fr.Angle);
+                }
+
+                foreach (var output in step.CornerOutputs ?? [])
+                {
+                    var cr = result.CornerResults.Find(r => r.InspectionId == output.InspectionId);
+                    if (cr == null) continue;
+
+                    if (!string.IsNullOrEmpty(output.CountVar))
+                        vars.Set(output.CountVar, cr.Count);
+
+                    if (!string.IsNullOrEmpty(output.FoundVar))
+                        vars.Set(output.FoundVar, cr.Found ? 1 : 0);
+
+                    if (!string.IsNullOrEmpty(output.PointsVar))
+                        vars.SetList(output.PointsVar, ListVar.OfPoints(cr.Points.Select(p =>
+                        {
+                            var (x, y, z) = frame.FromNormalized(p[0], p[1]);
+                            return new Vector6Val { X = x, Y = y, Z = z };
+                        })));
+                }
+
+                foreach (var output in step.EdgeOutputs ?? [])
+                {
+                    var er = result.EdgeResults.Find(r => r.InspectionId == output.InspectionId);
+                    if (er == null) continue;
+
+                    if (!string.IsNullOrEmpty(output.DensityVar))
+                        vars.Set(output.DensityVar, er.Density);
+
+                    if (!string.IsNullOrEmpty(output.PassedVar))
+                        vars.Set(output.PassedVar, er.Passed ? 1 : 0);
+
+                    if (!string.IsNullOrEmpty(output.AngleVar))
+                        vars.Set(output.AngleVar, er.DominantAngle ?? 0);
+                }
+
                 foreach (var output in step.ArucoOutputs ?? [])
                 {
                     var ar = result.ArucoResults.Find(r => r.InspectionId == output.InspectionId);

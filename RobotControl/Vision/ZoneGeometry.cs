@@ -56,10 +56,11 @@ namespace Controller.RobotControl.Vision
                     return dx * dx + dy * dy <= r * r;
                 }
                 case VisionZoneShape.Polygon:
+                case VisionZoneShape.Quad:
                 {
                     var pts = geom.Points;
                     int n   = pts.Count;
-                    if (n < 3) return false;
+                    if (n < 3 || (geom.Shape == VisionZoneShape.Quad && n != 4)) return false;
                     bool inside = false;
                     for (int i = 0, j = n - 1; i < n; j = i++)
                     {
@@ -111,8 +112,9 @@ namespace Controller.RobotControl.Vision
                     break;
                 }
                 case VisionZoneShape.Polygon:
+                case VisionZoneShape.Quad:
                 {
-                    if (geom.Points.Count >= 3)
+                    if (geom.Shape == VisionZoneShape.Quad ? geom.Points.Count == 4 : geom.Points.Count >= 3)
                     {
                         var pts = geom.Points
                             .Select(p => new Point(
@@ -126,11 +128,135 @@ namespace Controller.RobotControl.Vision
             }
         }
 
-        // ── Rotated rectangles ───────────────────────────────────────────────────
+        // ── Rotated rectangles and quads ─────────────────────────────────────────
 
         /// <summary>True when this geometry is a rectangle that is actually tilted.</summary>
         public static bool IsRotatedRect(VisionZoneGeometry geom) =>
             geom.Shape == VisionZoneShape.Rectangle && Math.Abs(geom.Rotation) > 1e-9;
+
+        /// <summary>True for a well-formed four-corner (perspective) zone.</summary>
+        public static bool IsQuad(VisionZoneGeometry geom) =>
+            geom.Shape == VisionZoneShape.Quad && geom.Points.Count == 4;
+
+        /// <summary>
+        /// True when grid cells are quadrilaterals rather than upright rects: a tilted
+        /// rectangle or a perspective quad. Those cells are measured with a mask of their own.
+        /// </summary>
+        public static bool HasQuadCells(VisionZoneGeometry geom) => IsRotatedRect(geom) || IsQuad(geom);
+
+        /// <summary>A quad zone's corners (TL, TR, BR, BL) in pixels.</summary>
+        public static Point2f[] QuadCorners(VisionZoneGeometry geom, int w, int h) =>
+            geom.Points.Select(p => new Point2f((float)(p[0] * w), (float)(p[1] * h))).ToArray();
+
+        /// <summary>
+        /// The homography taking the unit square onto a quad: (0,0)→TL, (1,0)→TR, (1,1)→BR,
+        /// (0,1)→BL. A grid laid out in the unit square and mapped through this follows the
+        /// perspective of a board seen at an angle — far rows come out shorter, as they look.
+        /// </summary>
+        public static double[][] UnitSquareTo(Point2f[] quad)
+        {
+            var src = new[] { new Point2f(0, 0), new Point2f(1, 0), new Point2f(1, 1), new Point2f(0, 1) };
+            using var m = Cv2.GetPerspectiveTransform(src, quad);
+            return Calibration.Homography.FromMat(m);
+        }
+
+        /// <summary>
+        /// The homography mapping four points onto four others (both [x, y] lists, same
+        /// order), or null when either set is degenerate (three in a line, repeated points).
+        /// </summary>
+        public static double[][]? Between(IReadOnlyList<double[]> from, IReadOnlyList<double[]> to)
+        {
+            if (from.Count != 4 || to.Count != 4) return null;
+            var a = from.Select(p => new Point2f((float)p[0], (float)p[1])).ToArray();
+            var b = to.Select(p => new Point2f((float)p[0], (float)p[1])).ToArray();
+            if (!Convex(a) || !Convex(b)) return null;
+            try
+            {
+                using var m = Cv2.GetPerspectiveTransform(a, b);
+                var hm = Calibration.Homography.FromMat(m);
+                return hm.Any(r => r.Any(v => double.IsNaN(v) || double.IsInfinity(v))) ? null : hm;
+            }
+            catch (OpenCVException) { return null; }
+        }
+
+        /// <summary>True when the four points form a convex quadrilateral with real area.</summary>
+        internal static bool Convex(Point2f[] q)
+        {
+            if (q.Length != 4) return false;
+            int sign = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                var a = q[i]; var b = q[(i + 1) % 4]; var c = q[(i + 2) % 4];
+                double cross = (b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X);
+                if (Math.Abs(cross) < 1e-9) return false;
+                int sg = Math.Sign(cross);
+                if (sign == 0) sign = sg;
+                else if (sg != sign) return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// The zone as warped by <paramref name="hNorm"/> (a homography in normalized 0–1
+        /// coordinates). Rectangles — tilted or not — become Quads of their four corners, so a
+        /// gridded rectangle turns into a perspective-correct gridded quad; polygon and quad
+        /// points map one by one; a circle keeps its radius and moves its centre. The id, name
+        /// and grid are kept.
+        /// </summary>
+        public static VisionZone Warp(VisionZone zone, double[][] hNorm, int w, int h)
+        {
+            var g = zone.Geometry;
+            double[] Map(double x, double y)
+            {
+                var (mx, my) = Calibration.Homography.Apply(hNorm, x, y);
+                return new[] { mx, my };
+            }
+            VisionZoneGeometry warped;
+            switch (g.Shape)
+            {
+                case VisionZoneShape.Rectangle:
+                {
+                    var corners = RectCorners(g, w, h);   // pixel space: rotation is applied there
+                    warped = new VisionZoneGeometry
+                    {
+                        Shape  = VisionZoneShape.Quad,
+                        Points = corners.Select(c => Map(c.X / (double)w, c.Y / (double)h)).ToList(),
+                    };
+                    break;
+                }
+                case VisionZoneShape.Circle:
+                {
+                    var c = Map(g.Cx, g.Cy);
+                    warped = new VisionZoneGeometry { Shape = VisionZoneShape.Circle, Cx = c[0], Cy = c[1], Radius = g.Radius };
+                    break;
+                }
+                default:
+                    warped = new VisionZoneGeometry { Shape = g.Shape, Points = g.Points.Select(p => Map(p[0], p[1])).ToList() };
+                    break;
+            }
+            return new VisionZone { Id = zone.Id, Name = zone.Name, Grid = zone.Grid, AlignTo = zone.AlignTo, Geometry = warped };
+        }
+
+        /// <summary>The zone's outline as normalized points (a circle is approximated).</summary>
+        public static List<double[]> Outline(VisionZoneGeometry g, int w, int h)
+        {
+            switch (g.Shape)
+            {
+                case VisionZoneShape.Rectangle:
+                    return RectCorners(g, w, h).Select(c => new[] { c.X / (double)w, c.Y / (double)h }).ToList();
+                case VisionZoneShape.Circle:
+                {
+                    double r = g.Radius * Math.Min(w, h);
+                    return Enumerable.Range(0, 24).Select(i =>
+                    {
+                        double a = i * Math.PI / 12;
+                        return new[] { g.Cx + r * Math.Cos(a) / w, g.Cy + r * Math.Sin(a) / h };
+                    }).ToList();
+                }
+                default:
+                    return g.Points.Select(p => new[] { p[0], p[1] }).ToList();
+            }
+        }
 
         /// <summary>
         /// Corners of an axis-aligned box expressed in the rectangle's own frame (offsets from
@@ -170,6 +296,19 @@ namespace Controller.RobotControl.Vision
         public static Point2f[] CellQuad(
             VisionZoneGeometry geom, int rows, int cols, int row, int col, int w, int h)
         {
+            if (IsQuad(geom))
+            {
+                // Laid out in the unit square, then mapped with the perspective.
+                var hq = UnitSquareTo(QuadCorners(geom, w, h));
+                Point2f P(double u, double v)
+                {
+                    var (x, y) = Calibration.Homography.Apply(hq, u, v);
+                    return new Point2f((float)x, (float)y);
+                }
+                double u0 = col / (double)cols, u1 = (col + 1) / (double)cols;
+                double v0 = row / (double)rows, v1 = (row + 1) / (double)rows;
+                return new[] { P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1) };
+            }
             double hw = geom.Width * w / 2.0, hh = geom.Height * h / 2.0;
             double x0 = -hw + 2 * hw * col / (double)cols, x1 = -hw + 2 * hw * (col + 1) / (double)cols;
             double y0 = -hh + 2 * hh * row / (double)rows, y1 = -hh + 2 * hh * (row + 1) / (double)rows;
@@ -203,6 +342,7 @@ namespace Controller.RobotControl.Vision
                     int cx     = (int)(geom.Cx * w), cy = (int)(geom.Cy * h);
                     return ClampRect(cx - radius, cy - radius, radius * 2, radius * 2, w, h);
                 }
+                case VisionZoneShape.Quad when geom.Points.Count == 4:
                 case VisionZoneShape.Polygon when geom.Points.Count >= 3:
                 {
                     // Each edge is converted to pixels on its own and the size derived from

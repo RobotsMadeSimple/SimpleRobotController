@@ -76,6 +76,7 @@ namespace Controller.RobotControl.Vision
                     break;
                 }
                 case VisionZoneShape.Polygon:
+                case VisionZoneShape.Quad:
                 {
                     if (geom.Points.Count >= 2)
                     {

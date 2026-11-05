@@ -210,6 +210,9 @@ STEPS = {
                                "(row, col, index, coverage, passed), and cellsPassedVar gets the pass count."),
             "polygonOutputs": "array of {inspectionId, countVar?, foundVar?, angleVar?, centerXVar?, centerYVar?}.",
             "arucoOutputs":   "array of {inspectionId, countVar?, foundVar?, firstIdVar?, firstCenterXVar?, firstCenterYVar?}.",
+            "frameOutputs":   "array of {inspectionId, foundVar?, cornersVar? (Point list TL,TR,BR,BL), angleVar?} - frame/alignment inspections.",
+            "cornerOutputs":  "array of {inspectionId, countVar?, foundVar?, pointsVar? (Point list)} - corner inspections.",
+            "edgeOutputs":    "array of {inspectionId, densityVar?, passedVar?, angleVar?} - edge inspections.",
         },
     },
     "CaptureImage": {

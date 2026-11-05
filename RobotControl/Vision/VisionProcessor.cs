@@ -207,6 +207,10 @@ namespace Controller.RobotControl.Vision
                 ArucoResults   = new List<ArucoResult>(),
                 LineResults    = new List<LineResult>(),
                 BarcodeResults = new List<BarcodeResult>(),
+                FrameResults   = new List<FrameResult>(),
+                CornerResults  = new List<CornerResult>(),
+                EdgeResults    = new List<EdgeResult>(),
+                AlignedZones   = new List<AlignedZone>(),
             };
 
             using var ctx       = new FrameContext(src);
@@ -229,6 +233,14 @@ namespace Controller.RobotControl.Vision
                     onError?.Invoke(result, step.Id, ex);
                 }
                 result.Timings[step.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
+            }
+
+            // Aligned zones are outlined where this frame put them.
+            foreach (var az in result.AlignedZones)
+            {
+                var name = plan.Program.Zones?.FirstOrDefault(z => z.Id == az.ZoneId)?.Name ?? az.ZoneId;
+                var geom = new VisionZoneGeometry { Shape = VisionZoneShape.Polygon, Points = az.Points };
+                VisionDrawing.DrawZoneBorder(annotated, geom, ctx.Width, ctx.Height, name + " (aligned)", VisionPalette.ZoneBorder);
             }
 
             annotatedJpeg = VisionDrawing.EncodeJpeg(annotated, VisionDrawing.AnnotatedJpegQuality);

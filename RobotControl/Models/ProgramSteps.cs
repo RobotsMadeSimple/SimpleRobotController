@@ -114,6 +114,35 @@ public class ArucoVisionStepOutput
     [JsonPropertyName("firstCenterYVar")] public string? FirstCenterYVar { get; set; }
 }
 
+/// <summary>RunVision → a frame inspection: whether it was found, its four corners and its angle.</summary>
+public class FrameVisionStepOutput
+{
+    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
+    [JsonPropertyName("foundVar")]     public string? FoundVar     { get; set; }
+    /// <summary>Points list TL, TR, BR, BL in the step's outputFrame (emptied when not found).</summary>
+    [JsonPropertyName("cornersVar")]   public string? CornersVar   { get; set; }
+    [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
+}
+
+/// <summary>RunVision → a corner inspection.</summary>
+public class CornerVisionStepOutput
+{
+    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
+    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
+    [JsonPropertyName("foundVar")]     public string? FoundVar     { get; set; }
+    /// <summary>Points list, strongest first, in the step's outputFrame.</summary>
+    [JsonPropertyName("pointsVar")]    public string? PointsVar    { get; set; }
+}
+
+/// <summary>RunVision → an edge inspection.</summary>
+public class EdgeVisionStepOutput
+{
+    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
+    [JsonPropertyName("densityVar")]   public string? DensityVar   { get; set; }
+    [JsonPropertyName("passedVar")]    public string? PassedVar    { get; set; }
+    [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
+}
+
 public class ConditionItem
 {
     [JsonPropertyName("id")]       public string Id       { get; set; } = "";
@@ -365,6 +394,9 @@ public class ProgramStep
     [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>?    ColorOutputs   { get; set; }
     [JsonPropertyName("polygonOutputs")]    public List<PolygonVisionStepOutput>?  PolygonOutputs { get; set; }
     [JsonPropertyName("arucoOutputs")]      public List<ArucoVisionStepOutput>?    ArucoOutputs   { get; set; }
+    [JsonPropertyName("frameOutputs")]      public List<FrameVisionStepOutput>?    FrameOutputs   { get; set; }
+    [JsonPropertyName("cornerOutputs")]     public List<CornerVisionStepOutput>?   CornerOutputs  { get; set; }
+    [JsonPropertyName("edgeOutputs")]       public List<EdgeVisionStepOutput>?     EdgeOutputs    { get; set; }
     /// <summary>
     /// Coordinate frame of the blob points and polygon/ArUco centers written by RunVision:
     /// "pixel", "normalized" (0–1) or "robot" (mm on the camera's calibration plane, point

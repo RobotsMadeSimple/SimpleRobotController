@@ -389,6 +389,22 @@ namespace Controller.RobotControl.Validation
                     Implicit(o.FirstIdVar, SymKind.Number); Implicit(o.FirstCenterXVar, SymKind.Number);
                     Implicit(o.FirstCenterYVar, SymKind.Number);
                 }
+                foreach (var o in s.FrameOutputs ?? [])
+                {
+                    Implicit(o.FoundVar, SymKind.Boolean);
+                    Implicit(o.CornersVar, SymKind.List, ListElementType.Point);
+                    Implicit(o.AngleVar, SymKind.Number);
+                }
+                foreach (var o in s.CornerOutputs ?? [])
+                {
+                    Implicit(o.CountVar, SymKind.Number); Implicit(o.FoundVar, SymKind.Boolean);
+                    Implicit(o.PointsVar, SymKind.List, ListElementType.Point);
+                }
+                foreach (var o in s.EdgeOutputs ?? [])
+                {
+                    Implicit(o.DensityVar, SymKind.Number); Implicit(o.PassedVar, SymKind.Boolean);
+                    Implicit(o.AngleVar, SymKind.Number);
+                }
                 // A Plugin step's number/boolean outputs create their variable like Set Variable does.
                 if (s.Type == StepType.Plugin && PluginStepDef(s) is { } pdef)
                     foreach (var m in s.PluginOutputs ?? [])
@@ -1034,6 +1050,24 @@ namespace Controller.RobotControl.Validation
                     T(o.CountVar, $"arucoOutputs[{j}].countVar"); T(o.FoundVar, $"arucoOutputs[{j}].foundVar");
                     T(o.FirstIdVar, $"arucoOutputs[{j}].firstIdVar"); T(o.FirstCenterXVar, $"arucoOutputs[{j}].firstCenterXVar");
                     T(o.FirstCenterYVar, $"arucoOutputs[{j}].firstCenterYVar");
+                }
+                for (int j = 0; j < (s.FrameOutputs?.Count ?? 0); j++)
+                {
+                    var o = s.FrameOutputs![j]; if (o == null) continue;
+                    T(o.FoundVar, $"frameOutputs[{j}].foundVar"); T(o.CornersVar, $"frameOutputs[{j}].cornersVar");
+                    T(o.AngleVar, $"frameOutputs[{j}].angleVar");
+                }
+                for (int j = 0; j < (s.CornerOutputs?.Count ?? 0); j++)
+                {
+                    var o = s.CornerOutputs![j]; if (o == null) continue;
+                    T(o.CountVar, $"cornerOutputs[{j}].countVar"); T(o.FoundVar, $"cornerOutputs[{j}].foundVar");
+                    T(o.PointsVar, $"cornerOutputs[{j}].pointsVar");
+                }
+                for (int j = 0; j < (s.EdgeOutputs?.Count ?? 0); j++)
+                {
+                    var o = s.EdgeOutputs![j]; if (o == null) continue;
+                    T(o.DensityVar, $"edgeOutputs[{j}].densityVar"); T(o.PassedVar, $"edgeOutputs[{j}].passedVar");
+                    T(o.AngleVar, $"edgeOutputs[{j}].angleVar");
                 }
             }
 

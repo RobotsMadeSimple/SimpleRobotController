@@ -119,7 +119,7 @@ namespace Controller.RobotControl.Vision.Inspections
             VisionZoneGeometry geom, int rows, int cols, Mat zoneMask, Mat matchInZone,
             int w, int h, Func<double, bool> inRange)
         {
-            bool tilted = ZoneGeometry.IsRotatedRect(geom);
+            bool tilted = ZoneGeometry.HasQuadCells(geom);
             var bounds  = ZoneGeometry.ZoneBounds(geom, w, h);
             var cells   = new List<ColorCellResult>(rows * cols);
 
@@ -197,7 +197,7 @@ namespace Controller.RobotControl.Vision.Inspections
         private static void DrawGridCells(
             Mat img, VisionZoneGeometry geom, int rows, int cols, List<ColorCellResult> cells, int w, int h)
         {
-            bool tilted = ZoneGeometry.IsRotatedRect(geom);
+            bool tilted = ZoneGeometry.HasQuadCells(geom);
             var bounds  = ZoneGeometry.ZoneBounds(geom, w, h);
 
             foreach (var cell in cells)
