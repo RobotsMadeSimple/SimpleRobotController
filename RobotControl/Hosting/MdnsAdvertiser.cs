@@ -94,6 +94,8 @@ namespace Controller.RobotControl.Hosting
             p.AddProperty("SerialNumber",    id.SerialNumber);
             p.AddProperty("RobotType",       id.RobotType);
             p.AddProperty("RobotName",       id.RobotName);
+            var addresses = AdvertisedAddresses.Txt(AdvertisedAddresses.Collect());
+            if (addresses.Length > 0) p.AddProperty("Addresses", addresses);
             return p;
         }
 
