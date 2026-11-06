@@ -359,7 +359,7 @@ def main():
           f"aligned grid reads the starting position ({len(seen_w)} white, {len(seen_b)} black)")
     check(not res.get("errors"), f"no vision errors {res.get('errors')}")
 
-    built = json.loads(subprocess.check_output(["node", os.path.join(HERE, "..", "examples", "dotnet", "Checkers", "program", "checkers-game.mjs"), "json", "e2e-board"], text=True))
+    built = json.loads(subprocess.check_output(["node", os.path.join(HERE, "..", "examples", "dotnet", "Checkers", "program", "checkers-game.mjs"), "json", "e2e-board", "normal"], text=True))
     game = built["game"]
     game["name"] = "E2E Checkers Game"
     for v in game["variables"]:
@@ -375,10 +375,13 @@ def main():
     print("== play")
     # Start with one white piece missing: the program must wait for the starting position.
     scene.set(pieces={k: v for k, v in start_pieces.items() if k != 22})
+    # StopProgram only pauses (Start would resume it mid-game with the old variables): reset first.
+    c.cmd("ResetProgram", {"programName": game["name"]})
     c.cmd("StartProgram", {"programName": game["name"]})
     time.sleep(3)
     v = c.vars(game["name"])
-    check(int(v.get("changed") or 0) > 0 and int(v.get("plies") or 0) == 0, f"waits for the starting position (changed={v.get('changed')})")
+    check(int(v.get("changed") or 0) > 0 and int(v.get("plies") or 0) == 0,
+          f"waits for the starting position (changed={v.get('changed')} plies={v.get('plies')} seen={v.get('seenText')!r})")
     scene.set(pieces=start_pieces)
 
     pieces = dict(start_pieces)
@@ -483,7 +486,7 @@ def main():
 
     s = c.summary(game["name"])
     check(not s.get("errorDescription"), f"no program error ({s.get('errorDescription')})")
-    c.cmd("StopProgram", {"programName": game["name"]})
+    c.cmd("AbortProgram", {"programName": game["name"]})
     c.cmd("StopBuiltProgram")
     stop.set()
     print(f"\n{plies} plies played; bumped camera: {bumped}")

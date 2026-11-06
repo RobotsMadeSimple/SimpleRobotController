@@ -86,8 +86,7 @@ namespace Controller.RobotControl.Vision
 
         /// <summary>
         /// White-on-black mask of the zone, the size of the frame. A null zone means "the
-        /// whole frame" and yields an all-white mask. Cached by zone id — within one frame a
-        /// zone id always names the same geometry.
+        /// whole frame" and yields an all-white mask. Cached by zone id and geometry.
         /// </summary>
         public Mat ZoneMask(VisionZone? zone)
         {
@@ -95,13 +94,28 @@ namespace Controller.RobotControl.Vision
             if (zone == null)
                 return _fullMask ??= new Mat(Size, MatType.CV_8UC1, Scalar.White);
 
-            if (!_zoneMasks.TryGetValue(zone.Id, out var mask))
+            string key = MaskKey(zone);
+            if (!_zoneMasks.TryGetValue(key, out var mask))
             {
                 mask = new Mat(Size, MatType.CV_8UC1, Scalar.Black);
                 ZoneGeometry.FillZoneMask(mask, zone.Geometry, Width, Height);
-                _zoneMasks[zone.Id] = mask;
+                _zoneMasks[key] = mask;
             }
             return mask;
+        }
+
+        /// <summary>
+        /// Id plus geometry: an aligned zone keeps its id but not its drawn shape, and a frame
+        /// inspection may search the drawn shape of the very zone that is then aligned to it.
+        /// </summary>
+        private static string MaskKey(VisionZone zone)
+        {
+            var g = zone.Geometry;
+            var sb = new System.Text.StringBuilder(zone.Id).Append('|').Append(g.Shape)
+                .Append('|').Append(g.X).Append(',').Append(g.Y).Append(',').Append(g.Width).Append(',').Append(g.Height)
+                .Append(',').Append(g.Rotation).Append(',').Append(g.Cx).Append(',').Append(g.Cy).Append(',').Append(g.Radius);
+            foreach (var p in g.Points ?? []) sb.Append('|').Append(p[0]).Append(',').Append(p[1]);
+            return sb.ToString();
         }
 
         private void ThrowIfDisposed()

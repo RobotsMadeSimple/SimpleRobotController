@@ -70,13 +70,26 @@ plugin.Step("applyMove", (ctx, p) =>
 // — from/to/captured are set; confirm it over a few reads, then applyMove), or
 // "unclear" (changed but matches no legal move: mid-move, a hand over the board, a
 // captured piece not yet removed, or an illegal move).
+// orientation: where black's side (board row 0) is in the camera grid — normal (top),
+// rotated90 (right), rotated180 (bottom), rotated270 (left).
+// bothMeans: what a cell that reads as both colours is — "white" (default: black pieces
+// found by a texture inspection, which white pieces also pass), "black", or "neither".
 plugin.Step("detectMove", (ctx, p) =>
 {
     double minCoverage = p.GetDouble("minCoverage", 0);   // 0 = use each inspection's own pass/fail
     var white = ReadCells(p, "whiteCells", minCoverage);
     var black = ReadCells(p, "blackCells", minCoverage);
-    bool rotated = string.Equals(p.GetString("orientation", "normal"), "rotated180", StringComparison.OrdinalIgnoreCase);
-    return Task.FromResult(game.DetectMove(white, black, rotated));
+    int turns = p.GetString("orientation", "normal").Trim().ToLowerInvariant() switch
+    {
+        "rotated90" => 1, "rotated180" => 2, "rotated270" => 3, _ => 0,
+    };
+    switch (p.GetString("bothMeans", "white").Trim().ToLowerInvariant())
+    {
+        case "black":   for (int i = 0; i < 64; i++) if (black[i]) white[i] = false; break;
+        case "neither": for (int i = 0; i < 64; i++) if (white[i] && black[i]) white[i] = black[i] = false; break;
+        default:        for (int i = 0; i < 64; i++) if (white[i]) black[i] = false; break;
+    }
+    return Task.FromResult(game.DetectMove(white, black, turns));
 });
 
 // Compute and apply the robot's move for the side to move. Outputs the squares the
@@ -294,16 +307,30 @@ sealed class Game
         }
     }
 
+    /// <summary>
+    /// Where board square (row, col) lands in the camera's 8x8 grid (row 0 = the top of the
+    /// image). Board row 0 is black's side: normal = black's side at the top, rotated90 = at
+    /// the right (players sit left and right of the camera), rotated180 = at the bottom,
+    /// rotated270 = at the left.
+    /// </summary>
+    internal static (int Row, int Col) CameraCell((int Row, int Col) board, int quarterTurns) => (quarterTurns & 3) switch
+    {
+        1 => (board.Col, 7 - board.Row),
+        2 => (7 - board.Row, 7 - board.Col),
+        3 => (7 - board.Col, board.Row),
+        _ => board,
+    };
+
     /// <summary>Works out which legal move of the side to move turns the tracked board into the
     /// observed one (piece colours per dark square). Does not apply it.</summary>
-    public StepResult DetectMove(bool[] whiteCells, bool[] blackCells, bool rotated)
+    public StepResult DetectMove(bool[] whiteCells, bool[] blackCells, int quarterTurns)
     {
         uint seenW = 0, seenB = 0;
         for (int sq = 0; sq < CheckersEngine.BoardSquares; sq++)
         {
-            var (r, c) = CheckersEngine.IdxToRc(rotated ? CheckersEngine.BoardSquares - 1 - sq : sq);
+            var (r, c) = CameraCell(CheckersEngine.IdxToRc(sq), quarterTurns);
             int cell = r * 8 + c;
-            // A cell that reads as both colours is ambiguous — treat it as neither so it can't match.
+            // The step resolves cells read as both colours (bothMeans); any left are ambiguous.
             if (whiteCells[cell] && !blackCells[cell]) seenW |= 1u << sq;
             if (blackCells[cell] && !whiteCells[cell]) seenB |= 1u << sq;
         }

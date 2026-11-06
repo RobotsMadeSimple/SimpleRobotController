@@ -81,6 +81,7 @@ namespace Controller.RobotControl.Vision
         public static readonly FrameStrategy         Frame   = new();
         public static readonly CornerStrategy        Corner  = new();
         public static readonly EdgeStrategy          Edge    = new();
+        public static readonly TextureStrategy       Texture = new();
 
         private InspectionPlan(VisionProgram program, IReadOnlyList<InspectionStep> steps, IReadOnlyList<VisionZone> borderZones)
         {
@@ -136,6 +137,9 @@ namespace Controller.RobotControl.Vision
             foreach (var i in prog.EdgeInspections ?? [])
                 if (i.Enabled)
                     steps.Add(InspectionStep.Create(Edge, i, i.Id, Zone(i.ZoneId), (vr, d) => vr.EdgeResults.Add(d.Result), align: Align(i.ZoneId)));
+            foreach (var i in prog.TextureInspections ?? [])
+                if (i.Enabled)
+                    steps.Add(InspectionStep.Create(Texture, i, i.Id, Zone(i.ZoneId), (vr, d) => vr.TextureResults.Add(d.Result), align: Align(i.ZoneId)));
 
             // Outline only zones actually used by an enabled inspection. This reflects any
             // runtime zone override (all inspections then point at the chosen zone) and shows
@@ -169,7 +173,13 @@ namespace Controller.RobotControl.Vision
             var found = vr.FrameResults.FirstOrDefault(r => r.InspectionId == frame.Id);
             if (found is not { Found: true })
                 return new(null, true, $"zone '{zone.Name}': alignment frame '{frame.Name}' not found");
-            if (frame.ReferenceCorners is not { Count: 4 } reference)
+            List<double[]>? reference = frame.ReferenceCorners is { Count: 4 } rc ? rc : null;
+            // A zone aligned to a checker frame that searches that same zone: the zone is the
+            // rough start the checker was fitted from, so the fit IS the zone, snapped onto the
+            // squares. Its reference is always its own drawn corners.
+            if (IsSelfChecker(frame, zone) && ZoneGeometry.FourCorners(zone.Geometry, w, h) is { } own)
+                reference = own.Select(p => new[] { p.X / (double)w, p.Y / (double)h }).ToList();
+            if (reference == null)
                 return new(zone, false, $"zone '{zone.Name}': frame '{frame.Name}' has no reference — set one");
             var hNorm = ZoneGeometry.Between(reference, found.Corners);
             if (hNorm == null)
@@ -185,6 +195,9 @@ namespace Controller.RobotControl.Vision
                 });
             return new(warped, false, null);
         }
+
+        internal static bool IsSelfChecker(FrameInspection frame, VisionZone zone) =>
+            string.Equals(frame.Method?.Trim(), "checker", StringComparison.OrdinalIgnoreCase) && frame.ZoneId == zone.Id;
 
         /// <summary>The zone an inspection points at; null for none or an unknown id.</summary>
         public static VisionZone? ResolveZone(VisionProgram prog, string? zoneId) =>

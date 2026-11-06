@@ -70,6 +70,7 @@
   "frameOutputs": [{ "inspectionId": "frame1", "foundVar": "frameFound", "cornersVar": "frameCorners", "angleVar": "frameAngle" }],
   "cornerOutputs": [{ "inspectionId": "corner1", "countVar": "cornerCount", "foundVar": "cornerFound", "pointsVar": "cornerPoints" }],
   "edgeOutputs": [{ "inspectionId": "edge1", "densityVar": "edgeDensity", "passedVar": "edgePassed", "angleVar": "edgeAngle" }],
+  "textureOutputs": [{ "inspectionId": "tex1", "scoreVar": "texScore", "passedVar": "texPassed", "cellsVar": "texCells", "cellsPassedVar": "texCellsOk" }],
   "varPointName": "pts",
   "varPointIndex": "$i",
   "pointNameExpr": "{$binPrefix}{$index}",

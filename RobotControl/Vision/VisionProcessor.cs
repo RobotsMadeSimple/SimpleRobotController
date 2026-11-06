@@ -210,6 +210,7 @@ namespace Controller.RobotControl.Vision
                 FrameResults   = new List<FrameResult>(),
                 CornerResults  = new List<CornerResult>(),
                 EdgeResults    = new List<EdgeResult>(),
+                TextureResults = new List<TextureResult>(),
                 AlignedZones   = new List<AlignedZone>(),
             };
 

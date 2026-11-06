@@ -34,7 +34,7 @@ Black starts on rows 0–2 (squares 0–11) and moves down; white on rows 5–7
 | `newGame` | `firstPlayer` (black/white) | `turn`, `moveText` |
 | `setBoard` | `white`,`black`,`whiteKings`,`blackKings` (32-bool lists), `turn` | `legal`, `whiteCount`, `blackCount`, `winner` |
 | `applyMove` | `from`, `to` (squares) | `legal`, `captured` (list), `path`, `kinged`, `gameOver`, `winner` |
-| `detectMove` | `whiteCells`, `blackCells` (vision cell lists), `minCoverage?`, `orientation` (normal/rotated180) | `status` (same/move/unclear), `from`, `to`, `captured`, `changed`, `moveText` |
+| `detectMove` | `whiteCells`, `blackCells` (vision cell lists), `minCoverage?`, `orientation` (normal/rotated90/rotated180/rotated270), `bothMeans` (white/black/neither) | `status` (same/move/unclear), `from`, `to`, `captured`, `changed`, `moveText` |
 | `aiMove` | `maxDepth?`, `timeBudgetMs?` | `fromSquare`, `toSquare`, `path` (list), `captured` (list), `kinged`, `gameOver`, `winner`, `moveText` |
 
 **Functions:** `checkers.pieceAt(square)` (0 empty, ±1 man, ±2 king; + white / − black),
@@ -61,7 +61,7 @@ Loop:
 
 ### Spotting the human's move with the camera
 
-`detectMove` takes the per-cell results of two colour inspections (white and black
+`detectMove` takes the per-cell results of two vision inspections (white and black
 pieces) run on an **8x8 grid zone** over the board, works out which dark squares hold
 which colour, and compares that with the tracked game. If the change is exactly what
 one legal move of the side to move would produce, it reports `status: "move"` with
@@ -71,9 +71,26 @@ still over the board, or a half-finished multi-jump, can't trigger it), then cal
 legal match: mid-move, hand in view, a jumped piece not yet removed, an illegal move).
 
 A cell counts as a piece when it **passed** its inspection (each colour keeps its own
-tuned coverage range); set `minCoverage` > 0 to use one threshold instead. The camera
-grid's row 0 / col 0 must be the board's row 0 / col 0 (black's side); if the camera
-sees the board the other way round, set `orientation` to `rotated180`.
+tuned coverage range); set `minCoverage` > 0 to use one threshold instead. A cell that
+reads as both colours is white by default (`bothMeans`), which is what a board with
+black pieces on black squares needs (below). The camera
+grid's row 0 is the top of the image; `orientation` says where black's side (board row 0)
+is in it: `normal` = top, `rotated90` = right (the players sit left and right of the
+camera, as in a side view across the table), `rotated180` = bottom, `rotated270` = left.
+
+**Black pieces on black squares.** A colour inspection can't tell them apart, so read
+black pieces with a **Texture** inspection instead: a ringed checker has fine detail, a
+plain square has none (on real photos black pieces score 6.5+ and empty squares under 3,
+at 1280 px). White pieces pass a texture check too, which is why `bothMeans` defaults to
+white. Align the grid with a **Checker grid** frame on the same zone so it snaps onto the
+squares and follows the camera. The vision program builder
+`program/checkers-vision.mjs` creates this setup:
+
+| Inspection | Type | Settings |
+|---|---|---|
+| Squares | Frame, method *Checker grid*, on the Board zone | 8 × 8, min edge ratio 4 |
+| White pieces | Colour coverage on the Board zone | cream (232, 230, 200) ± 20 %, min 30 % |
+| Black pieces | Texture on the Board zone | cell inset 25 %, min score 4 |
 
 The ready-made program **"Checkers Game (camera)"** does all of this: the robot plays
 black on a taught 8x8 grid named *Checkers Board* (row r, col c = the board square),

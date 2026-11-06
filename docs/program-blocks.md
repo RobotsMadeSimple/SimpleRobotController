@@ -520,6 +520,7 @@ program variables.
 | `frameOutputs` | Frame (alignment) → `{ inspectionId, foundVar, cornersVar, angleVar }`. `cornersVar` receives a `Point` list TL, TR, BR, BL (emptied when the frame is not found). |
 | `cornerOutputs` | Corners → `{ inspectionId, countVar, foundVar, pointsVar }`. `pointsVar` receives a `Point` list, strongest first. |
 | `edgeOutputs` | Edges → `{ inspectionId, densityVar, passedVar, angleVar }` (edge density % of the zone, its pass/fail, the dominant edge's angle 0–180°). |
+| `textureOutputs` | Texture → `{ inspectionId, scoreVar, passedVar, cellsVar, cellsPassedVar }`. On a grid, `cellsVar` receives a Record list `{ row, col, index, score, passed }` (passed is 1/0) and `scoreVar` the highest cell score. |
 | `outputFrame` | Frame of the positions written above (blob `pointsVar` points, polygon `centerXVar`/`centerYVar`, ArUco `firstCenterXVar`/`firstCenterYVar`, frame `cornersVar`, corner `pointsVar`): `"pixel"`, `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Unset keeps the original mix: blob points in pixels, polygon/ArUco centers normalized. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
 | `waitTimeoutMs` | Max time to wait for a fresh vision result (default 30 000 ms; `0` or less waits forever). Expiry ends the program with an error. |
 
@@ -531,12 +532,36 @@ BL — and a gridded Quad lays its cells out with the perspective, so a board se
 angle from the side still reads square by square (row-major index, row 0 along TL→TR).
 A zone can also be **aligned** (`alignTo`) to a **frame inspection**, which finds a
 four-cornered outline each frame by its edges (`contour`), its straight edge lines
-(`lines` — still works with a corner hidden behind a hand) or its corners (`corners`).
+(`lines` — still works with a corner hidden behind a hand), its corners (`corners`) or,
+for a checkerboard, the squares themselves (`checker`, below).
 The zone is warped by the homography from the frame's `referenceCorners` (set in the
 editor while the zones are drawn) to the corners found now, so the grid follows the
 board if it or the camera moves. Frame inspections always run first. When the frame
 is not found, inspections on its zones are skipped for that frame (an `errors` entry
 says so) rather than read cells from a guessed position.
+
+**Checker grid frames** (`method: "checker"`, `gridRows` × `gridCols`, default 8 × 8)
+fit the grid to a checkerboard's squares: the frame's zone is drawn roughly over the
+squares (within about a fifth of a square of each corner) and each frame the corners are
+moved until the grid's interior lines sit on the boundaries between squares. No board
+frame is needed, so it works when the frame is cut off, hidden, or as dark as the
+board's dark squares. Each frame starts from the last fit, so a nudged camera is
+followed; only when that fails is the drawn zone fitted again. The result's `score` is
+the fit's edge ratio — edge strength on the grid lines over that through the square
+centres — and the frame is found when it reaches `minEdgeRatio` (default 4; a fitted
+board is about 8–18, a grid a quarter square off or a hand over the board under 4).
+A zone aligned to a checker frame **on that same zone** needs no reference: it is used
+exactly where the squares were found (the editor's *Snap zone to squares* then copies
+the fit back into the drawn zone).
+
+**Texture** inspections score fine detail: the spread of brightness after a blurred copy
+(blur ≈ 3 % of the cell) is subtracted, so slow shading — glare, shadows, a lighting
+gradient — does not count, while rings, print or grain do. On a grid each cell is scored
+on its centre only (`cellInset`, default 25 % off each side, so the cell's own borders and
+a slightly-off grid don't count) and passes when the score is within
+[`minScore`, `maxScore`] (default min 4). It tells a ringed black checker from the black
+square under it, which no colour inspection can; on real photos black pieces scored 6.5+
+and empty squares under 3.
 
 If an inspection throws while processing a frame, the vision result carries an
 `errors` entry (`"<inspectionId>: <message>"`) and that inspection reports no
@@ -557,8 +582,8 @@ rectangle-only idea: circles ignore it, and a polygon's points are already
 absolute. A zone saved before rotation existed has none, which reads as 0 and
 takes the original untilted path.
 
-Only **color coverage** inspections measure per cell today; the other inspection
-types ignore the grid.
+Only **color coverage** and **texture** inspections measure per cell; the other
+inspection types ignore the grid.
 
 On a gridded zone the color output changes shape:
 

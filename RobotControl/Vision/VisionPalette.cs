@@ -40,6 +40,8 @@ namespace Controller.RobotControl.Vision
         public static readonly Scalar Corner         = new(0, 215, 255);
         /// <summary>Light cyan — edge pixels.</summary>
         public static readonly Scalar Edge           = new(255, 230, 120);
+        /// <summary>Violet — a texture cell that passed.</summary>
+        public static readonly Scalar Texture        = new(255, 90, 170);
 
         // ── Debug frames ────────────────────────────────────────────────────────
         public static readonly Scalar DebugMatched   = new(0, 210, 0);

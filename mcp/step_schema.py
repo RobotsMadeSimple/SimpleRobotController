@@ -213,6 +213,7 @@ STEPS = {
             "frameOutputs":   "array of {inspectionId, foundVar?, cornersVar? (Point list TL,TR,BR,BL), angleVar?} - frame/alignment inspections.",
             "cornerOutputs":  "array of {inspectionId, countVar?, foundVar?, pointsVar? (Point list)} - corner inspections.",
             "edgeOutputs":    "array of {inspectionId, densityVar?, passedVar?, angleVar?} - edge inspections.",
+            "textureOutputs": "array of {inspectionId, scoreVar?, passedVar?, cellsVar?, cellsPassedVar?} - texture inspections; cellsVar = records {row,col,index,score,passed}.",
         },
     },
     "CaptureImage": {

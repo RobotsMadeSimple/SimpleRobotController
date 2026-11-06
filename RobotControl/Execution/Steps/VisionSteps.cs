@@ -288,6 +288,35 @@ namespace Controller.RobotControl.Execution
                         vars.Set(output.AngleVar, er.DominantAngle ?? 0);
                 }
 
+                foreach (var output in step.TextureOutputs ?? [])
+                {
+                    var tr = result.TextureResults.Find(r => r.InspectionId == output.InspectionId);
+                    if (tr == null) continue;
+
+                    if (!string.IsNullOrEmpty(output.ScoreVar))
+                        vars.Set(output.ScoreVar, tr.Score);
+
+                    if (!string.IsNullOrEmpty(output.PassedVar))
+                        vars.Set(output.PassedVar, tr.Passed ? 1 : 0);
+
+                    // Emptied on an ungridded zone, like the color cells.
+                    if (!string.IsNullOrEmpty(output.CellsVar))
+                    {
+                        vars.SetList(output.CellsVar, ListVar.OfRecords(
+                            (tr.Cells ?? []).Select(cell => new ObjectRecord
+                            {
+                                ["row"]    = cell.Row,
+                                ["col"]    = cell.Col,
+                                ["index"]  = cell.Index,
+                                ["score"]  = cell.Score,
+                                ["passed"] = cell.Passed ? 1 : 0,
+                            })));
+                    }
+
+                    if (!string.IsNullOrEmpty(output.CellsPassedVar))
+                        vars.Set(output.CellsPassedVar, tr.CellsPassed ?? 0);
+                }
+
                 foreach (var output in step.ArucoOutputs ?? [])
                 {
                     var ar = result.ArucoResults.Find(r => r.InspectionId == output.InspectionId);

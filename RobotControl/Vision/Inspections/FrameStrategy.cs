@@ -22,6 +22,9 @@ namespace Controller.RobotControl.Vision.Inspections
     /// lines of each → their four intersections. Copes with a frame whose corners are hidden
     /// (a hand, a piece) as long as part of every edge is visible.</item>
     /// <item><b>corners</b>: Shi-Tomasi corners → convex hull → the four extreme hull points.</item>
+    /// <item><b>checker</b>: a checkerboard grid fitted to the squares themselves (see
+    /// <see cref="CheckerGridFit"/>), starting from the last fit, the reference and the search
+    /// zone drawn roughly over the squares — whichever fits best. Needs no frame at all.</item>
     /// </list>
     /// Corners always come back ordered TL, TR, BR, BL by x+y / x−y, the order zones use.
     /// </summary>
@@ -30,17 +33,27 @@ namespace Controller.RobotControl.Vision.Inspections
         public FrameDetection Run(FrameContext ctx, FrameInspection insp, VisionZone? zone)
         {
             int w = ctx.Width, h = ctx.Height;
-            var mask = ctx.ZoneMask(zone);
-            Point2f[]? quad = (insp.Method ?? "contour").Trim().ToLowerInvariant() switch
+            string method = (insp.Method ?? "contour").Trim().ToLowerInvariant();
+            double? score = null;
+            Point2f[]? quad;
+            if (method == "checker")
+                (quad, score) = ByChecker(ctx, insp, zone);
+            else
             {
-                "lines"   => ByLines(ctx, insp, zone, mask),
-                "corners" => ByCorners(ctx, insp, mask),
-                _         => ByContour(ctx, insp, mask),
-            };
-            if (quad != null) quad = Order(quad);
+                var mask = ctx.ZoneMask(zone);
+                quad = method switch
+                {
+                    "lines"   => ByLines(ctx, insp, zone, mask),
+                    "corners" => ByCorners(ctx, insp, mask),
+                    _         => ByContour(ctx, insp, mask),
+                };
+            }
+            // The checker fit keeps the zone's own corner order; sorting by x±y would swap
+            // corners on a board seen steeply from the side.
+            if (quad != null && method != "checker") quad = Order(quad);
             if (quad != null && !ZoneGeometry.Convex(quad)) quad = null;
 
-            var result = new FrameResult { InspectionId = insp.Id, Name = insp.Name, Method = insp.Method ?? "contour" };
+            var result = new FrameResult { InspectionId = insp.Id, Name = insp.Name, Method = insp.Method ?? "contour", Score = score };
             if (quad != null)
             {
                 result.Found   = true;
@@ -137,6 +150,50 @@ namespace Controller.RobotControl.Vision.Inspections
                 outQuad[i] = p.Value;
             }
             return outQuad;
+        }
+
+        // Last good checker fit per inspection (and frame size): the next frame starts there,
+        // so a camera that drifts or gets bumped is followed rather than re-found each time.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Point2f[]> LastChecker = new();
+
+        /// <summary>
+        /// Checker fit: every available start — the last fit, the reference corners, the
+        /// search zone — is refined and the best-scoring fit kept. The search zone is the only
+        /// rough start, so it alone gets the full fit, and only when tracking the others finds no
+        /// board (first frame, or the camera moved more than about a third of a square). Found when the
+        /// fit's edge ratio reaches <see cref="FrameInspection.MinEdgeRatio"/>; the ratio is
+        /// reported either way so the editor can show how close a miss was.
+        /// </summary>
+        private static (Point2f[]? Quad, double? Score) ByChecker(FrameContext ctx, FrameInspection insp, VisionZone? zone)
+        {
+            int w = ctx.Width, h = ctx.Height;
+            string key = $"{insp.Id}|{w}x{h}";
+            var starts = new List<(Point2f[] Q, bool Rough)>();
+            if (LastChecker.TryGetValue(key, out var last)) starts.Add((last, false));
+            if (insp.ReferenceCorners is { Count: 4 } rc)
+                starts.Add((rc.Select(p => new Point2f((float)(p[0] * w), (float)(p[1] * h))).ToArray(), false));
+            if (zone != null && ZoneGeometry.FourCorners(zone.Geometry, w, h) is { } zq) starts.Add((zq, true));
+            starts = starts.Where(s => ZoneGeometry.Convex(s.Q)).ToList();
+            if (starts.Count == 0) return (null, null);
+
+            using var fit = new CheckerGridFit(ctx.Gray, insp.GridRows, insp.GridCols);
+            // Tracking from a close start is cheap; the full fit from the rough zone only runs
+            // when tracking doesn't give a fit good enough to call found.
+            (Point2f[] Quad, double Score)? best = null;
+            double ratio = 0;
+            foreach (var pass in new[] { false, true })
+            {
+                foreach (var s in starts.Where(s => s.Rough == pass))
+                {
+                    var r = pass ? fit.Fit(s.Q) : fit.Track(s.Q);
+                    if (best == null || r.Score > best.Value.Score) best = r;
+                }
+                if (best != null && (ratio = fit.EdgeRatio(best.Value.Quad)) >= insp.MinEdgeRatio) break;
+            }
+            ratio = Math.Round(ratio, 2);
+            if (best == null || ratio < insp.MinEdgeRatio) return (null, ratio);
+            LastChecker[key] = best.Value.Quad;
+            return (best.Value.Quad, ratio);
         }
 
         private static Point2f[]? ByCorners(FrameContext ctx, FrameInspection insp, Mat mask)

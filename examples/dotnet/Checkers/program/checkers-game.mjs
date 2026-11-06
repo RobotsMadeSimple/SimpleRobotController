@@ -5,14 +5,18 @@
 //  - "Checkers Game (camera)": end-to-end game vs a human, the camera spotting the human's move
 //  - "Checkers API Boilerplate": its TODO placeholders replaced with real grid moves
 // Squares 0..31 → board cell row = floor(s/4), col = 2*(s%4) + 1 - row%2 (the plugin's numbering).
-//   node checkers-game.mjs json [visionProgramId]   print the game program JSON (no controller needed)
-//   CTRL=host:port node checkers-game.mjs [build|save]
+//   node checkers-game.mjs json [visionProgramId] [orientation]   print the game program JSON (no controller needed)
+//   CTRL=host:port node checkers-game.mjs [build|save] [visionProgramId] [orientation]
+// orientation = where black's side is in the camera image (detectMove): rotated90 (right — the
+// side-on camera in the real photos, default), normal (top), rotated180 (bottom), rotated270 (left).
 import { writeFileSync } from "node:fs";
 import { Ctrl } from "../../../../live-tests/harness.mjs";
 
 const GRID_ID = "checkers-board", GRID_NAME = "Checkers Board", ORIGIN = "Checkers Board origin";
 const DISCARD = "Checkers Discard";
-const VISION = { visionProgramId: process.argv[3] || "b5cb580f", visionProgramName: "Checkers Board" };
+// The vision program checkers-vision.mjs builds (pass another id to use your own).
+const VISION = { visionProgramId: process.argv[3] || "checkers-vision", visionProgramName: "Checkers Board (camera)" };
+const ORIENTATION = process.argv[4] || "rotated90";
 
 let n = 0; const id = p => `ckg-${p}-${++n}`;
 const cond = (...exprs) => ({ combinator: "ALL", items: exprs.map(e => ({ id: id("c"), expr: e })) });
@@ -35,10 +39,13 @@ const pickAt = (sq, what) => [cell(sq, `Above ${what}`, true), cell(sq, `Down on
 const placeAt = (sq, what) => [cell(sq, `Above ${what}`, true), cell(sq, `Down onto ${what}`), call("Checkers Release"), cell(sq, `Lift off ${what}`, true)];
 const toDiscard = () => [discard("Above the discard pile", true), discard("Down to the discard pile"), call("Checkers Release"), discard("Up from the discard pile", true)];
 const park = () => discard("Park clear of the camera (above the discard pile)", true);
+// Black pieces come from a texture inspection "black" (black on black squares) or, in an older
+// vision program, a colour inspection "black"; whichever the program has fills blackCells.
 const look = () => ({ id: id("vis"), type: "RunVision", name: "Look at the board", waitTimeoutMs: 5000, ...VISION, outputFrame: "normalized",
-  colorOutputs: [{ inspectionId: "black", cellsVar: "blackCells" }, { inspectionId: "white", cellsVar: "whiteCells" }] });
+  colorOutputs: [{ inspectionId: "black", cellsVar: "blackCells" }, { inspectionId: "white", cellsVar: "whiteCells" }],
+  textureOutputs: [{ inspectionId: "black", cellsVar: "blackCells" }] });
 const detect = () => plugin("detectMove", "Compare the board with the game",
-  { whiteCells: "$whiteCells", blackCells: "$blackCells", minCoverage: "$minCoverage", orientation: "normal" },
+  { whiteCells: "$whiteCells", blackCells: "$blackCells", minCoverage: "$minCoverage", orientation: ORIENTATION, bothMeans: "white" },
   { from: "hFrom", to: "hTo", changed: "changed", moveText: "seenText" });
 
 const v = (name, value, description, extra = {}) => ({ id: `ckg-var-${name}`, name, value, description, ...extra });
@@ -55,7 +62,7 @@ function game() {
     num("minCoverage", 0, "0 = use each colour inspection's own pass/fail; else min % coverage for a piece"),
     num("maxPlies", 300, "Stop after this many moves"),
     list("whiteCells", "Record", "White-piece coverage per board cell (camera)"),
-    list("blackCells", "Record", "Black-piece coverage per board cell (camera)"),
+    list("blackCells", "Record", "Black-piece texture (or coverage) per board cell (camera)"),
     list("captured", "Number", "Squares the robot just jumped (cleared to the discard pile)"),
     num("fromSq", -1, "Robot move: from square", true), num("toSq", -1, "Robot move: to square", true),
     v("kinged", 0, "The robot's piece was crowned", { isBoolean: true }),

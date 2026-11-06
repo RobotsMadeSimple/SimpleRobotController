@@ -289,12 +289,15 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("codes")]        public List<BarcodeCodeResult> Codes        { get; set; } = new();
     }
 
-    // ── Frame / corner / edge inspections ────────────────────────────────────────
+    // ── Frame / corner / edge / texture inspections ────────────────────────────────────────
 
     /// <summary>
     /// Finds a four-cornered frame (a board's outline) so other zones can be aligned to it.
     /// method: "contour" (largest 4-sided contour), "lines" (two pairs of dominant edges,
-    /// intersected) or "corners" (Shi-Tomasi corners, the four extreme hull points).
+    /// intersected), "corners" (Shi-Tomasi corners, the four extreme hull points) or
+    /// "checker" (fits a gridRows × gridCols checkerboard to the squares themselves, starting
+    /// from the search zone drawn roughly over them — for a board whose frame is hidden, cut
+    /// off or blends with its dark squares).
     /// </summary>
     public class FrameInspection : IVisionInspection
     {
@@ -316,6 +319,15 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("maxCorners")]        public int     MaxCorners        { get; set; } = 200;
         [JsonPropertyName("cornerQuality")]     public double  CornerQuality     { get; set; } = 0.01;
         [JsonPropertyName("minCornerDistance")] public double  MinCornerDistance { get; set; } = 10;
+        /// <summary>checker: squares across and down the checkerboard.</summary>
+        [JsonPropertyName("gridRows")]          public int     GridRows          { get; set; } = 8;
+        [JsonPropertyName("gridCols")]          public int     GridCols          { get; set; } = 8;
+        /// <summary>
+        /// checker: found when the grid lines carry at least this many times the edge
+        /// strength of the lines halfway between them (square centres). A fitted board is
+        /// ~8–14; a grid a quarter square off, or a hand over the board, is under ~4.
+        /// </summary>
+        [JsonPropertyName("minEdgeRatio")]      public double  MinEdgeRatio      { get; set; } = 4;
         /// <summary>The frame's corners (TL, TR, BR, BL, normalized) when the aligned zones were
         /// drawn. Aligned zones are warped from these to the corners detected each frame.</summary>
         [JsonPropertyName("referenceCorners")]  public List<double[]>? ReferenceCorners { get; set; }
@@ -333,6 +345,8 @@ namespace Controller.RobotControl.Vision
         /// <summary>Frame area as % of the image.</summary>
         [JsonPropertyName("areaPct")]      public double         AreaPct      { get; set; }
         [JsonPropertyName("method")]       public string         Method       { get; set; } = "";
+        /// <summary>checker: the fit's edge ratio (see FrameInspection.MinEdgeRatio); null for other methods.</summary>
+        [JsonPropertyName("score")]        public double?        Score        { get; set; }
     }
 
     /// <summary>Corner (feature point) detection: Shi-Tomasi or Harris.</summary>
@@ -385,6 +399,47 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("dominantAngle")] public double? DominantAngle { get; set; }
     }
 
+    /// <summary>
+    /// Fine detail in the zone, or in each cell of its grid: the spread of brightness left once
+    /// slow shading is blurred away. A ringed or patterned object on a plain surface scores
+    /// high even when both are the same colour (a black checker on a black square), while glare
+    /// and soft shadows don't count. Each cell is measured on its centre only (inset by
+    /// <see cref="CellInset"/>) so the cell's own borders and a slightly-off grid don't count.
+    /// </summary>
+    public class TextureInspection : IVisionInspection
+    {
+        [JsonPropertyName("id")]        public string  Id        { get; set; } = "";
+        [JsonPropertyName("name")]      public string  Name      { get; set; } = "";
+        [JsonPropertyName("enabled")]   public bool    Enabled   { get; set; } = true;
+        [JsonPropertyName("zoneId")]    public string? ZoneId    { get; set; }
+        /// <summary>Margin trimmed off each side of a cell before measuring, % of the cell (0–45).</summary>
+        [JsonPropertyName("cellInset")] public double  CellInset { get; set; } = 25;
+        /// <summary>passed when the texture score is within [min, max].</summary>
+        [JsonPropertyName("minScore")]  public double? MinScore  { get; set; } = 4;
+        [JsonPropertyName("maxScore")]  public double? MaxScore  { get; set; }
+    }
+
+    public class TextureCellResult
+    {
+        [JsonPropertyName("row")]    public int    Row    { get; set; }
+        [JsonPropertyName("col")]    public int    Col    { get; set; }
+        [JsonPropertyName("index")]  public int    Index  { get; set; }
+        [JsonPropertyName("score")]  public double Score  { get; set; }
+        [JsonPropertyName("passed")] public bool   Passed { get; set; }
+    }
+
+    public class TextureResult
+    {
+        [JsonPropertyName("inspectionId")] public string                   InspectionId { get; set; } = "";
+        [JsonPropertyName("name")]         public string                   Name         { get; set; } = "";
+        /// <summary>The zone's score, or on a grid the highest cell score.</summary>
+        [JsonPropertyName("score")]        public double                   Score        { get; set; }
+        /// <summary>On a grid: true when at least one cell passed (a cell list is the real answer).</summary>
+        [JsonPropertyName("passed")]       public bool                     Passed       { get; set; }
+        [JsonPropertyName("cells")]        public List<TextureCellResult>? Cells        { get; set; }
+        [JsonPropertyName("cellsPassed")]  public int?                     CellsPassed  { get; set; }
+    }
+
     /// <summary>The outline a zone was actually used with this frame, after alignment.</summary>
     public class AlignedZone
     {
@@ -408,6 +463,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("frameInspections")]  public List<FrameInspection>         FrameInspections    { get; set; } = new();
         [JsonPropertyName("cornerInspections")] public List<CornerInspection>        CornerInspections   { get; set; } = new();
         [JsonPropertyName("edgeInspections")]   public List<EdgeInspection>          EdgeInspections     { get; set; } = new();
+        [JsonPropertyName("textureInspections")] public List<TextureInspection>      TextureInspections  { get; set; } = new();
         // Order of inspections as a flat list of ids across all the typed lists above. The
         // editor lets the user drag inspections into any order; the processor runs (and
         // stacks labels) in this order. Ids missing from the list run after the listed ones,
@@ -417,7 +473,7 @@ namespace Controller.RobotControl.Vision
 
         /// <summary>
         /// Every inspection across the typed lists, in type order: blob, color, polygon,
-        /// ArUco, line, barcode, frame, corner, edge — each list in its stored order. Ignores InspectionOrder.
+        /// ArUco, line, barcode, frame, corner, edge, texture — each list in its stored order. Ignores InspectionOrder.
         /// A list sent as JSON null is treated as empty.
         /// </summary>
         public IEnumerable<IVisionInspection> AllInspections()
@@ -431,6 +487,7 @@ namespace Controller.RobotControl.Vision
             foreach (var i in FrameInspections ?? [])   yield return i;
             foreach (var i in CornerInspections ?? [])  yield return i;
             foreach (var i in EdgeInspections ?? [])    yield return i;
+            foreach (var i in TextureInspections ?? []) yield return i;
         }
     }
 
@@ -466,6 +523,7 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("frameResults")]   public List<FrameResult>    FrameResults    { get; set; } = new();
         [JsonPropertyName("cornerResults")]  public List<CornerResult>   CornerResults   { get; set; } = new();
         [JsonPropertyName("edgeResults")]    public List<EdgeResult>     EdgeResults     { get; set; } = new();
+        [JsonPropertyName("textureResults")] public List<TextureResult>  TextureResults  { get; set; } = new();
         /// <summary>Zones warped by a frame inspection this frame, as the outline actually used.</summary>
         [JsonPropertyName("alignedZones")]   public List<AlignedZone>    AlignedZones    { get; set; } = new();
         // How long each inspection took to run this frame, in milliseconds, keyed by

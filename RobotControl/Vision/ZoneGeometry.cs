@@ -315,6 +315,53 @@ namespace Controller.RobotControl.Vision
             return LocalQuad(geom.X * w + hw, geom.Y * h + hh, x0, y0, x1, y1, geom.Rotation);
         }
 
+        /// <summary>
+        /// The centre part of grid cell (row, col): the cell with <paramref name="inset"/>
+        /// (0–0.45, a fraction of the cell) trimmed off every side, as a quad TL, TR, BR, BL.
+        /// On a perspective quad the trim follows the perspective; any other zone uses its
+        /// bounding-box lattice, like the cells themselves.
+        /// </summary>
+        public static Point2f[] CellWindow(
+            VisionZoneGeometry geom, int rows, int cols, int row, int col, double inset, int w, int h)
+        {
+            double t = Math.Clamp(inset, 0, 0.45);
+            double u0 = (col + t) / cols, u1 = (col + 1 - t) / cols;
+            double v0 = (row + t) / rows, v1 = (row + 1 - t) / rows;
+            if (IsQuad(geom))
+            {
+                var hq = UnitSquareTo(QuadCorners(geom, w, h));
+                Point2f P(double u, double v)
+                {
+                    var (x, y) = Calibration.Homography.Apply(hq, u, v);
+                    return new Point2f((float)x, (float)y);
+                }
+                return new[] { P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1) };
+            }
+            if (IsRotatedRect(geom))
+            {
+                double hw = geom.Width * w / 2.0, hh = geom.Height * h / 2.0;
+                return LocalQuad(geom.X * w + hw, geom.Y * h + hh,
+                    -hw + 2 * hw * u0, -hh + 2 * hh * v0, -hw + 2 * hw * u1, -hh + 2 * hh * v1, geom.Rotation);
+            }
+            var b = ZoneBounds(geom, w, h);
+            float X(double u) => (float)(b.X + b.Width * u);
+            float Y(double v) => (float)(b.Y + b.Height * v);
+            return new[] { new Point2f(X(u0), Y(v0)), new Point2f(X(u1), Y(v0)), new Point2f(X(u1), Y(v1)), new Point2f(X(u0), Y(v1)) };
+        }
+
+        /// <summary>
+        /// A zone's four corners (TL, TR, BR, BL) in pixels when it has four: a quad, a
+        /// rectangle (tilted or not) or a four-point polygon. Null for anything else.
+        /// </summary>
+        public static Point2f[]? FourCorners(VisionZoneGeometry geom, int w, int h)
+        {
+            if (IsQuad(geom)) return QuadCorners(geom, w, h);
+            if (geom.Shape == VisionZoneShape.Rectangle) return RectCorners(geom, w, h);
+            if (geom.Shape == VisionZoneShape.Polygon && geom.Points.Count == 4)
+                return Inspections.FrameStrategy.Order(QuadCorners(geom, w, h));
+            return null;
+        }
+
         /// <summary>Axis-aligned pixel bounding box of a quad, clamped to the frame.</summary>
         public static Rect QuadBounds(Point2f[] quad, int w, int h)
         {

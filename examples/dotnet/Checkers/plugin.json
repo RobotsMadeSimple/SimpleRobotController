@@ -84,7 +84,8 @@
         { "key": "whiteCells",  "label": "White cells (vision)", "type": "list", "required": true },
         { "key": "blackCells",  "label": "Black cells (vision)", "type": "list", "required": true },
         { "key": "minCoverage", "label": "Min coverage % (0 = inspection pass/fail)", "type": "number", "default": 0 },
-        { "key": "orientation", "label": "Camera grid",          "type": "enum", "default": "normal", "options": ["normal", "rotated180"] }
+        { "key": "orientation", "label": "Camera grid",          "type": "enum", "default": "normal", "options": ["normal", "rotated90", "rotated180", "rotated270"] },
+        { "key": "bothMeans",   "label": "Cell read as both",    "type": "enum", "default": "white", "options": ["white", "black", "neither"] }
       ],
       "outputs": [
         { "key": "status",    "label": "same / move / unclear",     "type": "string" },

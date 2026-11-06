@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <None Include="Golden\programstep.golden.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\*.jpg" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

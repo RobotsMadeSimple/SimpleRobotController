@@ -143,6 +143,17 @@ public class EdgeVisionStepOutput
     [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
 }
 
+/// <summary>RunVision → a texture inspection: its score/pass, and per grid cell.</summary>
+public class TextureVisionStepOutput
+{
+    [JsonPropertyName("inspectionId")]   public string  InspectionId   { get; set; } = "";
+    [JsonPropertyName("scoreVar")]       public string? ScoreVar       { get; set; }
+    [JsonPropertyName("passedVar")]      public string? PassedVar      { get; set; }
+    /// <summary>Records list, one per cell: { row, col, index, score, passed }.</summary>
+    [JsonPropertyName("cellsVar")]       public string? CellsVar       { get; set; }
+    [JsonPropertyName("cellsPassedVar")] public string? CellsPassedVar { get; set; }
+}
+
 public class ConditionItem
 {
     [JsonPropertyName("id")]       public string Id       { get; set; } = "";
@@ -397,6 +408,7 @@ public class ProgramStep
     [JsonPropertyName("frameOutputs")]      public List<FrameVisionStepOutput>?    FrameOutputs   { get; set; }
     [JsonPropertyName("cornerOutputs")]     public List<CornerVisionStepOutput>?   CornerOutputs  { get; set; }
     [JsonPropertyName("edgeOutputs")]       public List<EdgeVisionStepOutput>?     EdgeOutputs    { get; set; }
+    [JsonPropertyName("textureOutputs")]    public List<TextureVisionStepOutput>?  TextureOutputs { get; set; }
     /// <summary>
     /// Coordinate frame of the blob points and polygon/ArUco centers written by RunVision:
     /// "pixel", "normalized" (0–1) or "robot" (mm on the camera's calibration plane, point

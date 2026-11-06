@@ -405,6 +405,12 @@ namespace Controller.RobotControl.Validation
                     Implicit(o.DensityVar, SymKind.Number); Implicit(o.PassedVar, SymKind.Boolean);
                     Implicit(o.AngleVar, SymKind.Number);
                 }
+                foreach (var o in s.TextureOutputs ?? [])
+                {
+                    Implicit(o.ScoreVar, SymKind.Number); Implicit(o.PassedVar, SymKind.Boolean);
+                    Implicit(o.CellsVar, SymKind.List, ListElementType.Record);
+                    Implicit(o.CellsPassedVar, SymKind.Number);
+                }
                 // A Plugin step's number/boolean outputs create their variable like Set Variable does.
                 if (s.Type == StepType.Plugin && PluginStepDef(s) is { } pdef)
                     foreach (var m in s.PluginOutputs ?? [])
@@ -1068,6 +1074,12 @@ namespace Controller.RobotControl.Validation
                     var o = s.EdgeOutputs![j]; if (o == null) continue;
                     T(o.DensityVar, $"edgeOutputs[{j}].densityVar"); T(o.PassedVar, $"edgeOutputs[{j}].passedVar");
                     T(o.AngleVar, $"edgeOutputs[{j}].angleVar");
+                }
+                for (int j = 0; j < (s.TextureOutputs?.Count ?? 0); j++)
+                {
+                    var o = s.TextureOutputs![j]; if (o == null) continue;
+                    T(o.ScoreVar, $"textureOutputs[{j}].scoreVar"); T(o.PassedVar, $"textureOutputs[{j}].passedVar");
+                    T(o.CellsVar, $"textureOutputs[{j}].cellsVar"); T(o.CellsPassedVar, $"textureOutputs[{j}].cellsPassedVar");
                 }
             }
 
