@@ -161,16 +161,18 @@ const J = x => typeof x === "string" ? JSON.parse(x) : x;
 const progs = J((await c.cmd("GetBuiltPrograms")).programs);
 const g = game();
 const orig = progs.find(p => p.name === "Checkers API Boilerplate");
-if (JSON.stringify(orig).includes("ckg-")) throw new Error("boilerplate already converted — restore checkers-boilerplate-before.json first");
-const bp = boilerplate(orig);
+// The boilerplate is converted once; after that only the game program is (re)built.
+const converted = !orig || JSON.stringify(orig).includes("ckg-");
+if (converted) console.log("Checkers API Boilerplate: already converted (or missing) — left as is");
+const bp = converted ? null : boilerplate(orig);
 const r1 = routine("Checkers Grip", true), r2 = routine("Checkers Release", false);
-writeFileSync("checkers-boilerplate-before.json", JSON.stringify(orig, null, 1));
+if (!converted) writeFileSync("checkers-boilerplate-before.json", JSON.stringify(orig, null, 1));
 if (mode === "save") {
   if (!J((await c.cmd("GetGrids")).grids).some(x => x.id === GRID_ID))
     console.log("grid:", (await c.cmd("SaveGrid", { id: GRID_ID, name: GRID_NAME, basePointName: ORIGIN, rowOffsetX: 0, rowOffsetY: 0, rowOffsetZ: 0, colOffsetX: 0, colOffsetY: 0, colOffsetZ: 0, rowCount: 8, colCount: 8, rotation: 0 })).ok);
   for (const r of [r1, r2]) if (!progs.some(p => p.name === r.name)) console.log("routine", r.name, (await c.cmd("SaveBuiltProgram", r)).ok);
 }
-for (const p of [g, bp]) {
+for (const p of [g, bp].filter(Boolean)) {
   const val = await c.cmd("ValidateBuiltProgram", { program: p });
   const probs = (val.problems ?? []).map(x => `${x.severity}:${x.code}:${x.message}`);
   console.log(p.name, "steps", p.steps.length, "problems:", [...new Set(probs)].join(" | ") || "none");
