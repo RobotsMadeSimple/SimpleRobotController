@@ -198,22 +198,19 @@ STEPS = {
 
     # ── Vision & imaging ──────────────────────────────────────────────────
     "RunVision": {
-        "what": "Run a saved vision program and write its inspection results into variables.",
+        "what": ("Run a saved vision program (image layers + building-block tools, see "
+                 "docs/vision-tools.md) and write tool results into variables."),
         "fields": {
             "visionProgramId": "string.", "visionProgramName": "string.",
-            "visionZoneId": "string. Restrict to one zone.",
-            "visionZoneVar": "string. Variable naming the zone at run time.",
-            "visionOutputs":  "array of {inspectionId, countVar?, pointsVar?, detectedVar?} - blob inspections.",
-            "colorOutputs":   ("array of {inspectionId, coverageVar?, passedVar?, cellsVar?, cellsPassedVar?}. "
-                               "coverageVar is whole-zone %. On a zone with a grid, passedVar means every cell "
-                               "passed, cellsVar takes an object-list variable filled with one record per cell "
-                               "(row, col, index, coverage, passed), and cellsPassedVar gets the pass count."),
-            "polygonOutputs": "array of {inspectionId, countVar?, foundVar?, angleVar?, centerXVar?, centerYVar?}.",
-            "arucoOutputs":   "array of {inspectionId, countVar?, foundVar?, firstIdVar?, firstCenterXVar?, firstCenterYVar?}.",
-            "frameOutputs":   "array of {inspectionId, foundVar?, cornersVar? (Point list TL,TR,BR,BL), angleVar?} - frame/alignment inspections.",
-            "cornerOutputs":  "array of {inspectionId, countVar?, foundVar?, pointsVar? (Point list)} - corner inspections.",
-            "edgeOutputs":    "array of {inspectionId, densityVar?, passedVar?, angleVar?} - edge inspections.",
-            "textureOutputs": "array of {inspectionId, scoreVar?, passedVar?, cellsVar?, cellsPassedVar?} - texture inspections; cellsVar = records {row,col,index,score,passed}.",
+            "outputFrame": ('"pixel" (default) | "normalized" | "robot" - frame of the positions written '
+                            "(points, pose, item/line coordinates, values x/y). robot needs a calibrated camera."),
+            "passVariable": "string, optional. Set to the program's overall pass (1/0).",
+            "toolOutputs": ("array of {toolId, value, variable}. value: any key of the tool's values "
+                            "(angle, count, percent, distance, ... -> Number; a barcode's value -> String), "
+                            "or passed (1/0), status (String), cells (Record list {row,col,index,value,passed}), "
+                            "items (Record list), points (Point list), lines (Record list {x1,y1,x2,y2}), "
+                            "pose (Record list with one {x,y,z,angle}, empty when not found). Declare list "
+                            "variables with items: [] and the matching elementType."),
         },
     },
     "CaptureImage": {

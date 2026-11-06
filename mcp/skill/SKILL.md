@@ -155,25 +155,27 @@ Nested steps live in `loopSteps`, `ifSteps`, `elseSteps`, and
 
 ## Vision grids and object variables
 
-A vision **zone** can carry a `grid` of `{ rows, cols }`. A color coverage
-inspection on that zone is then measured once per cell instead of once overall.
-Only color coverage reads the grid — the other inspection types ignore it.
+A vision program is image layers plus building-block **tools** (docs/vision-tools.md).
+A presence tool (`pixelCount`, `intensity`, `edgePixels`, `polygon`) can carry a
+`grid` of `{ rows, cols, inset }` and is then measured once per cell, each cell judged
+on the tool's limit for its main value.
 
-The grid lives on the zone, which the app's vision editor owns. You do not create
-it from a program; you consume its results in `colorOutputs`:
+The grid lives on the tool, which the app's vision editor owns. You do not create
+it from a program; you consume its results in RunVision `toolOutputs`:
 
 ```json
-{ "inspectionId": "...", "coverageVar": "cov", "passedVar": "allOk",
-  "cellsVar": "cells", "cellsPassedVar": "nOk" }
+{ "passVariable": "visionOk",
+  "toolOutputs": [ { "toolId": "...", "value": "cells", "variable": "cells" },
+                   { "toolId": "...", "value": "cellsPassed", "variable": "nOk" } ] }
 ```
 
-- `coverageVar` is still the **whole-zone** percentage.
-- `passedVar` on a gridded zone means **every cell passed**, not the zone average.
-- `cellsVar` needs a **`Record` list**: declare it as `{"id": "...", "name": "cells",
+- `value: "percent"` (or the tool's other values) is the **whole-region** value.
+- `value: "passed"` on a gridded tool means **every cell passed**.
+- `value: "cells"` needs a **`Record` list**: declare it as `{"id": "...", "name": "cells",
   "items": [], "elementType": "Record"}`. It is filled row-major with one record per
-  cell — fields `row`, `col`, `index`, `coverage`, `passed` (1/0).
+  cell — fields `row`, `col`, `index`, `value`, `passed` (1/0).
 
-Read a record with `$cells[$i].coverage`; count them with `$cells.length`. An
+Read a record with `$cells[$i].value`; count them with `$cells.length`. An
 out-of-range index or unknown field reads `0`, not an error. Fields are numbers
 only, so a boolean is `0`/`1`.
 

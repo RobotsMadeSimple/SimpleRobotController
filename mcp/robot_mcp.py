@@ -359,16 +359,23 @@ def validate_program(prog, known_points=None, known_programs=None):
                 errors.append(f"{path} assigns '{vn}', which is not declared in `variables`. "
                               f"Reading it later throws UnknownVariable at run time.")
 
-        # A cellsVar holds a list of records, not a number, so it has to be declared as a
-        # Record list - the executor would happily create it at run time, but a variable
-        # the app cannot see is one the user cannot pick or inspect.
+        # cells / items / lines / pose outputs hold a list of records, not a number, so the
+        # variable has to be declared as a Record list - the executor would happily create
+        # it at run time, but a variable the app cannot see is one the user cannot pick or
+        # inspect.
         if stype == "RunVision":
-            for j, out in enumerate(step.get("colorOutputs") or []):
-                cv = isinstance(out, dict) and out.get("cellsVar")
-                if cv and cv not in object_var_names:
+            for j, out in enumerate(step.get("toolOutputs") or []):
+                if not isinstance(out, dict):
+                    errors.append(f"{path}.toolOutputs[{j}] is not an object.")
+                    continue
+                cv, kind = out.get("variable"), out.get("value")
+                if not out.get("toolId") or not kind or not cv:
+                    errors.append(f"{path}.toolOutputs[{j}] needs toolId, value and variable.")
+                    continue
+                if kind in ("cells", "items", "lines", "pose") and cv not in object_var_names:
                     (errors if cv in var_names else warnings).append(
-                        f"{path}.colorOutputs[{j}].cellsVar = '{cv}' is "
-                        + ("not a Record list; it holds one record per grid cell, so declare "
+                        f"{path}.toolOutputs[{j}].variable = '{cv}' is "
+                        + (f"not a Record list; {kind} is a list of records, so declare "
                            'it with items: [] and elementType: "Record".' if cv in var_names else
                            'not declared in `variables`. Add it with items: [] and '
                            'elementType: "Record".')
