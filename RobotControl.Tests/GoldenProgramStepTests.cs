@@ -54,6 +54,19 @@ public class GoldenProgramStepTests
     }
 
     [Fact]
+    public void RunVisionFieldsDeserialize()
+    {
+        var step = JsonSerializer.Deserialize<ProgramStep>(File.ReadAllText(GoldenPath), Options)!;
+        Assert.Equal("vp-1", step.VisionProgramId);
+        Assert.Equal("visionOk", step.PassVariable);
+        Assert.Equal(2, step.ToolOutputs!.Count);
+        Assert.Equal("t5", step.ToolOutputs[1].ToolId);
+        Assert.Equal("cells", step.ToolOutputs[1].Value);
+        Assert.Equal("whiteCells", step.ToolOutputs[1].Variable);
+        Assert.Equal("robot", step.OutputFrame);
+    }
+
+    [Fact]
     public void RoundTripPreservesEveryGoldenKey()
     {
         var json = File.ReadAllText(GoldenPath);

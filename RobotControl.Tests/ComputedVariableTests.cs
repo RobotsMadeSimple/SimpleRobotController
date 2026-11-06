@@ -340,7 +340,7 @@ public class ComputedVariableTests
             }),
             Step(StepType.StopwatchControl, s => { s.StopwatchVariableName = "c"; s.StopwatchAction = "Start"; }),
             Step(StepType.HttpRequest, s => { s.JsonUrl = "http://x"; s.JsonInbound = [new JsonInboundMapping { Key = "k", VariableName = "c" }]; }),
-            Step(StepType.RunVision, s => { s.VisionOutputs = [new VisionStepOutput { CountVar = "c" }]; }),
+            Step(StepType.RunVision, s => { s.ToolOutputs = [new VisionToolOutput { ToolId = "t1", Value = "count", Variable = "c" }]; }),
         ], Computed("c", "1"), new ProgramVariable { Name = "vals", Items = [], ElementType = ListElementType.Number });
 
         var writes = problems.Where(p => p.Code == ValidationCodes.ComputedVariable).ToList();

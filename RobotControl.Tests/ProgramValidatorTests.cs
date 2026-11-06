@@ -38,6 +38,7 @@ public class ProgramValidatorTests
         GridExists          = id => id == "grid1",
         StackExists         = id => id == "stack1",
         VisionProgramExists = id => id == "vp1",
+        VisionToolIds       = id => id == "vp1" ? ["a"] : null,
         FindProgram         = (id, name) => others.FirstOrDefault(p =>
             (id != null && p.Id == id) || (id == null && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))),
     };
@@ -279,7 +280,7 @@ public class ProgramValidatorTests
     {
         var p = Prog([
             Step(StepType.Loop, s => { s.LoopMode = "forEach"; s.ForEachVariableName = "vals"; s.ForEachValueVariableName = "robot.z"; s.LoopSteps = [Step(StepType.PauseProgram)]; }),
-            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.VisionOutputs = [new VisionStepOutput { InspectionId = "a", CountVar = "time.now" }]; }),
+            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.ToolOutputs = [new VisionToolOutput { ToolId = "a", Value = "count", Variable = "time.now" }]; }),
         ], List("vals", ListElementType.Number));
         Assert.Equal(2, Validate(p).Count(x => x.Code == ValidationCodes.ReadOnlyProperty));
     }
@@ -315,10 +316,29 @@ public class ProgramValidatorTests
     public void ImplicitOutputsAreKnown()
     {
         var p = Prog([
-            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.VisionOutputs = [new VisionStepOutput { InspectionId = "a", CountVar = "blobCount", PointsVar = "blobs" }]; }),
-            Step(StepType.MoveL, s => { s.PointNameExpr = "$blobs[0]"; s.Expressions = new() { ["offsetZ"] = "$blobCount" }; }),
+            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.PassVariable = "ok"; s.ToolOutputs = [new VisionToolOutput { ToolId = "a", Value = "count", Variable = "blobCount" }, new VisionToolOutput { ToolId = "a", Value = "points", Variable = "blobs" }, new VisionToolOutput { ToolId = "a", Value = "cells", Variable = "cells" }]; }),
+            Step(StepType.MoveL, s => { s.PointNameExpr = "$blobs[0]"; s.Expressions = new() { ["offsetZ"] = "$blobCount + $cells[0].value + $ok" }; }),
         ]);
         Clean(Validate(p));
+    }
+
+    [Fact]
+    public void VisionToolOutputsNeedAKnownToolAValueAndAVariable()
+    {
+        var p = Prog([
+            Step(StepType.RunVision, s =>
+            {
+                s.VisionProgramId = "vp1";
+                s.ToolOutputs = [new VisionToolOutput { ToolId = "zz", Value = "count", Variable = "n" },
+                                 new VisionToolOutput { ToolId = "a", Value = "", Variable = "m" },
+                                 new VisionToolOutput { ToolId = "a", Value = "count", Variable = "" }];
+            }),
+        ]);
+        var probs = Validate(p);
+        var unknown = Single(probs, ValidationCodes.UnknownVisionTool);
+        Assert.Equal(ValidationSeverity.Warning, unknown.Severity);
+        Assert.Equal("toolOutputs[0].toolId", unknown.Field);
+        Assert.Equal(2, probs.Count(x => x.Code == ValidationCodes.MissingField));
     }
 
     // ── Repositories ───────────────────────────────────────────────────────

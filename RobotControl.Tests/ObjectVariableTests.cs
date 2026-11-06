@@ -171,18 +171,19 @@ public class ObjectVariableTests
     }
 
     [Fact]
-    public void GridColorOutputsSurviveDeserialization()
+    public void VisionToolOutputsSurviveDeserialization()
     {
         var step = JsonSerializer.Deserialize<ProgramStep>("""
         {
-          "id": "s1", "type": "RunVision",
-          "colorOutputs": [ { "inspectionId": "i1", "coverageVar": "cov", "passedVar": "ok",
-                              "cellsVar": "cells", "cellsPassedVar": "nOk" } ]
+          "id": "s1", "type": "RunVision", "passVariable": "ok",
+          "toolOutputs": [ { "toolId": "t5", "value": "cells", "variable": "whiteCells" } ]
         }
         """, CaseInsensitive)!;
 
-        var output = Assert.Single(step.ColorOutputs!);
-        Assert.Equal("cells", output.CellsVar);
-        Assert.Equal("nOk", output.CellsPassedVar);
+        var output = Assert.Single(step.ToolOutputs!);
+        Assert.Equal("t5", output.ToolId);
+        Assert.Equal("cells", output.Value);
+        Assert.Equal("whiteCells", output.Variable);
+        Assert.Equal("ok", step.PassVariable);
     }
 }

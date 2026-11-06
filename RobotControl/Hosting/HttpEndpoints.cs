@@ -161,18 +161,27 @@ namespace Controller.RobotControl.Hosting
                 return WriteJpegAsync(context, proc == null ? null : (proc.GetLatestAnnotated, 204));
             });
 
-            // Polygon inspection debug frame — threshold mask with color-coded contours.
-            app.MapGet("/vision/{id}/debug/polygon/{inspId}", (string id, string inspId, HttpContext context) =>
+            // Layer preview for tuning: the layer's filter stack run up to filter index ?upTo=N
+            // (omitted = all filters, -1 = the layer's input), on the program's newest frame (its
+            // running processor's, else its camera's). 404 unknown program/layer, 204 no frame yet.
+            app.MapGet("/vision/{id}/layer/{layerId}", (string id, string layerId, HttpContext context) =>
             {
-                var proc = robot.VisionManager.GetProcessor(id);
-                return WriteJpegAsync(context, proc == null ? null : (() => proc.GetPolygonDebugFrame(inspId), 204));
+                var prog = robot.VisionManager.GetProcessor(id)?.Program ?? robot.VisionManager.GetProgram(id);
+                if (prog == null || (layerId != Vision.VisionTool.CameraInput && !prog.Layers.Exists(l => l.Id == layerId)))
+                    return WriteJpegAsync(context, null);
+                int? upTo = int.TryParse(context.Request.Query["upTo"], out var u) ? u : null;
+                return WriteJpegAsync(context, (() => Vision.VisionProcessor.RenderLayer(prog, robot.VisionManager.LatestFrame(id), layerId, upTo), 204));
             });
 
-            // Line inspection debug frame — Canny edge map with matched and angle-filtered segments.
-            app.MapGet("/vision/{id}/debug/line/{inspId}", (string id, string inspId, HttpContext context) =>
+            // One tool's result drawn over its own input layer, on the newest frame (the running
+            // processor's latest result, else the program run once on the camera's frame).
+            app.MapGet("/vision/{id}/tool/{toolId}/debug", (string id, string toolId, HttpContext context) =>
             {
                 var proc = robot.VisionManager.GetProcessor(id);
-                return WriteJpegAsync(context, proc == null ? null : (() => proc.GetLineDebugFrame(inspId), 204));
+                var prog = proc?.Program ?? robot.VisionManager.GetProgram(id);
+                if (prog?.Tool(toolId) == null) return WriteJpegAsync(context, null);
+                return WriteJpegAsync(context, (() => Vision.VisionProcessor.RenderToolDebug(
+                    prog, robot.VisionManager.LatestFrame(id), toolId, proc?.GetLatestResult()), 204));
             });
 
             // Annotated snapshot captured at the end of the most recent RunVision step.

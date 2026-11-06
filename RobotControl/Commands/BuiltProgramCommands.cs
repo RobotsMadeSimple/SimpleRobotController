@@ -270,6 +270,7 @@ internal sealed class BuiltProgramCommands
                 ? (st.BasePointName, st.OffsetX != 0 || st.OffsetY != 0 || st.OffsetZ != 0)
                 : null,
             VisionProgramExists = vision == null ? null : id => vision.Get(id) != null,
+            VisionToolIds       = vision == null ? null : id => vision.Get(id)?.Tools?.Select(t => t.Id).ToList(),
             VisionProgramCamera = vision == null || _robot.CalibrationRepo == null ? null
                 : id => vision.Get(id) is { } vp ? (vp.CameraId, _robot.CalibrationRepo.IsCalibrated(vp.CameraId)) : null,
             FindProgram         = (id, name) =>

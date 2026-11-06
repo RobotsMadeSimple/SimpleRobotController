@@ -36,6 +36,8 @@ namespace Controller.RobotControl.Validation
         public const string UnknownLocal         = "unknownLocal";
         public const string UnknownRoutine       = "unknownRoutine";
         public const string UnknownVisionProgram = "unknownVisionProgram";
+        /// <summary>A RunVision toolOutputs entry names a tool its vision program does not have.</summary>
+        public const string UnknownVisionTool    = "unknownVisionTool";
         public const string UnknownGrid          = "unknownGrid";
         public const string UnknownStack         = "unknownStack";
         public const string UnknownLabel         = "unknownLabel";
@@ -133,6 +135,8 @@ namespace Controller.RobotControl.Validation
         public Func<string, (string BasePointName, bool HasSpacing)?>? StackBase { get; init; }
         /// <summary>By vision program id.</summary>
         public Func<string, bool>? VisionProgramExists { get; init; }
+        /// <summary>The tool ids of a vision program (null when unknown); checks RunVision toolOutputs.</summary>
+        public Func<string, IReadOnlyCollection<string>?>? VisionToolIds { get; init; }
         /// <summary>A vision program's camera and whether it has a camera-to-robot calibration; null for an unknown program.</summary>
         public Func<string, (string CameraId, bool Calibrated)?>? VisionProgramCamera { get; init; }
         /// <summary>A built program / routine by id first, then name — the executor's own order.</summary>
@@ -364,52 +368,11 @@ namespace Controller.RobotControl.Validation
                     case StepType.AuxMove: case StepType.GripperAction:
                         Implicit(s.MoveStopFlagVariableName, SymKind.Boolean); break;
                 }
-                foreach (var o in s.VisionOutputs ?? [])
+                if (s.Type == StepType.RunVision)
                 {
-                    Implicit(o.CountVar, SymKind.Number);
-                    Implicit(o.PointsVar, SymKind.List, ListElementType.Point);
-                    Implicit(o.DetectedVar, SymKind.Boolean);
-                }
-                foreach (var o in s.ColorOutputs ?? [])
-                {
-                    Implicit(o.CoverageVar, SymKind.Number);
-                    Implicit(o.PassedVar, SymKind.Boolean);
-                    Implicit(o.CellsVar, SymKind.List, ListElementType.Record);
-                    Implicit(o.CellsPassedVar, SymKind.Number);
-                }
-                foreach (var o in s.PolygonOutputs ?? [])
-                {
-                    Implicit(o.CountVar, SymKind.Number); Implicit(o.FoundVar, SymKind.Boolean);
-                    Implicit(o.AngleVar, SymKind.Number); Implicit(o.CenterXVar, SymKind.Number);
-                    Implicit(o.CenterYVar, SymKind.Number);
-                }
-                foreach (var o in s.ArucoOutputs ?? [])
-                {
-                    Implicit(o.CountVar, SymKind.Number); Implicit(o.FoundVar, SymKind.Boolean);
-                    Implicit(o.FirstIdVar, SymKind.Number); Implicit(o.FirstCenterXVar, SymKind.Number);
-                    Implicit(o.FirstCenterYVar, SymKind.Number);
-                }
-                foreach (var o in s.FrameOutputs ?? [])
-                {
-                    Implicit(o.FoundVar, SymKind.Boolean);
-                    Implicit(o.CornersVar, SymKind.List, ListElementType.Point);
-                    Implicit(o.AngleVar, SymKind.Number);
-                }
-                foreach (var o in s.CornerOutputs ?? [])
-                {
-                    Implicit(o.CountVar, SymKind.Number); Implicit(o.FoundVar, SymKind.Boolean);
-                    Implicit(o.PointsVar, SymKind.List, ListElementType.Point);
-                }
-                foreach (var o in s.EdgeOutputs ?? [])
-                {
-                    Implicit(o.DensityVar, SymKind.Number); Implicit(o.PassedVar, SymKind.Boolean);
-                    Implicit(o.AngleVar, SymKind.Number);
-                }
-                foreach (var o in s.TextureOutputs ?? [])
-                {
-                    Implicit(o.ScoreVar, SymKind.Number); Implicit(o.PassedVar, SymKind.Boolean);
-                    Implicit(o.CellsVar, SymKind.List, ListElementType.Record);
-                    Implicit(o.CellsPassedVar, SymKind.Number);
+                    Implicit(s.PassVariable, SymKind.Boolean);
+                    foreach (var o in s.ToolOutputs ?? [])
+                        if (o != null) Implicit(o.Variable, VisionOutputKind(o.Value, out var et), et);
                 }
                 // A Plugin step's number/boolean outputs create their variable like Set Variable does.
                 if (s.Type == StepType.Plugin && PluginStepDef(s) is { } pdef)
@@ -807,7 +770,6 @@ namespace Controller.RobotControl.Validation
                         else if (_ctx.VisionProgramExists != null && !_ctx.VisionProgramExists(s.VisionProgramId))
                             Add(at, ValidationCodes.UnknownVisionProgram,
                                 $"Vision program '{s.VisionProgramName ?? s.VisionProgramId}' does not exist", "visionProgramId");
-                        if (!string.IsNullOrWhiteSpace(s.VisionZoneVar)) CheckRead(s.VisionZoneVar, at, "visionZoneVar");
                         CheckOutputFrame(s, at);
                         CheckVisionTargets(s, at);
                         break;
@@ -1028,58 +990,40 @@ namespace Controller.RobotControl.Validation
                     $"of vision program '{s.VisionProgramName ?? s.VisionProgramId}' has no calibration", "outputFrame");
             }
 
+            /// <summary>The kind of variable a RunVision toolOutputs entry writes, by its value key.</summary>
+            private static SymKind VisionOutputKind(string? value, out ListElementType et)
+            {
+                et = ListElementType.Record;
+                switch (value?.Trim())
+                {
+                    case "cells": case "items": case "lines": case "pose": return SymKind.List;
+                    case "points": et = ListElementType.Point; return SymKind.List;
+                    case "passed": case "found": return SymKind.Boolean;
+                    case "status": case "format": return SymKind.String;
+                    case "value": return SymKind.String;   // a barcode's text
+                    default: return SymKind.Number;
+                }
+            }
+
             private void CheckVisionTargets(ProgramStep s, At at)
             {
-                void T(string? n, string f) => CheckTarget(n, at, f, requireDeclared: false);
-                for (int j = 0; j < (s.VisionOutputs?.Count ?? 0); j++)
+                CheckTarget(s.PassVariable, at, "passVariable", requireDeclared: false);
+                var toolIds = string.IsNullOrEmpty(s.VisionProgramId) ? null : _ctx.VisionToolIds?.Invoke(s.VisionProgramId);
+                for (int j = 0; j < (s.ToolOutputs?.Count ?? 0); j++)
                 {
-                    var o = s.VisionOutputs![j]; if (o == null) continue;
-                    T(o.CountVar, $"visionOutputs[{j}].countVar"); T(o.PointsVar, $"visionOutputs[{j}].pointsVar");
-                    T(o.DetectedVar, $"visionOutputs[{j}].detectedVar");
-                }
-                for (int j = 0; j < (s.ColorOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.ColorOutputs![j]; if (o == null) continue;
-                    T(o.CoverageVar, $"colorOutputs[{j}].coverageVar"); T(o.PassedVar, $"colorOutputs[{j}].passedVar");
-                    T(o.CellsVar, $"colorOutputs[{j}].cellsVar"); T(o.CellsPassedVar, $"colorOutputs[{j}].cellsPassedVar");
-                }
-                for (int j = 0; j < (s.PolygonOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.PolygonOutputs![j]; if (o == null) continue;
-                    T(o.CountVar, $"polygonOutputs[{j}].countVar"); T(o.FoundVar, $"polygonOutputs[{j}].foundVar");
-                    T(o.AngleVar, $"polygonOutputs[{j}].angleVar"); T(o.CenterXVar, $"polygonOutputs[{j}].centerXVar");
-                    T(o.CenterYVar, $"polygonOutputs[{j}].centerYVar");
-                }
-                for (int j = 0; j < (s.ArucoOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.ArucoOutputs![j]; if (o == null) continue;
-                    T(o.CountVar, $"arucoOutputs[{j}].countVar"); T(o.FoundVar, $"arucoOutputs[{j}].foundVar");
-                    T(o.FirstIdVar, $"arucoOutputs[{j}].firstIdVar"); T(o.FirstCenterXVar, $"arucoOutputs[{j}].firstCenterXVar");
-                    T(o.FirstCenterYVar, $"arucoOutputs[{j}].firstCenterYVar");
-                }
-                for (int j = 0; j < (s.FrameOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.FrameOutputs![j]; if (o == null) continue;
-                    T(o.FoundVar, $"frameOutputs[{j}].foundVar"); T(o.CornersVar, $"frameOutputs[{j}].cornersVar");
-                    T(o.AngleVar, $"frameOutputs[{j}].angleVar");
-                }
-                for (int j = 0; j < (s.CornerOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.CornerOutputs![j]; if (o == null) continue;
-                    T(o.CountVar, $"cornerOutputs[{j}].countVar"); T(o.FoundVar, $"cornerOutputs[{j}].foundVar");
-                    T(o.PointsVar, $"cornerOutputs[{j}].pointsVar");
-                }
-                for (int j = 0; j < (s.EdgeOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.EdgeOutputs![j]; if (o == null) continue;
-                    T(o.DensityVar, $"edgeOutputs[{j}].densityVar"); T(o.PassedVar, $"edgeOutputs[{j}].passedVar");
-                    T(o.AngleVar, $"edgeOutputs[{j}].angleVar");
-                }
-                for (int j = 0; j < (s.TextureOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.TextureOutputs![j]; if (o == null) continue;
-                    T(o.ScoreVar, $"textureOutputs[{j}].scoreVar"); T(o.PassedVar, $"textureOutputs[{j}].passedVar");
-                    T(o.CellsVar, $"textureOutputs[{j}].cellsVar"); T(o.CellsPassedVar, $"textureOutputs[{j}].cellsPassedVar");
+                    var o = s.ToolOutputs![j]; if (o == null) continue;
+                    string f = $"toolOutputs[{j}]";
+                    if (string.IsNullOrWhiteSpace(o.ToolId))
+                        Add(at, ValidationCodes.MissingField, "A vision output has no tool selected", $"{f}.toolId");
+                    else if (toolIds != null && !toolIds.Contains(o.ToolId))
+                        Add(at, ValidationCodes.UnknownVisionTool,
+                            $"Vision program '{s.VisionProgramName ?? s.VisionProgramId}' has no tool '{o.ToolId}'", $"{f}.toolId", ValidationSeverity.Warning);
+                    if (string.IsNullOrWhiteSpace(o.Value))
+                        Add(at, ValidationCodes.MissingField, "A vision output has no value selected", $"{f}.value");
+                    if (string.IsNullOrWhiteSpace(o.Variable))
+                        Add(at, ValidationCodes.MissingField, "A vision output has no variable", $"{f}.variable");
+                    else
+                        CheckTarget(o.Variable, at, $"{f}.variable", requireDeclared: false);
                 }
             }
 

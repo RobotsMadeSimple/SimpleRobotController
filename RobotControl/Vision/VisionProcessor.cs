@@ -1,20 +1,16 @@
-using Controller.RobotControl.Vision.Inspections;
+using Controller.RobotControl.Vision.Tools;
 using OpenCvSharp;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
 using System.Threading;
 
 namespace Controller.RobotControl.Vision
 {
     /// <summary>
-    /// Runs a vision program's inspections against each new camera frame on a background
-    /// thread, annotates the frame, and exposes the latest JPEGs and results for streaming.
-    ///
-    /// The per-inspection work lives in the strategies under Vision/Inspections; this class
-    /// owns the thread, the frame pipeline (decode → shared FrameContext → inspections in
-    /// InspectionOrder → encode) and publication.
+    /// Runs a vision program on each new camera frame on a background thread, annotates the
+    /// frame, and exposes the latest JPEGs and results for streaming. The per-frame work is
+    /// <see cref="VisionEngine"/>; this class owns the thread, the native caches
+    /// (<see cref="VisionRuntime"/>) and publication.
     /// </summary>
     public class VisionProcessor
     {
@@ -24,38 +20,34 @@ namespace Controller.RobotControl.Vision
         private const int FramePeriodSleepMs = 50;   // ~20 fps
         private const int StopJoinTimeoutMs  = 2000;
 
-        // Written by UpdateProgram (any thread) and read once per iteration by ProcessLoop
-        // (the processing thread) — volatile so a write is guaranteed visible to the reader
-        // without both sides needing Interlocked. The plan carries the program it was built from.
-        private volatile InspectionPlan _plan;
+        // Written by UpdateProgram (any thread), read once per frame by the processing thread.
+        private volatile VisionProgram _program;
         private readonly Camera.CameraDevice _camera;
-
-        // ArUco detectors survive program updates (they are keyed by dictionary, not by
-        // inspection) and are only released once the processing thread has stopped.
-        private readonly ArucoStrategy _aruco = new();
+        private readonly VisionRuntime _runtime = new();
+        private readonly Action<VisionProgram>? _onReferenceCaptured;
 
         private byte[]?       _latestAnnotated;
         private VisionResult? _latestResult;
+        private byte[]?       _latestRaw;
         private readonly object _lock = new();
 
         private Thread?       _thread;
         private volatile bool _running;
-
-        private byte[]?       _latestRaw;
         private byte[]?       _lastProcessedJpeg;
 
-        // Rate-limits per-inspection error logging: only re-logs when the message for a
-        // given inspection id actually changes, so a persistently failing inspection does
-        // not spam the console once per frame.
+        // Logs a tool's error only when its message changes, not once per frame.
         private readonly Dictionary<string, string> _lastLoggedError = new();
-        private readonly object _errorLogLock = new();
 
-        public string ProgramId => _plan.Program.Id;
+        public string ProgramId => _program.Id;
+        public VisionProgram Program => _program;
 
-        public VisionProcessor(VisionProgram program, Camera.CameraDevice camera)
+        /// <param name="onReferenceCaptured">Called (on the processing thread) when a pose tool's
+        /// reference was captured automatically, so the owner can persist the program.</param>
+        public VisionProcessor(VisionProgram program, Camera.CameraDevice camera, Action<VisionProgram>? onReferenceCaptured = null)
         {
-            _plan   = InspectionPlan.Build(program, _aruco);
-            _camera = camera;
+            _program = program;
+            _camera  = camera;
+            _onReferenceCaptured = onReferenceCaptured;
         }
 
         public void Start()
@@ -71,54 +63,19 @@ namespace Controller.RobotControl.Vision
             _running = false;
             if (_thread != null && !_thread.Join(StopJoinTimeoutMs))
             {
-                // Still mid-frame: releasing the detectors now could free one in use.
+                // Still mid-frame: releasing the native caches now could free one in use.
                 Console.WriteLine($"[Vision] {ProgramId} processing thread did not stop within timeout");
                 return;
             }
-            _aruco.ReleaseDetectors();
+            _runtime.Dispose();
         }
 
         /// <summary>Hot-swaps the program. Takes effect from the next frame.</summary>
-        public void UpdateProgram(VisionProgram updated) =>
-            _plan = InspectionPlan.Build(updated, _aruco);
+        public void UpdateProgram(VisionProgram updated) => _program = updated;
 
-        public byte[]? GetLatestAnnotated()
-        {
-            lock (_lock) return _latestAnnotated;
-        }
-
-        public byte[]? GetLatestRaw()
-        {
-            lock (_lock) return _latestRaw;
-        }
-
-        public VisionResult? GetLatestResult()
-        {
-            lock (_lock) return _latestResult;
-        }
-
-        /// <summary>
-        /// Records a per-inspection failure on the result and logs it — but only when the
-        /// message differs from the last one logged for that inspection id, so a steadily
-        /// failing inspection logs once instead of once per frame.
-        /// </summary>
-        private void LogInspectionError(VisionResult result, string inspectionId, Exception ex)
-        {
-            var message = $"{inspectionId}: {ex.Message}";
-            result.Errors.Add(message);
-
-            bool changed;
-            lock (_errorLogLock)
-            {
-                changed = !_lastLoggedError.TryGetValue(inspectionId, out var last) || last != message;
-                _lastLoggedError[inspectionId] = message;
-            }
-
-            if (changed)
-                Console.WriteLine($"[Vision] {result.ProgramId} inspection {message}");
-        }
-
-        // ── Processing loop ───────────────────────────────────────────────────────
+        public byte[]? GetLatestAnnotated() { lock (_lock) return _latestAnnotated; }
+        public byte[]? GetLatestRaw()       { lock (_lock) return _latestRaw; }
+        public VisionResult? GetLatestResult() { lock (_lock) return _latestResult; }
 
         private void ProcessLoop()
         {
@@ -128,26 +85,23 @@ namespace Controller.RobotControl.Vision
                 {
                     var jpeg = _camera.GetLatestFrame();
                     if (jpeg == null) { Thread.Sleep(NoFrameSleepMs); continue; }
-
-                    // The camera thread publishes a new byte[] only when it actually encodes a
-                    // new frame, so a reference match means we've already processed this exact
-                    // frame — reprocessing it would just burn CPU for an identical result.
+                    // The camera publishes a new byte[] per encoded frame: same reference = same frame.
                     if (ReferenceEquals(jpeg, _lastProcessedJpeg)) { Thread.Sleep(SameFrameSleepMs); continue; }
 
                     using var src = Cv2.ImDecode(jpeg, ImreadModes.Color);
                     if (src.Empty()) { Thread.Sleep(NoFrameSleepMs); continue; }
 
-                    var plan   = _plan;
-                    var result = ProcessFrame(plan, src, out var annotatedJpeg);
-
+                    var program = _program;
+                    var run = RunOnFrame(program, src, _runtime, out var annotated);
+                    LogErrors(run.Result);
                     lock (_lock)
                     {
                         _latestRaw       = jpeg;
-                        _latestAnnotated = annotatedJpeg;
-                        _latestResult    = result;
+                        _latestAnnotated = annotated;
+                        _latestResult    = run.Result;
                     }
-
                     _lastProcessedJpeg = jpeg;
+                    if (run.CapturedReferences.Count > 0) _onReferenceCaptured?.Invoke(program);
                 }
                 catch (Exception ex)
                 {
@@ -155,127 +109,101 @@ namespace Controller.RobotControl.Vision
                     Thread.Sleep(ErrorSleepMs);
                     continue;
                 }
-
                 Thread.Sleep(FramePeriodSleepMs);
             }
         }
 
-        /// <summary>Runs every step of the plan on one decoded frame (live loop: logs + records failures).</summary>
-        private VisionResult ProcessFrame(InspectionPlan plan, Mat src, out byte[] annotatedJpeg) =>
-            RunPlan(plan, src, out annotatedJpeg, LogInspectionError);
-
-        /// <summary>
-        /// Runs a saved program's inspections against a single supplied image — no camera and no
-        /// processing thread, just the same per-frame pipeline the live loop uses. For the
-        /// RunVisionOnImage API / testing: decode an image, get back the VisionResult (including
-        /// per-cell color coverage) that a camera frame would have produced. Builds a throwaway
-        /// plan and releases its ArUco detectors; a failing inspection is recorded on the result's
-        /// Errors rather than logged.
-        /// </summary>
-        public static VisionResult RunProgramOnce(VisionProgram program, Mat src, out byte[] annotatedJpeg)
+        private void LogErrors(VisionResult result)
         {
-            var aruco = new ArucoStrategy();
-            try
+            foreach (var tr in result.Tools)
             {
-                var plan = InspectionPlan.Build(program, aruco);
-                return RunPlan(plan, src, out annotatedJpeg,
-                    (r, id, ex) => r.Errors.Add($"{id}: {ex.Message}"));
-            }
-            finally
-            {
-                aruco.ReleaseDetectors();
+                if (tr.Status != ToolStatus.Error) { _lastLoggedError.Remove(tr.Id); continue; }
+                if (_lastLoggedError.TryGetValue(tr.Id, out var last) && last == tr.Message) continue;
+                _lastLoggedError[tr.Id] = tr.Message ?? "";
+                Console.WriteLine($"[Vision] {result.ProgramId} tool {tr.Id}: {tr.Message}");
             }
         }
 
-        /// <summary>
-        /// Runs every step of a plan on one decoded frame: shared by the live loop and the
-        /// one-shot <see cref="RunProgramOnce"/> path. <paramref name="onError"/> handles a step
-        /// that throws (the loop logs and records; the one-shot only records on the result).
-        /// </summary>
-        private static VisionResult RunPlan(InspectionPlan plan, Mat src, out byte[] annotatedJpeg,
-                                            Action<VisionResult, string, Exception>? onError)
+        /// <summary>One frame through the engine plus the annotated JPEG.</summary>
+        internal static VisionEngine.Run RunOnFrame(VisionProgram program, Mat src, VisionRuntime runtime, out byte[] annotatedJpeg)
         {
-            var result = new VisionResult
-            {
-                ProgramId      = plan.Program.Id,
-                TimestampMs    = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                ImageWidth     = src.Width,
-                ImageHeight    = src.Height,
-                Inspections    = new List<InspectionResult>(),
-                ColorResults   = new List<ColorCoverageResult>(),
-                PolygonResults = new List<PolygonResult>(),
-                ArucoResults   = new List<ArucoResult>(),
-                LineResults    = new List<LineResult>(),
-                BarcodeResults = new List<BarcodeResult>(),
-                FrameResults   = new List<FrameResult>(),
-                CornerResults  = new List<CornerResult>(),
-                EdgeResults    = new List<EdgeResult>(),
-                TextureResults = new List<TextureResult>(),
-                AlignedZones   = new List<AlignedZone>(),
-            };
-
-            using var ctx       = new FrameContext(src);
+            var run = VisionEngine.Execute(program, src, runtime);
             using var annotated = src.Clone();
-
-            foreach (var zone in plan.BorderZones)
-                VisionDrawing.DrawZoneBorder(annotated, zone.Geometry, ctx.Width, ctx.Height, zone.Name, VisionPalette.ZoneBorder);
-
-            var labels = new LabelStack(ctx.Height);
-            foreach (var step in plan.Steps)
-            {
-                var sw = Stopwatch.StartNew();
-                try
-                {
-                    step.Execute(ctx, annotated, labels, result);
-                }
-                catch (Exception ex)
-                {
-                    step.RecordFailure(result);
-                    onError?.Invoke(result, step.Id, ex);
-                }
-                result.Timings[step.Id] = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
-            }
-
-            // Aligned zones are outlined where this frame put them.
-            foreach (var az in result.AlignedZones)
-            {
-                var name = plan.Program.Zones?.FirstOrDefault(z => z.Id == az.ZoneId)?.Name ?? az.ZoneId;
-                var geom = new VisionZoneGeometry { Shape = VisionZoneShape.Polygon, Points = az.Points };
-                VisionDrawing.DrawZoneBorder(annotated, geom, ctx.Width, ctx.Height, name + " (aligned)", VisionPalette.ZoneBorder);
-            }
-
+            VisionOverlay.DrawAll(annotated, program, run.Result);
             annotatedJpeg = VisionDrawing.EncodeJpeg(annotated, VisionDrawing.AnnotatedJpegQuality);
-            return result;
+            return run;
         }
 
-        // ── Debug frames ──────────────────────────────────────────────────────────
-
-        /// <summary>The polygon pipeline's threshold mask and contour classification on the latest frame.</summary>
-        public byte[]? GetPolygonDebugFrame(string inspectionId) =>
-            RenderDebug(p => p.PolygonInspections, inspectionId, InspectionPlan.Polygon);
-
-        /// <summary>The line pipeline's masked edges and Hough segments on the latest frame.</summary>
-        public byte[]? GetLineDebugFrame(string inspectionId) =>
-            RenderDebug(p => p.LineInspections, inspectionId, InspectionPlan.Line);
-
-        private byte[]? RenderDebug<TInsp, TResult>(
-            Func<VisionProgram, IEnumerable<TInsp>?> inspections, string inspectionId,
-            IInspectionStrategy<TInsp, TResult> strategy)
-            where TInsp : IVisionInspection
+        /// <summary>
+        /// Runs a program once on a supplied image — no camera, no thread. For RunVisionOnImage
+        /// and tests. A reference captured on this run is set on <paramref name="program"/> in
+        /// place (<paramref name="capturedReference"/> = true); the caller decides whether to persist it.
+        /// </summary>
+        public static VisionResult RunProgramOnce(VisionProgram program, Mat src, out byte[] annotatedJpeg, out bool capturedReference)
         {
-            var prog = _plan.Program;
-            var insp = (inspections(prog) ?? []).FirstOrDefault(i => i.Id == inspectionId);
-            if (insp == null) return null;
+            using var runtime = new VisionRuntime();
+            var run = RunOnFrame(program, src, runtime, out annotatedJpeg);
+            capturedReference = run.CapturedReferences.Count > 0;
+            return run.Result;
+        }
 
-            byte[]? raw;
-            lock (_lock) raw = _latestRaw;
-            if (raw == null) return null;
+        public static VisionResult RunProgramOnce(VisionProgram program, Mat src, out byte[] annotatedJpeg) =>
+            RunProgramOnce(program, src, out annotatedJpeg, out _);
 
-            using var src = Cv2.ImDecode(raw, ImreadModes.Color);
+        // ── Previews ──────────────────────────────────────────────────────────────
+
+        /// <summary>A layer of <paramref name="program"/> on a JPEG frame, at filter index <paramref name="upTo"/> (null = all filters).</summary>
+        public static byte[]? RenderLayer(VisionProgram program, byte[]? jpeg, string layerId, int? upTo)
+        {
+            if (jpeg == null) return null;
+            using var src = Cv2.ImDecode(jpeg, ImreadModes.Color);
             if (src.Empty()) return null;
+            using var cache = new LayerCache(src, program.Layers);
+            if (layerId == VisionTool.CameraInput) return VisionDrawing.EncodeJpeg(src, VisionDrawing.DebugJpegQuality);
+            using var img = cache.Preview(layerId, upTo);
+            using var shown = new Mat();
+            if (img.Depth() != MatType.CV_8U) img.ConvertTo(shown, MatType.CV_8U); else img.CopyTo(shown);
+            return VisionDrawing.EncodeJpeg(shown, VisionDrawing.DebugJpegQuality);
+        }
 
-            using var ctx = new FrameContext(src);
-            return strategy.RenderDebug(ctx, insp, InspectionPlan.ResolveZone(prog, insp.ZoneId));
+        /// <summary>
+        /// One tool's result drawn over its own input layer (gray layers shown in colour), on a
+        /// JPEG frame. The tool's result is <paramref name="result"/>'s when given, else the
+        /// program is run on the frame.
+        /// </summary>
+        public static byte[]? RenderToolDebug(VisionProgram program, byte[]? jpeg, string toolId, VisionResult? result)
+        {
+            if (jpeg == null) return null;
+            var tool = program.Tool(toolId);
+            if (tool == null) return null;
+            using var src = Cv2.ImDecode(jpeg, ImreadModes.Color);
+            if (src.Empty()) return null;
+            if (result?.Tool(toolId) == null)
+            {
+                using var rt = new VisionRuntime();
+                // A throwaway copy: a debug render must not capture references.
+                var copy = System.Text.Json.JsonSerializer.Deserialize<VisionProgram>(System.Text.Json.JsonSerializer.Serialize(program))!;
+                result = VisionEngine.Execute(copy, src, rt).Result;
+            }
+            var tr = result!.Tool(toolId);
+            using var cache = new LayerCache(src, program.Layers);
+            var input = cache.Exists(tool.Input) ? cache.Get(tool.Input) : src;
+            using var canvas = new Mat();
+            if (input.Channels() == 1)
+            {
+                using var u8 = new Mat();
+                input.ConvertTo(u8, MatType.CV_8U);
+                Cv2.CvtColor(u8, canvas, ColorConversionCodes.GRAY2BGR);
+            }
+            else input.CopyTo(canvas);
+            if (tr != null)
+            {
+                VisionOverlay.DrawTool(canvas, tr);
+                var text = $"{(string.IsNullOrEmpty(tool.Name) ? tool.Id : tool.Name)}: {tr.Status}{(tr.Message != null ? " - " + tr.Message : "")}";
+                VisionDrawing.DrawOutlinedText(canvas, text, new OpenCvSharp.Point(VisionDrawing.LeftMargin, 20), VisionDrawing.StatusFontScale,
+                    tr.Passed ? VisionPalette.Pass : VisionPalette.Fail);
+            }
+            return VisionDrawing.EncodeJpeg(canvas, VisionDrawing.DebugJpegQuality);
         }
     }
 }

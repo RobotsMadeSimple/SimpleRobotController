@@ -67,91 +67,16 @@ public class JsonImageMapping
     [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
 }
 
-/// <summary>Maps one BlobInspection's outputs to program variable names.</summary>
-public class VisionStepOutput
+/// <summary>
+/// RunVision → one tool result into one variable. <c>value</c> is a key of the tool's values
+/// (a number or a string), or "passed", "cells", "items", "points", "lines" or "pose".
+/// See docs/vision-tools.md, "RunVision step".
+/// </summary>
+public class VisionToolOutput
 {
-    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
-    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
-    [JsonPropertyName("pointsVar")]    public string? PointsVar    { get; set; }
-    [JsonPropertyName("detectedVar")]  public string? DetectedVar  { get; set; }
-}
-
-/// <summary>Maps one ColorCoverageInspection's outputs to program variable names.</summary>
-public class ColorVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")]   public string  InspectionId   { get; set; } = "";
-    [JsonPropertyName("coverageVar")]    public string? CoverageVar    { get; set; }
-    [JsonPropertyName("passedVar")]      public string? PassedVar      { get; set; }
-    /// <summary>
-    /// Object-list variable to fill with one record per grid cell — fields row, col, index,
-    /// coverage, passed. Only meaningful when the inspection's zone has a grid; on an
-    /// ungridded zone it is left empty.
-    /// </summary>
-    [JsonPropertyName("cellsVar")]       public string? CellsVar       { get; set; }
-    /// <summary>Scalar variable to fill with the number of cells that passed.</summary>
-    [JsonPropertyName("cellsPassedVar")] public string? CellsPassedVar { get; set; }
-}
-
-/// <summary>Maps one PolygonInspection's outputs to program variable names.</summary>
-public class PolygonVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
-    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
-    [JsonPropertyName("foundVar")]     public string? FoundVar     { get; set; }
-    [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
-    [JsonPropertyName("centerXVar")]   public string? CenterXVar   { get; set; }
-    [JsonPropertyName("centerYVar")]   public string? CenterYVar   { get; set; }
-}
-
-/// <summary>Maps one ArucoInspection's outputs to program variable names.</summary>
-public class ArucoVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")]    public string  InspectionId    { get; set; } = "";
-    [JsonPropertyName("countVar")]        public string? CountVar        { get; set; }
-    [JsonPropertyName("foundVar")]        public string? FoundVar        { get; set; }
-    [JsonPropertyName("firstIdVar")]      public string? FirstIdVar      { get; set; }
-    [JsonPropertyName("firstCenterXVar")] public string? FirstCenterXVar { get; set; }
-    [JsonPropertyName("firstCenterYVar")] public string? FirstCenterYVar { get; set; }
-}
-
-/// <summary>RunVision → a frame inspection: whether it was found, its four corners and its angle.</summary>
-public class FrameVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
-    [JsonPropertyName("foundVar")]     public string? FoundVar     { get; set; }
-    /// <summary>Points list TL, TR, BR, BL in the step's outputFrame (emptied when not found).</summary>
-    [JsonPropertyName("cornersVar")]   public string? CornersVar   { get; set; }
-    [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
-}
-
-/// <summary>RunVision → a corner inspection.</summary>
-public class CornerVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
-    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
-    [JsonPropertyName("foundVar")]     public string? FoundVar     { get; set; }
-    /// <summary>Points list, strongest first, in the step's outputFrame.</summary>
-    [JsonPropertyName("pointsVar")]    public string? PointsVar    { get; set; }
-}
-
-/// <summary>RunVision → an edge inspection.</summary>
-public class EdgeVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
-    [JsonPropertyName("densityVar")]   public string? DensityVar   { get; set; }
-    [JsonPropertyName("passedVar")]    public string? PassedVar    { get; set; }
-    [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
-}
-
-/// <summary>RunVision → a texture inspection: its score/pass, and per grid cell.</summary>
-public class TextureVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")]   public string  InspectionId   { get; set; } = "";
-    [JsonPropertyName("scoreVar")]       public string? ScoreVar       { get; set; }
-    [JsonPropertyName("passedVar")]      public string? PassedVar      { get; set; }
-    /// <summary>Records list, one per cell: { row, col, index, score, passed }.</summary>
-    [JsonPropertyName("cellsVar")]       public string? CellsVar       { get; set; }
-    [JsonPropertyName("cellsPassedVar")] public string? CellsPassedVar { get; set; }
+    [JsonPropertyName("toolId")]   public string ToolId   { get; set; } = "";
+    [JsonPropertyName("value")]    public string Value    { get; set; } = "";
+    [JsonPropertyName("variable")] public string Variable { get; set; } = "";
 }
 
 public class ConditionItem
@@ -399,21 +324,14 @@ public class ProgramStep
     // RunVision
     [JsonPropertyName("visionProgramId")]   public string? VisionProgramId   { get; set; }
     [JsonPropertyName("visionProgramName")] public string? VisionProgramName { get; set; }
-    [JsonPropertyName("visionZoneId")]      public string? VisionZoneId      { get; set; }
-    [JsonPropertyName("visionZoneVar")]     public string? VisionZoneVar     { get; set; }
-    [JsonPropertyName("visionOutputs")]     public List<VisionStepOutput>?         VisionOutputs  { get; set; }
-    [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>?    ColorOutputs   { get; set; }
-    [JsonPropertyName("polygonOutputs")]    public List<PolygonVisionStepOutput>?  PolygonOutputs { get; set; }
-    [JsonPropertyName("arucoOutputs")]      public List<ArucoVisionStepOutput>?    ArucoOutputs   { get; set; }
-    [JsonPropertyName("frameOutputs")]      public List<FrameVisionStepOutput>?    FrameOutputs   { get; set; }
-    [JsonPropertyName("cornerOutputs")]     public List<CornerVisionStepOutput>?   CornerOutputs  { get; set; }
-    [JsonPropertyName("edgeOutputs")]       public List<EdgeVisionStepOutput>?     EdgeOutputs    { get; set; }
-    [JsonPropertyName("textureOutputs")]    public List<TextureVisionStepOutput>?  TextureOutputs { get; set; }
+    /// <summary>Optional: variable set to the program's overall pass (1/0).</summary>
+    [JsonPropertyName("passVariable")]      public string? PassVariable      { get; set; }
+    /// <summary>Tool results written into variables (docs/vision-tools.md, "RunVision step").</summary>
+    [JsonPropertyName("toolOutputs")]       public List<VisionToolOutput>? ToolOutputs { get; set; }
     /// <summary>
-    /// Coordinate frame of the blob points and polygon/ArUco centers written by RunVision:
-    /// "pixel", "normalized" (0–1) or "robot" (mm on the camera's calibration plane, point
-    /// Z = planeZ; needs a camera calibration). Null keeps the original mix — blob points in
-    /// pixels, polygon/ArUco centers normalized. See docs/camera-calibration.md.
+    /// Coordinate frame of positions written by RunVision (points, item and pose x/y, values
+    /// x/y): "pixel" (the default), "normalized" (0–1) or "robot" (mm on the camera's
+    /// calibration plane, point Z = planeZ; needs a camera calibration). See docs/camera-calibration.md.
     /// </summary>
     [JsonPropertyName("outputFrame")]       public string? OutputFrame { get; set; }
 
