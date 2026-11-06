@@ -36,7 +36,7 @@ namespace Controller.RobotControl.Vision
 
         // Polygon — list of [x, y] pairs (0-1 each).
         // Quad — exactly 4 corners TL, TR, BR, BL: a skewed (perspective) zone whose grid cells
-        // follow the perspective, for a board seen at an angle.
+        // follow the perspective, for a grid seen at an angle.
         [JsonPropertyName("points")] public List<double[]> Points { get; set; } = new();
     }
 
@@ -292,11 +292,11 @@ namespace Controller.RobotControl.Vision
     // ── Frame / corner / edge / texture inspections ────────────────────────────────────────
 
     /// <summary>
-    /// Finds a four-cornered frame (a board's outline) so other zones can be aligned to it.
+    /// Finds a four-cornered frame (an object's outline) so other zones can be aligned to it.
     /// method: "contour" (largest 4-sided contour), "lines" (two pairs of dominant edges,
     /// intersected), "corners" (Shi-Tomasi corners, the four extreme hull points) or
-    /// "checker" (fits a gridRows × gridCols checkerboard to the squares themselves, starting
-    /// from the search zone drawn roughly over them — for a board whose frame is hidden, cut
+    /// "checker" (fits a gridRows × gridCols checkerboard-pattern grid to its squares, starting
+    /// from the search zone drawn roughly over them — for a grid whose outline is hidden, cut
     /// off or blends with its dark squares).
     /// </summary>
     public class FrameInspection : IVisionInspection
@@ -324,8 +324,8 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("gridCols")]          public int     GridCols          { get; set; } = 8;
         /// <summary>
         /// checker: found when the grid lines carry at least this many times the edge
-        /// strength of the lines halfway between them (square centres). A fitted board is
-        /// ~8–14; a grid a quarter square off, or a hand over the board, is under ~4.
+        /// strength of the lines halfway between them (square centres). A well-fitted grid is
+        /// ~8–18; a grid a quarter square off, or a hand over it, is under ~4.
         /// </summary>
         [JsonPropertyName("minEdgeRatio")]      public double  MinEdgeRatio      { get; set; } = 4;
         /// <summary>The frame's corners (TL, TR, BR, BL, normalized) when the aligned zones were
@@ -401,8 +401,8 @@ namespace Controller.RobotControl.Vision
 
     /// <summary>
     /// Fine detail in the zone, or in each cell of its grid: the spread of brightness left once
-    /// slow shading is blurred away. A ringed or patterned object on a plain surface scores
-    /// high even when both are the same colour (a black checker on a black square), while glare
+    /// slow shading is blurred away. A textured or patterned object on a plain surface scores
+    /// high even when both are the same colour, while glare
     /// and soft shadows don't count. Each cell is measured on its centre only (inset by
     /// <see cref="CellInset"/>) so the cell's own borders and a slightly-off grid don't count.
     /// </summary>

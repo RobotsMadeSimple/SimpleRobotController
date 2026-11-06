@@ -15,12 +15,12 @@ namespace Controller.RobotControl.Vision.Inspections
     }
 
     /// <summary>
-    /// Finds a four-cornered frame — a board's outline — in the search zone, three ways:
+    /// Finds a four-cornered frame — an object's outline — in the search zone, four ways:
     /// <list type="bullet">
     /// <item><b>contour</b>: Canny edges → external contours → the largest convex 4-gon.</item>
     /// <item><b>lines</b>: Canny → Hough segments → two direction families → the two outermost
     /// lines of each → their four intersections. Copes with a frame whose corners are hidden
-    /// (a hand, a piece) as long as part of every edge is visible.</item>
+    /// (a hand, a part) as long as part of every edge is visible.</item>
     /// <item><b>corners</b>: Shi-Tomasi corners → convex hull → the four extreme hull points.</item>
     /// <item><b>checker</b>: a checkerboard grid fitted to the squares themselves (see
     /// <see cref="CheckerGridFit"/>), starting from the last fit, the reference and the search
