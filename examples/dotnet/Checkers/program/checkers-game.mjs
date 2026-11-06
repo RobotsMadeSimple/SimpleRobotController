@@ -39,11 +39,9 @@ const pickAt = (sq, what) => [cell(sq, `Above ${what}`, true), cell(sq, `Down on
 const placeAt = (sq, what) => [cell(sq, `Above ${what}`, true), cell(sq, `Down onto ${what}`), call("Checkers Release"), cell(sq, `Lift off ${what}`, true)];
 const toDiscard = () => [discard("Above the discard pile", true), discard("Down to the discard pile"), call("Checkers Release"), discard("Up from the discard pile", true)];
 const park = () => discard("Park clear of the camera (above the discard pile)", true);
-// Black pieces come from a texture inspection "black" (black on black squares) or, in an older
-// vision program, a colour inspection "black"; whichever the program has fills blackCells.
+// The vision program's tools "white" and "black" (gridded 8x8) fill the two cell lists.
 const look = () => ({ id: id("vis"), type: "RunVision", name: "Look at the board", waitTimeoutMs: 5000, ...VISION, outputFrame: "normalized",
-  colorOutputs: [{ inspectionId: "black", cellsVar: "blackCells" }, { inspectionId: "white", cellsVar: "whiteCells" }],
-  textureOutputs: [{ inspectionId: "black", cellsVar: "blackCells" }] });
+  toolOutputs: [{ toolId: "white", value: "cells", variable: "whiteCells" }, { toolId: "black", value: "cells", variable: "blackCells" }] });
 const detect = () => plugin("detectMove", "Compare the board with the game",
   { whiteCells: "$whiteCells", blackCells: "$blackCells", minCoverage: "$minCoverage", orientation: ORIENTATION, bothMeans: "white" },
   { from: "hFrom", to: "hTo", changed: "changed", moveText: "seenText" });
@@ -59,10 +57,10 @@ function game() {
     num("speed", 150, "Travel speed (mm/s)"),
     num("readMs", 700, "Pause between camera reads while waiting for your move (ms)"),
     num("stableReads", 3, "Your move must read the same this many times in a row (hand clear of the board)"),
-    num("minCoverage", 0, "0 = use each colour inspection's own pass/fail; else min % coverage for a piece"),
+    num("minCoverage", 0, "0 = use each vision tool's own pass/fail; else the min cell value for a piece"),
     num("maxPlies", 300, "Stop after this many moves"),
-    list("whiteCells", "Record", "White-piece coverage per board cell (camera)"),
-    list("blackCells", "Record", "Black-piece texture (or coverage) per board cell (camera)"),
+    list("whiteCells", "Record", "White pieces per board cell (camera): {row, col, index, value, passed}"),
+    list("blackCells", "Record", "Black pieces per board cell (camera): {row, col, index, value, passed}"),
     list("captured", "Number", "Squares the robot just jumped (cleared to the discard pile)"),
     num("fromSq", -1, "Robot move: from square", true), num("toSq", -1, "Robot move: to square", true),
     v("kinged", 0, "The robot's piece was crowned", { isBoolean: true }),

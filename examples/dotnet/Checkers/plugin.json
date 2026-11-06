@@ -79,11 +79,11 @@
     {
       "id": "detectMove",
       "label": "Detect human move (camera)",
-      "description": "Compare a camera reading of the board (colour inspections on an 8x8 grid zone) with the tracked game and find the legal move the side to move made. Does not apply it: confirm it over a few reads, then Apply opponent move.",
+      "description": "Compare a camera reading of the board (RunVision cells of two vision tools gridded 8x8) with the tracked game and find the legal move the side to move made. Does not apply it: confirm it over a few reads, then Apply opponent move.",
       "params": [
         { "key": "whiteCells",  "label": "White cells (vision)", "type": "list", "required": true },
         { "key": "blackCells",  "label": "Black cells (vision)", "type": "list", "required": true },
-        { "key": "minCoverage", "label": "Min coverage % (0 = inspection pass/fail)", "type": "number", "default": 0 },
+        { "key": "minCoverage", "label": "Min cell value (0 = the tool's pass/fail)", "type": "number", "default": 0 },
         { "key": "orientation", "label": "Camera grid",          "type": "enum", "default": "normal", "options": ["normal", "rotated90", "rotated180", "rotated270"] },
         { "key": "bothMeans",   "label": "Cell read as both",    "type": "enum", "default": "white", "options": ["white", "black", "neither"] }
       ],

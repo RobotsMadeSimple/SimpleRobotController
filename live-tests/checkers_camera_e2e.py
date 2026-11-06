@@ -3,14 +3,14 @@ End-to-end checkers-vs-camera test against a controller, with mock camera images
 
 A "phone" camera on the controller is fed rendered JPEGs over the real ingest socket
 (/camera/{id}/ingest), so every frame goes through the same path a phone's would:
-camera -> vision program (skewed 8x8 grid aligned to a frame inspection) -> RunVision in the
+camera -> vision program (four findLine edges -> fourLines fixture -> 8x8 pixelCount grids) -> RunVision in the
 real "Checkers Game (camera)" program -> the checkers plugin's detectMove -> applyMove/aiMove.
 
 The scene is an 8x8 board with a border, seen at an angle from the side, on a wood table, with
 lighting falloff, sensor noise and JPEG compression. Pieces use the colour definitions of the
 real "Checkers Board" vision program. A scripted human plays white: each move is shown first
 with a hand over the board (piece lifted, then placed), then the hand leaves. Part-way through,
-the camera is bumped to a new angle — the frame inspection has to re-align the grid. The robot
+the camera is bumped to a new angle — the board fixture has to carry the grid there. The robot
 arm is simulated (no hardware): when the program has played its move, the test applies it to the
 scene, as the arm would have.
 
@@ -63,14 +63,23 @@ def check(cond, what):
         failures.append(what)
 
 
-def search_area(margin=35):
-    """The frame's search area as a user would draw it: around the board with some slack for a
-    knocked camera (here the convex hull of both poses, grown by a margin), normalized."""
-    pts = np.float32(POSE_A + POSE_B)
-    hull = cv2.convexHull(pts)[:, 0, :]
-    cx, cy = hull.mean(axis=0)
-    grown = [(x + (x - cx) / np.hypot(x - cx, y - cy) * margin, y + (y - cy) / np.hypot(x - cx, y - cy) * margin) for x, y in hull]
-    return [[round(min(max(float(x), 0), W) / W, 5), round(min(max(float(y), 0), H) / H, 5)] for x, y in grown]
+def edge_region(a, b, half=32, keep=0.7):
+    """A findLine region along the board edge from a to b (clockwise round the board, so its
+    probes run from the table inwards), drawn where the edge sits in both camera poses: the
+    average of the two, the middle `keep` of its length, `half` px either side. Normalized."""
+    (ax, ay), (bx, by) = a, b
+    cx, cy = (ax + bx) / 2, (ay + by) / 2
+    length = np.hypot(bx - ax, by - ay) * keep
+    rot = float(np.degrees(np.arctan2(by - ay, bx - ax)))
+    return {"shape": "rect", "x": round((cx - length / 2) / W, 5), "y": round((cy - half) / H, 5),
+            "width": round(length / W, 5), "height": round(2 * half / H, 5), "rotation": round(rot, 3)}
+
+
+def board_edges():
+    """The four outer-border edges (top, right, bottom, left) averaged over both poses."""
+    avg = [((xa + xb) / 2, (ya + yb) / 2) for (xa, ya), (xb, yb) in zip(POSE_A, POSE_B)]
+    tl, tr, br, bl = avg
+    return {"top": edge_region(tl, tr), "right": edge_region(tr, br), "bottom": edge_region(br, bl), "left": edge_region(bl, tl)}
 
 
 def rc(sq):
@@ -310,8 +319,6 @@ def main():
                        "rowOffsetX": 30, "rowOffsetY": 0, "rowOffsetZ": 0, "colOffsetX": 0, "colOffsetY": 30, "colOffsetZ": 0,
                        "rowCount": 8, "colCount": 8, "rotation": 0})
 
-    # The vision program, as a user would set it up in the editor: frame (Edges) found on the
-    # live image, its corners taken as the reference, a Skewed 8x8 zone drawn on the squares.
     stop = threading.Event()
     feed = threading.Thread(target=feeder, args=(f"ws://{args.ctrl}/camera/{cam['id']}/ingest", scene, stop), daemon=True)
     start_pieces = {s: -1 for s in range(12)} | {s: 1 for s in range(20, 32)}
@@ -319,44 +326,63 @@ def main():
     feed.start()
     sq = scene.squares_quad()
     norm = lambda pts: [[round(float(x) / W, 5), round(float(y) / H, 5)] for x, y in pts]
+    edges = board_edges()
+
+    def line(tid, name):
+        # The board's outer border, light table -> dark border from outside. The table's grain
+        # is full of faint horizontal streaks, so each probe takes its strongest edge (the
+        # border is far stronger) rather than the first.
+        return {"id": tid, "name": name, "type": "findLine", "enabled": True, "input": "camera", "region": edges[tid],
+                "includeInPass": True, "params": {"probes": 12, "polarity": "lightToDark", "contrast": 40, "pick": "strongest", "ignore": 3}}
+
+    def pieces(tid, name, colors, min_pct):
+        return {"id": tid, "name": name, "type": "pixelCount", "enabled": True, "input": "camera", "fixtureId": "board",
+                "region": {"shape": "quad", "points": [{"x": x, "y": y} for x, y in norm(sq)]},
+                "grid": {"rows": 8, "cols": 8, "inset": 0.1}, "limits": {"percent": {"min": min_pct}}, "includeInPass": False,
+                "params": {"mode": "color", "colors": [{"r": c3[0], "g": c3[1], "b": c3[2], "tolerance": t} for c3, t in colors]}}
+
+    # As a user would set it up in the editor: four findLine tools on the board's border, a
+    # fourLines fixture from them, and the two piece tools gridded 8x8 on the squares as seen
+    # now, fixtured to the board. The fixture's reference is captured on the first good frame.
     vp = {
-        "id": "e2e-board", "name": "E2E Checkers Board", "description": "", "cameraId": cam["id"],
-        # The frame searches a rectangle around where the board sits (with room for the camera to
-        # be knocked), not the whole image: the table's grain is full of long straight edges.
-        "zones": [{"id": "board", "name": "Board", "grid": {"rows": 8, "cols": 8}, "alignTo": "frame",
-                   "geometry": {"shape": "Quad", "points": norm(sq)}},
-                  {"id": "search", "name": "Board area", "geometry": {"shape": "Polygon", "points": search_area()}}],
-        "frameInspections": [{"id": "frame", "name": "Board frame", "enabled": True, "zoneId": "search", "method": "corners",
-                              "minLineLengthPct": 25, "referenceCorners": None}],
-        "colorInspections": [
-            {"id": "black", "name": "Black Pieces", "enabled": True, "zoneId": "board", "minCoverage": 21.2, "maxCoverage": None,
-             "colors": [{"id": f"b{i}", "r": c3[0], "g": c3[1], "b": c3[2], "tolerance": t} for i, (c3, t) in enumerate(BLACK_COLORS)]},
-            {"id": "white", "name": "White Pieces", "enabled": True, "zoneId": "board", "minCoverage": 7.8, "maxCoverage": None,
-             "colors": [{"id": f"w{i}", "r": c3[0], "g": c3[1], "b": c3[2], "tolerance": t} for i, (c3, t) in enumerate(WHITE_COLORS)]},
+        "id": "e2e-board", "name": "E2E Checkers Board", "description": "", "cameraId": cam["id"], "layers": [],
+        "tools": [
+            line("top", "Top edge"), line("right", "Right edge"), line("bottom", "Bottom edge"), line("left", "Left edge"),
+            {"id": "board", "name": "Board", "type": "makeFixture", "enabled": True, "input": "camera", "includeInPass": True,
+             "params": {"mode": "fourLines", "sources": ["top", "right", "bottom", "left"]}},
+            pieces("black", "Black Pieces", BLACK_COLORS, 21.2),
+            pieces("white", "White Pieces", WHITE_COLORS, 7.8),
         ],
-        "inspectionOrder": ["frame", "black", "white"],
     }
     c.cmd("SaveVisionProgram", vp)
     jpg, _ = scene.render()
-    res = c.cmd("RunVisionOnImage", {"programId": "e2e-board", "image": base64.b64encode(jpg).decode()})
-    res = res.get("result", res)
-    fr = (res.get("frameResults") or [{}])[0]
-    check(fr.get("found") is True, f"frame (Corners) found on the mock image: {fr.get('corners')}")
-    def worst(ref):
-        return max(abs(a * W - b[0]) + abs(a2 * H - b[1]) for (a, a2), b in zip(fr.get("corners", [[0, 0]] * 4), ref)) if fr.get("found") else 999
-    # Either the board's outer border or the edge of the playing area is a good frame.
-    err_border, err_play = worst(POSE_A), worst([tuple(p) for p in sq])
-    check(min(err_border, err_play) < 10,
-          f"frame is the board's {'border' if err_border <= err_play else 'playing area'} (worst corner {min(err_border, err_play):.1f} px)")
-    vp["frameInspections"][0]["referenceCorners"] = fr.get("corners")   # "Use current detection as reference"
-    c.cmd("SaveVisionProgram", vp)
-    res = c.cmd("RunVisionOnImage", {"programId": "e2e-board", "image": base64.b64encode(jpg).decode()})
-    res = res.get("result", res)
-    seen_w = sorted(int(x["index"]) for x in (next(r for r in res["colorResults"] if r["inspectionId"] == "white")["cells"]) if x["passed"])
-    seen_b = sorted(int(x["index"]) for x in (next(r for r in res["colorResults"] if r["inspectionId"] == "black")["cells"]) if x["passed"])
+
+    def run_once():
+        r = c.cmd("RunVisionOnImage", {"programId": "e2e-board", "image": base64.b64encode(jpg).decode()})
+        r = r.get("result", r)
+        return json.loads(r) if isinstance(r, str) else r
+
+    def tool(res, tid):
+        return next((t for t in res.get("tools") or [] if t["id"] == tid), {})
+
+    res = run_once()   # captures the fixture's reference (a saved program keeps it)
+    board = tool(res, "board")
+    quad = [(p["x"], p["y"]) for p in ((board.get("pose") or {}).get("quad") or [])]
+    check(board.get("status") == "ok" and len(quad) == 4,
+          f"board fixture found on the mock image: {board.get('status')} {board.get('message') or ''}")
+    worst = max((abs(x - bx) + abs(y - by) for (x, y), (bx, by) in zip(quad, POSE_A)), default=999)
+    check(worst < 8, f"fixture corners are the board's border (worst corner {worst:.1f} px: {[(round(x), round(y)) for x, y in quad]})")
+    progs = c.cmd("GetVisionPrograms").get("programs")
+    progs = json.loads(progs) if isinstance(progs, str) else (progs or [])
+    saved = next((p for p in progs if p["id"] == "e2e-board"), {})
+    check(any(t["id"] == "board" and t.get("reference") for t in saved.get("tools", [])), "the fixture's reference was captured and saved")
+
+    res = run_once()
+    seen_w = sorted(int(x["index"]) for x in tool(res, "white").get("cells", []) if x["passed"])
+    seen_b = sorted(int(x["index"]) for x in tool(res, "black").get("cells", []) if x["passed"])
     want_w, want_b = occupancy_cells(start_pieces)
     check(seen_w == [i for i, v in enumerate(want_w) if v] and seen_b == [i for i, v in enumerate(want_b) if v],
-          f"aligned grid reads the starting position ({len(seen_w)} white, {len(seen_b)} black)")
+          f"fixtured grid reads the starting position ({len(seen_w)} white, {len(seen_b)} black)")
     check(not res.get("errors"), f"no vision errors {res.get('errors')}")
 
     built = json.loads(subprocess.check_output(["node", os.path.join(HERE, "..", "examples", "dotnet", "Checkers", "program", "checkers-game.mjs"), "json", "e2e-board", "normal"], text=True))

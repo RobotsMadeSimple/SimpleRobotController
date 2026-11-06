@@ -64,8 +64,8 @@ plugin.Step("applyMove", (ctx, p) =>
 
 // Compare a camera view of the board with the tracked game and work out the move the
 // human (the side to move) made, without applying it. whiteCells/blackCells are the
-// per-cell results of a colour inspection on an 8x8 grid zone (records with
-// row/col/coverage/passed, or plain coverage numbers / booleans, row-major).
+// per-cell results of a vision tool gridded 8x8 (RunVision cells records with
+// row/col/index/value/passed, or plain numbers / booleans, row-major).
 // status: "same" (board unchanged), "move" (matches exactly one legal move's result
 // — from/to/captured are set; confirm it over a few reads, then applyMove), or
 // "unclear" (changed but matches no legal move: mid-move, a hand over the board, a
@@ -73,10 +73,10 @@ plugin.Step("applyMove", (ctx, p) =>
 // orientation: where black's side (board row 0) is in the camera grid — normal (top),
 // rotated90 (right), rotated180 (bottom), rotated270 (left).
 // bothMeans: what a cell that reads as both colours is — "white" (default: black pieces
-// found by a texture inspection, which white pieces also pass), "black", or "neither".
+// found by their texture, which white pieces also have), "black", or "neither".
 plugin.Step("detectMove", (ctx, p) =>
 {
-    double minCoverage = p.GetDouble("minCoverage", 0);   // 0 = use each inspection's own pass/fail
+    double minCoverage = p.GetDouble("minCoverage", 0);   // 0 = use each tool's own pass/fail
     var white = ReadCells(p, "whiteCells", minCoverage);
     var black = ReadCells(p, "blackCells", minCoverage);
     int turns = p.GetString("orientation", "normal").Trim().ToLowerInvariant() switch
@@ -194,9 +194,9 @@ static bool[] ReadBoolList(StepParams p, string key)
 }
 
 // Reads an 8x8 row-major cell list into "occupied" per 8x8 cell index. A record cell
-// counts when it passed its inspection (each colour has its own tuned range), or, when
-// minCoverage > 0, when its coverage reaches that; plain numbers are coverages (or 0/1
-// flags when minCoverage is 0) and booleans are taken as-is.
+// ({row, col, index, value, passed}) counts when it passed its vision tool's limit (each
+// colour has its own tuned range), or, when minCoverage > 0, when its value reaches that;
+// plain numbers are values (or 0/1 flags when minCoverage is 0) and booleans are as-is.
 static bool[] ReadCells(StepParams p, string key, double minCoverage)
 {
     var cells = new bool[64];
@@ -213,8 +213,8 @@ static bool[] ReadCells(StepParams p, string key, double minCoverage)
                 else if (e.TryGetProperty("row", out var r) && e.TryGetProperty("col", out var c)
                          && r.ValueKind == JsonValueKind.Number && c.ValueKind == JsonValueKind.Number)
                     idx = r.GetInt32() * 8 + c.GetInt32();
-                on = minCoverage > 0 && e.TryGetProperty("coverage", out var cov) && cov.ValueKind == JsonValueKind.Number
-                    ? cov.GetDouble() >= minCoverage
+                on = minCoverage > 0 && e.TryGetProperty("value", out var val) && val.ValueKind == JsonValueKind.Number
+                    ? val.GetDouble() >= minCoverage
                     // A RunVision cells list stores passed as 1/0 (program values are numbers).
                     : e.TryGetProperty("passed", out var ps) && (ps.ValueKind == JsonValueKind.True
                         || (ps.ValueKind == JsonValueKind.Number && ps.GetDouble() != 0));

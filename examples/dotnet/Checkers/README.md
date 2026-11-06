@@ -61,8 +61,8 @@ Loop:
 
 ### Spotting the human's move with the camera
 
-`detectMove` takes the per-cell results of two vision inspections (white and black
-pieces) run on an **8x8 grid zone** over the board, works out which dark squares hold
+`detectMove` takes the per-cell results of two vision tools (white and black
+pieces) gridded **8x8** over the board, works out which dark squares hold
 which colour, and compares that with the tracked game. If the change is exactly what
 one legal move of the side to move would produce, it reports `status: "move"` with
 `from`/`to`/`captured` — but does not apply it. Read it a few times in a row (so a hand
@@ -70,27 +70,47 @@ still over the board, or a half-finished multi-jump, can't trigger it), then cal
 `applyMove`. Anything else is `"same"` (nothing moved) or `"unclear"` (changed, no
 legal match: mid-move, hand in view, a jumped piece not yet removed, an illegal move).
 
-A cell counts as a piece when it **passed** its inspection (each colour keeps its own
-tuned coverage range); set `minCoverage` > 0 to use one threshold instead. A cell that
+A cell — a RunVision `cells` record `{ row, col, index, value, passed }` — counts as a
+piece when it **passed** its tool's limit (each colour keeps its own tuned range); set
+`minCoverage` > 0 to compare the cell's `value` against one threshold instead. A cell that
 reads as both colours is white by default (`bothMeans`), which is what a board with
 black pieces on black squares needs (below). The camera
 grid's row 0 is the top of the image; `orientation` says where black's side (board row 0)
 is in it: `normal` = top, `rotated90` = right (the players sit left and right of the
 camera, as in a side view across the table), `rotated180` = bottom, `rotated270` = left.
 
-**Black pieces on black squares.** A colour inspection can't tell them apart, so read
-black pieces with a **Texture** inspection instead: a ringed checker has fine detail, a
-plain square has none (on real photos black pieces score 6.5+ and empty squares under 3,
-at 1280 px). White pieces pass a texture check too, which is why `bothMeans` defaults to
-white. Align the grid with a **Checker grid** frame on the same zone so it snaps onto the
-squares and follows the camera. The vision program builder
-`program/checkers-vision.mjs` creates this setup:
+**Black pieces on black squares.** Colour can't tell them apart, so black pieces are read
+by their texture instead: a ringed checker has fine detail, a plain square has none. The
+`Fine detail` layer subtracts a blurred copy of the image (slow shading — glare, shadows —
+drops out) and an **intensity** tool measures the spread (`stdDev`) of what is left in the
+middle of each square: on the real photos black pieces score 7+ and empty dark squares
+under 1.5, at 1280 px. White pieces have texture too, which is why `bothMeans` defaults to
+white.
 
-| Inspection | Type | Settings |
+The grid follows the board through a **fixture**: four **findLine** tools find the board's
+outer top, right and left edges (white table → black frame) and the bottom edge of the
+squares (the board's own bottom edge is often cut off), a **makeFixture** (`fourLines`)
+intersects them into the board's four corners, and both piece tools are drawn on the
+squares relative to it — so a bumped camera, or the board pushed or turned, moves the
+8 × 8 grid with full perspective. If an edge can't be found (a hand over it), the piece
+tools report *not run* that frame rather than read squares from a guessed position.
+
+The program lives in `program/checkers-vision.json` (built only from the generic tools —
+nothing in the controller knows about checkers); `program/checkers-vision.mjs` saves it
+to a controller:
+
+| Tool | Type | Settings |
 |---|---|---|
-| Squares | Frame, method *Checker grid*, on the Board zone | 8 × 8, min edge ratio 4 |
-| White pieces | Colour coverage on the Board zone | cream (232, 230, 200) ± 20 %, min 30 % |
-| Black pieces | Texture on the Board zone | cell inset 25 %, min score 4 |
+| Board top / right / left edge | findLine on the `Gray` layer | outer edge, light → dark from outside, 16 probes, pick first, ignore 4 |
+| Squares bottom edge | findLine on the `Gray` layer | dark → light from the frame inwards, pick strongest |
+| Board | makeFixture `fourLines` | sources top, right, bottom, left |
+| White pieces | pixelCount (colour) on the squares, fixture *Board* | 8 × 8, inset 15 %, cream (232, 230, 200) ± 20 %, `percent` ≥ 30 |
+| Black pieces | intensity `stdDev` on the `Fine detail` layer (backgroundRemove 17 px), fixture *Board* | 8 × 8, inset 35 %, `stdDev` ≥ 4 |
+
+The edge regions and the squares region are drawn on the default camera view. When the
+camera has moved a lot, redraw the four edge regions over the board's edges and the
+squares region over the squares, then press **Set reference** on *Board* (or clear its
+reference: it is captured again on the next good frame).
 
 The ready-made program **"Checkers Game (camera)"** does all of this: the robot plays
 black on a taught 8x8 grid named *Checkers Board* (row r, col c = the board square),
