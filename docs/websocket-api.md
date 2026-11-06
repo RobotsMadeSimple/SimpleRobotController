@@ -483,16 +483,31 @@ when not calibrated). Programs read `$camera.<id>.calibrated` (1/0).
 
 ## Vision
 
+A vision program is image layers (filter stacks) plus a list of building-block tools —
+the model, every tool and the result shape are in [vision-tools.md](vision-tools.md).
+
 | Command | Params | Description |
 |---|---|---|
-| `GetVisionPrograms` | — | Returns vision programs and `runningIds`. |
+| `GetVisionPrograms` | — | Returns vision programs (JSON string in `programs`) and `runningIds`. |
 | `SaveVisionProgram` | a vision-program object | Create/update a vision program (auto-assigns `id` if empty). |
 | `DeleteVisionProgram` | `id` | Stop and delete a vision program. |
-| `StartVision` | `id` | Start a vision program. |
+| `StartVision` | `id` | Start a vision program on its camera. |
 | `StopVision` | `id` | Stop a vision program. |
-| `GetVisionResult` | `id` | Latest inspection result (live if running, else the last captured). |
+| `GetVisionResult` | `id` | Latest `VisionResult` (JSON string in `result`): live if running, else the last one from a RunVision step or `RunVisionOnImage`. |
+| `RunVisionOnImage` | `programId` or `program`, `image` (base64 PNG/JPEG, data URL ok), optional `includeAnnotated` | Runs the program once on the image. Returns `result` (JSON string) and, when asked, `annotated` (base64 JPEG). With a saved `programId`, a fixture reference captured on this run is saved and the result becomes the program's latest. |
+| `SetVisionToolReference` | `programId`, `toolId`, optional `clear` | Sets a pose tool's `reference` to the pose it found in the program's latest result (start the program or run it on an image first), or clears it with `clear: true` (it is then captured again on the next successful run). Saves the program; returns `reference` (JSON string). Errors when the tool makes no pose or found nothing. |
+| `TeachVisionTool` | `programId`, `toolId`, optional `image` | Teaches a `patternMatch` (gray patch) or `contourMatch` (outline) tool from its region: on `image`, else the program's newest camera frame. Earlier tools run first, so a fixtured region is cut where its fixture puts it. Stores `params.template`, saves the program and returns a `taught` summary. |
 
-Annotated vision frames stream over `GET /vision/{id}/ws`.
+HTTP (JPEG unless noted; 404 for an unknown program/layer/tool, 204 while there is no frame):
+
+| Endpoint | Description |
+|---|---|
+| `GET /vision/{id}/ws` | WebSocket stream of annotated frames (base64 data URIs) of a running program. |
+| `GET /vision/{id}/snapshot` | The running program's latest raw frame. |
+| `GET /vision/{id}/annotated` | The running program's latest annotated frame. |
+| `GET /vision/{id}/layer/{layerId}?upTo=N` | Layer preview for tuning: the layer's filters applied up to and including index `N` (omit for all, `-1` for the layer's input), on the program's newest frame (its processor's, else its camera's). `layerId` `camera` = the frame itself. |
+| `GET /vision/{id}/tool/{toolId}/debug` | One tool's result (region, cells, edges, lines, pose) drawn over the tool's own input layer, with its status. Uses the running processor's latest result, else runs the program once on the camera's frame. |
+| `GET /program-vision-snapshot/{visionProgramId}` | Annotated frame captured at the end of the last RunVision step. |
 
 ---
 

@@ -74,8 +74,8 @@ even though the storage is the same:
 
 `Number` and `Boolean` lists are the ones authored by hand — the variable editor
 gives the first value rows and the second toggles. `Point` and `Record` lists are
-normally declared empty and filled at run time by `RunVision`: blob results fill
-a `Point` list, and a color inspection on a [gridded zone](#zone-grids) fills a
+normally declared empty and filled at run time by `RunVision`: a tool's `points`
+fill a `Point` list, and the `cells` of a [gridded tool](#runvision) fill a
 `Record` list with one record per cell.
 
 A `forEach` loop works on any element type, but only `Number` and `Boolean` lists
@@ -507,101 +507,51 @@ the configured aux board; `auxAxisIndex` selects the channel.
 ## Vision & camera
 
 ### RunVision
-Runs a vision program on the current camera frame and writes results into
-program variables.
+Runs a vision program on the current camera frame and writes its results into
+program variables. A vision program is image layers plus a list of building-block
+tools (find a line / corner / circle, blobs, pattern and contour match, ArUco, fixtures,
+calipers, distances and angles, pixel counts, intensity, edges, polygons, barcodes); the
+model, every tool, its values and how fixtures move regions are in
+[vision-tools.md](vision-tools.md).
+
 | Field | Meaning |
 |---|---|
 | `visionProgramId` / `visionProgramName` | Which vision program to run. |
-| `visionZoneId` / `visionZoneVar` | Optional inspection zone (fixed or from a variable). |
-| `visionOutputs` | Blob/measurement outputs → `{ inspectionId, countVar, pointsVar, detectedVar }`. `pointsVar` receives a `Point` list. |
-| `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar, cellsVar, cellsPassedVar }`. |
-| `polygonOutputs` | Polygon/shape → `{ inspectionId, countVar, foundVar, angleVar, centerXVar, centerYVar }`. |
-| `arucoOutputs` | ArUco markers → `{ inspectionId, countVar, foundVar, firstIdVar, firstCenterXVar, firstCenterYVar }`. |
-| `frameOutputs` | Frame (alignment) → `{ inspectionId, foundVar, cornersVar, angleVar }`. `cornersVar` receives a `Point` list TL, TR, BR, BL (emptied when the frame is not found). |
-| `cornerOutputs` | Corners → `{ inspectionId, countVar, foundVar, pointsVar }`. `pointsVar` receives a `Point` list, strongest first. |
-| `edgeOutputs` | Edges → `{ inspectionId, densityVar, passedVar, angleVar }` (edge density % of the zone, its pass/fail, the dominant edge's angle 0–180°). |
-| `textureOutputs` | Texture → `{ inspectionId, scoreVar, passedVar, cellsVar, cellsPassedVar }`. On a grid, `cellsVar` receives a Record list `{ row, col, index, score, passed }` (passed is 1/0) and `scoreVar` the highest cell score. |
-| `outputFrame` | Frame of the positions written above (blob `pointsVar` points, polygon `centerXVar`/`centerYVar`, ArUco `firstCenterXVar`/`firstCenterYVar`, frame `cornersVar`, corner `pointsVar`): `"pixel"`, `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Unset keeps the original mix: blob points in pixels, polygon/ArUco centers normalized. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
+| `passVariable` | Optional: set to the program's overall pass (1/0) — every enabled tool with `includeInPass` passed. |
+| `toolOutputs` | `[{ toolId, value, variable }]`: one tool result into one variable (below). |
+| `outputFrame` | Frame of the positions written (`points`, `pose`, item and line coordinates, and a tool's `x`/`y` values): `"pixel"` (the default), `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Other values — widths, radii, distances — stay in pixels. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
 | `waitTimeoutMs` | Max time to wait for a fresh vision result (default 30 000 ms; `0` or less waits forever). Expiry ends the program with an error. |
 
-Each `*Var` names a program variable that receives that result (counts, points,
-booleans, angles, coordinates).
+`value` picks what is written:
 
-**Skewed grids and alignment.** A zone can be a **Quad** — four corners TL, TR, BR,
-BL — and a gridded Quad lays its cells out with the perspective, so a tray or grid seen at an
-angle from the side still reads cell by cell (row-major index, row 0 along TL→TR).
-A zone can also be **aligned** (`alignTo`) to a **frame inspection**, which finds a
-four-cornered outline each frame by its edges (`contour`), its straight edge lines
-(`lines` — still works with a corner hidden behind a hand), its corners (`corners`) or,
-for a checkerboard-pattern grid, the squares themselves (`checker`, below).
-The zone is warped by the homography from the frame's `referenceCorners` (set in the
-editor while the zones are drawn) to the corners found now, so the grid follows the
-object if it or the camera moves. Frame inspections always run first. When the frame
-is not found, inspections on its zones are skipped for that frame (an `errors` entry
-says so) rather than read cells from a guessed position.
+| `value` | Variable | Written |
+|---|---|---|
+| any key of the tool's `values` (`angle`, `count`, `percent`, `distance`, `radius`, …) | Number (String for text such as a barcode's `value`) | The value; `x` / `y` converted by `outputFrame`. |
+| `passed` | Boolean | 1 when the tool's status is ok and every limit is met. |
+| `found` | Boolean | The tool's `found` value. |
+| `status` | String | `ok`, `fail`, `notRun` or `error`. |
+| `cells` | Record list | One record per grid cell, row-major: `row`, `col`, `index` (= `row * cols + col`), `value` (the tool's main value: `percent`, the chosen `statistic`, `density`, `count`), `passed` (1/0). |
+| `items` | Record list | The tool's list records (blobs, matches, markers, codes…), numeric fields only (`x`, `y` converted). |
+| `points` | Point list | The tool's points (edge points, corners, caliper edges…). |
+| `lines` | Record list | `{ x1, y1, x2, y2 }` per line. |
+| `pose` | Record list | One record `{ x, y, z, angle }` when the tool found its object, else empty — read `$pose[0].x`. |
 
-**Checker grid frames** (`method: "checker"`, `gridRows` × `gridCols`, default 8 × 8)
-fit the grid to a checkerboard pattern (alternating light/dark squares): the frame's zone is drawn roughly over the
-squares (within about a fifth of a square of each corner) and each frame the corners are
-moved until the grid's interior lines sit on the boundaries between squares. No outer
-frame is needed, so it works when an outline is cut off, hidden, or as dark as the
-pattern's dark squares. Each frame starts from the last fit, so a nudged camera is
-followed; only when that fails is the drawn zone fitted again. The result's `score` is
-the fit's edge ratio — edge strength on the grid lines over that through the square
-centres — and the frame is found when it reaches `minEdgeRatio` (default 4; a well-fitted
-grid is about 8–18, a grid a quarter square off or a hand over it under 4).
-A zone aligned to a checker frame **on that same zone** needs no reference: it is used
-exactly where the squares were found (the editor's *Snap zone to squares* then copies
-the fit back into the drawn zone).
-
-**Texture** inspections score fine detail: the spread of brightness after a blurred copy
-(blur ≈ 3 % of the cell) is subtracted, so slow shading — glare, shadows, a lighting
-gradient — does not count, while texture, print or grain do. On a grid each cell is scored
-on its centre only (`cellInset`, default 25 % off each side, so the cell's own borders and
-a slightly-off grid don't count) and passes when the score is within
-[`minScore`, `maxScore`] (default min 4). It tells a textured or patterned object from a plain
-surface of the same colour, which no colour inspection can; plain surfaces usually score
-under 3.
-
-If an inspection throws while processing a frame, the vision result carries an
-`errors` entry (`"<inspectionId>: <message>"`) and that inspection reports no
-detections for the frame; check the vision program's editor card or the
-controller log when an output stays at zero unexpectedly.
-
-#### Zone grids
-
-A vision zone can carry a `grid` of `{ rows, cols }`, a lattice laid over the
-zone's bounding box. Cells are clipped to the zone shape, so a corner cell of a
-circular zone only covers the part inside the circle. No grid, or a 1×1 one,
-leaves behaviour unchanged.
-
-A rectangle zone can also carry a `rotation` in degrees, and its lattice turns
-with the rectangle rather than sitting on the bounding box — so a tray that is
-not square to the camera still gets one cell per pocket. Rotation is a
-rectangle-only idea: circles ignore it, and a polygon's points are already
-absolute. A zone saved before rotation existed has none, which reads as 0 and
-takes the original untilted path.
-
-Only **color coverage** and **texture** inspections measure per cell; the other
-inspection types ignore the grid.
-
-On a gridded zone the color output changes shape:
-
-| Field | Meaning |
-|---|---|
-| `coverageVar` | Still the whole-zone percentage. |
-| `passedVar` | **Every cell passed**, not the zone average. A zone-wide average hides half-full cells, which is the thing a grid exists to catch. |
-| `cellsVar` | A [list variable](#list-variables) with `elementType: "Record"`, filled with one record per cell, row-major: `row`, `col`, `index` (= `row * cols + col`), `coverage`, `passed` (1/0). |
-| `cellsPassedVar` | How many cells passed. |
-
-`cellsVar` is emptied rather than left alone when the zone has no grid, so a
-stale lattice from a previous run cannot be read as current.
+A tool with no result (disabled) or that did not run empties its lists and writes 0 for
+`passed` / `found` / `count`; other values are left unchanged. Variables named in
+`toolOutputs` and `passVariable` are created by the step if not declared. Validation
+warns (`unknownVisionTool`) when a `toolId` is not in the vision program, and reports a
+`toolOutputs` entry with no tool, value or variable (`missingField`).
 
 ```
-$cells.length            → number of cells
-$cells[0].coverage       → coverage % of the top-left cell
-$cells[$i].passed == 1   → condition on the cell a forEach loop is on
+$whiteCells.length            → number of cells
+$whiteCells[0].value          → main value of the top-left cell
+$whiteCells[$i].passed == 1   → condition on the cell a forEach loop is on
+$partPose[0].angle            → a located part's angle
 ```
+
+When a tool's fixture is not found, the tool does not run that frame (status `notRun`,
+`passed` 0, its cells empty) rather than measure at a guessed position. If a tool throws,
+the result carries an `errors` entry (`"<toolId>: <message>"`) and its status is `error`.
 
 ### SaveImage
 Saves the current camera frame to disk.

@@ -98,10 +98,10 @@ session). Sessions expire 30 minutes after their last use.
 
 ## Using a calibration in programs
 
-`RunVision` gains `outputFrame: "pixel" | "normalized" | "robot"` (default keeps
-today's behaviour). With `"robot"` and a calibrated camera, blob centers,
-polygon centroids and ArUco centers written to point variables are robot
-X/Y with Z = `planeZ`; validation reports `cameraNotCalibrated` (error) when
+`RunVision` takes `outputFrame: "pixel" | "normalized" | "robot"` (default pixel).
+With `"robot"` and a calibrated camera, every position it writes — `points`, a
+`pose`, item and line coordinates, a tool's `x`/`y` values — is robot X/Y with
+Z = `planeZ`; validation reports `cameraNotCalibrated` (error) when
 `"robot"` is requested for a vision program whose camera has no calibration.
 Expression properties: `$camera.<id>.calibrated` (1/0).
 
