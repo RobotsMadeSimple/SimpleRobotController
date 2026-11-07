@@ -5,6 +5,7 @@ allow_untaught, reports fields the controller dropped, and robot_modify_program 
 targeted edits with a before/after problem diff. Writes and deletes `_mcp_program_check`.
 
     RMS_ROBOT_URL=ws://127.0.0.1:9000/control python program_tools_check.py
+    python program_tools_check.py --offline   # schema drift + edit engine only, no controller
 """
 import json
 import sys
@@ -43,7 +44,8 @@ def main():
     import os, re
     src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "RobotControl", "Models", "ProgramSteps.cs"),
                encoding="utf8").read()
-    enum = [t.strip() for t in re.search(r"public enum StepType \{([^}]*)\}", src).group(1).split(",")]
+    body = re.sub(r"//[^\n]*", "", re.search(r"public enum StepType \{([^}]*)\}", src).group(1))
+    enum = [t.strip() for t in body.split(",")]
     missing = [t for t in enum if t and t != "Unknown" and t not in r.step_schema.STEPS]
     check(not missing, f"step_schema covers every StepType (missing: {missing})")
 
@@ -63,6 +65,10 @@ def main():
         check(False, "apply_edit rejects an unknown step id")
     except ValueError:
         check(True, "apply_edit rejects an unknown step id")
+
+    if "--offline" in sys.argv:
+        print("\n" + ("ALL PASSED (offline)" if not failures else f"{len(failures)} FAILED"))
+        return 1 if failures else 0
 
     # A controller-detected error blocks the save.
     bad = base()

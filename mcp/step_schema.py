@@ -326,16 +326,120 @@ STEPS = {
                    "cncSpec": "object. Toolpath spec built by the CNC builder in the app.",
                    "cncProgramSteps": "array of ProgramStep. Legacy - baked steps from older app versions."},
     },
+
+    # ── Program-language additions (docs/program-language.md, Package A) ──
+    "MoveC": {
+        "what": "Move along a circular arc through a via point to the end target (the usual target fields).",
+        "fields": {**{k: v for k, v in MOVE_TARGET.items() if not k.startswith("toolOffset")},
+                   "viaPointId": "string. Saved point the arc passes through (by id).",
+                   "viaPointName": "string. Display fallback for viaPointId.",
+                   "viaPointNameExpr": "string, overrides viaPoint*. Same two resolutions as pointNameExpr.",
+                   "arcTolerance": "number, mm, default 0.1. Largest gap between the true arc and its segments."},
+    },
+    "SavePosition": {
+        "what": "Store the current position in a Points list variable or a saved point.",
+        "fields": {
+            "savePositionTo": '"variable" (default) | "point".',
+            "variableName": "string. A list variable with elementType Point (savePositionTo variable).",
+            "pointId": "string. Saved point overwritten or created (savePositionTo point).",
+            "pointName": "string. Display fallback for pointId.",
+            "savePositionMode": '"replace" (default) | "append" | "insert" | "set".',
+            "savePositionIndex": "int. Index for insert/set; expressions.savePositionIndex overrides.",
+            "savePositionSource": '"actual" (default) | "target" (last commanded target).',
+        },
+    },
+    "SetSpeedFactor": {
+        "what": "Scale this program's move speeds by a percentage (never above the operator override; resets to 100 at the end).",
+        "fields": {"speedFactor": "number, %, 1-100, default 100. expressions.speedFactor overrides."},
+    },
+    "Switch": {
+        "what": "Run the case whose value equals an expression, else the default steps.",
+        "fields": {
+            "switchExpr": "string. Expression evaluated once and compared with each case value.",
+            "switchCases": "array of {id, values: [string], steps: [ProgramStep]}.",
+            "switchDefault": "array of ProgramStep. Run when no case matches.",
+        },
+    },
+    "LoopControl": {
+        "what": "Leave the enclosing loop, or skip to its next iteration.",
+        "fields": {"loopControl": '"break" (default) | "continue".'},
+    },
+    "Try": {
+        "what": "Run steps; on a runtime error retry them or run the catch steps.",
+        "fields": {
+            "trySteps": "array of ProgramStep.",
+            "catchSteps": "array of ProgramStep. Run when the error is caught (after retries).",
+            "tryRetries": "int, default 0. Times to re-run trySteps before catching.",
+            "tryRetryDelayMs": "int, ms, default 0. Pause between retries.",
+            "catchCodes": "array of string. Error codes to catch; empty = every catchable error.",
+            "errorVariableName": "string. String variable that receives the error message.",
+            "errorCodeVariableName": "string. String variable that receives the error code.",
+        },
+    },
+    "RaiseError": {
+        "what": "Fail with a message - caught by an enclosing Try, otherwise ends the program.",
+        "fields": {"errorMessage": "string, interpolated. Required.",
+                   "errorCode": "string, default userError. An identifier a Try can filter on."},
+    },
+    "Return": {"what": "Leave the routine (or end the program when not in a routine).", "fields": {}},
+    "EndProgram": {
+        "what": "Finish the program now, from anywhere.",
+        "fields": {"statusMessage": "string, interpolated, optional. Logged as the program ends."},
+    },
+    "Note": {
+        "what": "A note or section header - not executed.",
+        "fields": {"noteStyle": '"note" (default) | "section".',
+                   "comment": "string. The note text."},
+    },
+    "ListOp": {
+        "what": "Append, insert, remove, set, sort or copy list elements.",
+        "fields": {
+            "variableName": "string. The list variable.",
+            "listAction": '"append" (default) | "insert" | "removeAt" | "clear" | "set" | "setField" | "sort" | "reverse" | "copyFrom".',
+            "listIndex": "int. For insert/removeAt/set/setField; expressions.listIndex overrides.",
+            "listValueExpr": "string expression. Element value for Number/Boolean lists (append/insert/set).",
+            "listFields": ("object {field: expr}. Element fields for Point/Record lists; append with no "
+                           "fields on a Points list appends the current position."),
+            "listSourceVariable": "string. List to copy from (copyFrom).",
+            "listSortField": "string. Field to sort by (sort); empty = the element value.",
+            "listSortDescending": "bool, default false.",
+        },
+    },
+    "Prompt": {
+        "what": "Ask the operator: show a message with buttons and an optional input, and wait for an answer.",
+        "fields": {
+            "promptMessage": "string, interpolated. Required.",
+            "promptTitle": "string, interpolated.",
+            "promptButtons": 'array of string, 1-4, default ["OK"].',
+            "promptResultVariableName": "string. Number variable gets the button index (from 0); text variable its label.",
+            "promptInput": '"none" (default) | "number" | "text".',
+            "promptDefault": "string expression. Input default.",
+            "promptMin": "number. Number input minimum.", "promptMax": "number. Number input maximum.",
+            "promptInputVariableName": "string. Variable that receives the input value.",
+            "promptTimeoutMs": "int, ms, default 0 = wait forever.",
+            "promptTimeoutButton": "int. Button index chosen on timeout; empty = fail (catchable).",
+        },
+    },
 }
+
+# Fields added to existing step types by the program-language work.
+COMMON["enabled"] = "bool, optional. false = the step (and a block step's whole body) is skipped. Absent = enabled."
+COMMON["comment"] = "string, optional. Free-text note on the step (the Note step's text)."
+STEPS["Wait"]["fields"]["waitTimeoutAction"] = '"continue" (default) | "error" (fail with the catchable waitTimeout code).'
+STEPS["SetOutput"]["fields"]["outputAction"] = '"set" (default; uses outputValue) | "toggle".'
+STEPS["CallRoutine"]["fields"]["routineArgs"] = "object {param: expr}. One per in / in-out routine parameter, evaluated before the call."
+STEPS["CallRoutine"]["fields"]["routineOutputs"] = "array of {key, variableName}. Out / in-out parameters copied back on return."
 
 # Step types the executor refuses to run inside a background program.
 BACKGROUND_FORBIDDEN = {
     "MoveL", "MoveJ", "JumpL", "JumpJ", "ThreadMove", "CncProgram",
     "SetTool", "RunHoming", "SetSpeedL", "SetSpeedJ", "SetBlendRadius",
+    "MoveC", "SetSpeedFactor",
 }
 
-# Fields whose value is a nested step list, for recursive walks.
-NESTED_STEP_FIELDS = ("loopSteps", "ifSteps", "elseSteps", "cncProgramSteps")
+# Fields whose value is a nested step list, for recursive walks. Lists of {steps} objects
+# (elseIfBranches, switchCases) are walked separately.
+NESTED_STEP_FIELDS = ("loopSteps", "ifSteps", "elseSteps", "switchDefault", "trySteps", "catchSteps", "cncProgramSteps")
 
 VARIABLE_FIELDS = {
     "id":          "string, required, unique.",

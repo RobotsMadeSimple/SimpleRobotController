@@ -239,6 +239,9 @@ def _walk_steps(steps, path="steps"):
         for j, branch in enumerate(step.get("elseIfBranches") or []):
             if isinstance(branch, dict):
                 yield from _walk_steps(branch.get("steps"), f"{here}.elseIfBranches[{j}].steps")
+        for j, case in enumerate(step.get("switchCases") or []):
+            if isinstance(case, dict):
+                yield from _walk_steps(case.get("steps"), f"{here}.switchCases[{j}].steps")
 
 
 def validate_program(prog, known_points=None, known_programs=None):
