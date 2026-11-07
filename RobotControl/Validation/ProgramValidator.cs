@@ -1479,6 +1479,14 @@ namespace Controller.RobotControl.Validation
                             return;
                         }
 
+                        // $text.length — a string variable's character count (package C).
+                        if (parts.Length == 2 && parts[1].Equals("length", StringComparison.OrdinalIgnoreCase) &&
+                            Lookup(parts[0]) is { Kind: SymKind.String })
+                        {
+                            Use(parts[0]);
+                            return;
+                        }
+
                         if (parts.Length > 1 && Lookup(parts[0]) == null && Plugin(parts[0]) is { } plugin)
                         {
                             var prop = string.Join(".", parts.Skip(1));

@@ -158,6 +158,8 @@ namespace Controller.RobotControl
     ///   Conditional  : cond ? a : b   (lowest precedence, right-associative)
     ///   Functions    : abs(x) min(a,b,…) round(x,2) sin(deg) len($list) … — see <see cref="Functions"/>
     ///   Plugin fns   : scale.tare(1) — dotted names, resolved at evaluation (<see cref="IDynamicFunctionProvider"/>)
+    ///   Text helpers : $s.contains("x") .startsWith .endsWith (1/0), $s.indexOf("x") (−1 absent),
+    ///                  $s.toNumber() (0 when not a number), $s.length — see <see cref="StringMethods"/>
     ///   Grouping     : (expr)       Braces { } are ignored, so "{$x + 1}" works in numeric fields.
     ///
     /// Precedence, tightest first:
@@ -191,11 +193,12 @@ namespace Controller.RobotControl
             Dictionary<string, double> variables,
             Dictionary<string, ListVar>? listVariables = null,
             IPropertySource? properties = null,
-            Func<string, string>? strings = null)
+            Func<string, string>? strings = null,
+            Func<string, string?>? stringVariables = null)
         {
             var node = GetOrParse(expr);
             if (node == null) return 0; // empty expression — 0, as it always was
-            return node.Eval(new Env(variables, listVariables, properties, strings));
+            return node.Eval(new Env(variables, listVariables, properties, strings, stringVariables));
         }
 
         /// <summary>Syntax check only — no variable resolution.</summary>
@@ -406,7 +409,54 @@ namespace Controller.RobotControl
             new("map",   5, 5, "map(x, inLo, inHi, outLo, outHi)", "Re-map x from one range to another",
                                                                                    a => a[2] == a[1] ? a[3] : a[3] + (a[0] - a[1]) * (a[4] - a[3]) / (a[2] - a[1])),
             new("lerp",  3, 3, "lerp(a, b, t)", "a + (b - a) × t",                a => a[0] + (a[1] - a[0]) * a[2]),
+            new("inBox", 9, 9, "inBox(x, y, z, x1, y1, z1, x2, y2, z2)",
+                "1 when (x, y, z) is inside the box with opposite corners (x1, y1, z1) and (x2, y2, z2), edges included; else 0",
+                                                                                   a => InBox(a)),
+            new("inCircle", 5, 5, "inCircle(x, y, cx, cy, r)",
+                "1 when (x, y) is within r of (cx, cy), edge included; else 0",   a => InCircle(a[0], a[1], a[2], a[3], a[4])),
         };
+
+        // Small tolerance so a point taught exactly on an edge still counts as inside after the
+        // round trip through doubles (same spirit as == within 1e-9).
+        private const double ZoneEps = 1e-9;
+
+        private static double InBox(ReadOnlySpan<double> a)
+        {
+            for (int axis = 0; axis < 3; axis++)
+            {
+                double v = a[axis], lo = Math.Min(a[3 + axis], a[6 + axis]), hi = Math.Max(a[3 + axis], a[6 + axis]);
+                if (v < lo - ZoneEps || v > hi + ZoneEps) return 0;
+            }
+            return 1;
+        }
+
+        private static double InCircle(double x, double y, double cx, double cy, double r)
+        {
+            if (r < 0) return 0;
+            double dx = x - cx, dy = y - cy;
+            return dx * dx + dy * dy <= r * r + ZoneEps ? 1 : 0;
+        }
+
+        /// <summary>The string methods (<c>$s.contains("x")</c> …) and the <c>$s.length</c> property, for
+        /// symbol lists and documentation: name, signature, description, and whether it returns 1/0.</summary>
+        public static IReadOnlyList<(string Name, string Signature, string Description, bool Boolean)> StringMethods { get; } =
+        [
+            ("contains",   "$text.contains(\"x\")",   "1 when the text contains x, else 0", true),
+            ("startsWith", "$text.startsWith(\"x\")", "1 when the text starts with x, else 0", true),
+            ("endsWith",   "$text.endsWith(\"x\")",   "1 when the text ends with x, else 0", true),
+            ("indexOf",    "$text.indexOf(\"x\")",    "Position of the first x in the text (from 0), or -1 when absent", false),
+            ("toNumber",   "$text.toNumber()",        "The text as a number; 0 when it is not one", false),
+            ("length",     "$text.length",            "Number of characters in the text (on a list: its element count)", false),
+        ];
+
+        /// <summary>Text → number for <c>$s.toNumber()</c>: invariant culture, surrounding spaces
+        /// ignored; anything that is not a finite number is 0.</summary>
+        internal static double TextToNumber(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return 0;
+            return double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
+                   && double.IsFinite(v) ? v : 0;
+        }
 
         private static readonly Dictionary<string, ExpressionFunction> FunctionsByName =
             Functions.ToDictionary(f => f.Name, StringComparer.OrdinalIgnoreCase);
@@ -422,9 +472,37 @@ namespace Controller.RobotControl
             /// where string variables exist, so the string methods (.contains/.startsWith/.endsWith)
             /// can read them. Null elsewhere; the string methods then read "".</summary>
             public readonly Func<string, string>? Strings;
+            /// <summary>The value of a <em>string variable</em> by name (no <c>$</c>), or null when the
+            /// name is not one — lets <c>$s.length</c> tell a text variable from an unknown name.</summary>
+            public readonly Func<string, string?>? StringVars;
             public Env(Dictionary<string, double> vars, Dictionary<string, ListVar>? lists,
-                       IPropertySource? props, Func<string, string>? strings = null)
-            { Vars = vars; Lists = lists; Props = props; Strings = strings; }
+                       IPropertySource? props, Func<string, string>? strings = null,
+                       Func<string, string?>? stringVars = null)
+            { Vars = vars; Lists = lists; Props = props; Strings = strings; StringVars = stringVars; }
+
+            /// <summary>
+            /// The text of string variable <paramref name="name"/>, when it is one. Uses the exact
+            /// lookup when the caller supplied it; otherwise the <see cref="Strings"/> resolver,
+            /// which answers "$name" with the variable's text or — for a name that is not a
+            /// string variable — the reference left as written (VariableScope.Interpolate).
+            /// </summary>
+            public bool TryString(string name, out string text)
+            {
+                if (StringVars != null)
+                {
+                    var value = StringVars(name);
+                    text = value ?? "";
+                    return value != null;
+                }
+                if (Strings != null)
+                {
+                    string reference = "$" + name;
+                    text = Strings(reference);
+                    return !string.Equals(text, reference, StringComparison.Ordinal);
+                }
+                text = "";
+                return false;
+            }
         }
 
         /// <summary>Non-zero is true, matching how boolean variables are stored.</summary>
@@ -497,6 +575,12 @@ namespace Controller.RobotControl
                 // Known list variable referenced without an index — the legacy 0.
                 if (lists != null && lists.ContainsKey(_parts[0])) return 0;
 
+                // $text.length — the character count of a string variable (a list's .length
+                // was answered above; a number variable never gets here, its own value wins).
+                if (_parts.Length == 2 && _parts[1].Equals("length", StringComparison.OrdinalIgnoreCase) &&
+                    e.TryString(_parts[0], out var text))
+                    return text.Length;
+
                 // Truly unknown identifier — fail loudly. Silently coercing a typo'd
                 // variable to 0 can turn a clearance offset into a collision.
                 throw new UnknownVariableException(FullName);
@@ -507,32 +591,42 @@ namespace Controller.RobotControl
         }
 
         /// <summary><c>$name.contains("foo")</c> / <c>.startsWith</c> / <c>.endsWith</c> — a text
-        /// comparison on a string variable, returning 1 (true) or 0 (false).</summary>
+        /// comparison on a string variable, returning 1 (true) or 0 (false); <c>.indexOf("x")</c>
+        /// (position from 0, −1 when absent) and <c>.toNumber()</c> (0 when the text is not a
+        /// number) — the string helpers that return numbers.</summary>
         private sealed class StringMethodNode : Node
         {
             private readonly string _receiver;   // "$name" (or dotted)
-            private readonly string _method;     // contains | startsWith | endsWith
-            private readonly string _arg;         // a literal's text, or a "$var" reference
+            private readonly string _method;     // contains | startsWith | endsWith | indexOf | toNumber
+            private readonly string _arg;         // a literal's text, or a "$var" reference ("" for toNumber)
             private readonly bool   _argIsVar;
 
             public StringMethodNode(string receiver, string method, string arg, bool argIsVar, int pos)
             { _receiver = receiver; _method = method; _arg = arg; _argIsVar = argIsVar; Pos = pos; }
 
-            public override bool IsBoolean => true;
+            public override bool IsBoolean => _method is "contains" or "startsWith" or "endsWith";
 
             public override double Eval(in Env e)
             {
-                var resolve = e.Strings;
-                string hay    = resolve?.Invoke(_receiver) ?? "";
-                string needle = _argIsVar ? (resolve?.Invoke(_arg) ?? "") : _arg;
-                bool r = _method switch
+                string hay = Resolve(e, _receiver);
+                if (_method == "toNumber") return TextToNumber(hay);
+                string needle = _argIsVar ? Resolve(e, _arg) : _arg;
+                return _method switch
                 {
-                    "contains"   => hay.Contains(needle, StringComparison.Ordinal),
-                    "startsWith" => hay.StartsWith(needle, StringComparison.Ordinal),
-                    "endsWith"   => hay.EndsWith(needle, StringComparison.Ordinal),
-                    _            => false,
+                    "contains"   => hay.Contains(needle, StringComparison.Ordinal) ? 1 : 0,
+                    "startsWith" => hay.StartsWith(needle, StringComparison.Ordinal) ? 1 : 0,
+                    "endsWith"   => hay.EndsWith(needle, StringComparison.Ordinal) ? 1 : 0,
+                    "indexOf"    => hay.IndexOf(needle, StringComparison.Ordinal),
+                    _            => 0,
                 };
-                return r ? 1 : 0;
+            }
+
+            /// <summary>A "$name" reference as text: the string variable's text when it is one,
+            /// otherwise whatever the caller's resolver makes of it (a number's text), else "".</summary>
+            private static string Resolve(in Env e, string reference)
+            {
+                if (reference.StartsWith('$') && e.StringVars?.Invoke(reference[1..]) is { } s) return s;
+                return e.Strings?.Invoke(reference) ?? "";
             }
         }
 
@@ -1130,11 +1224,22 @@ namespace Controller.RobotControl
             }
 
             private static bool IsStringMethod(string s) =>
-                s is "contains" or "startsWith" or "endsWith";
+                s is "contains" or "startsWith" or "endsWith" or "indexOf";
 
             private Node ParseVariableTail(Token tok)
             {
                 var parts = tok.Parts!;
+
+                // $receiver.toNumber() — no argument.
+                if (parts.Length >= 2 && parts[^1] == "toNumber" && Cur.Type == TokType.LParen)
+                {
+                    string receiver = "$" + string.Join(".", parts, 0, parts.Length - 1);
+                    _i++; // '('
+                    if (Cur.Type != TokType.RParen)
+                        throw Error($".toNumber() takes no argument, e.g. {receiver}.toNumber()", Cur.Pos);
+                    _i++;
+                    return new StringMethodNode(receiver, "toNumber", "", false, tok.Pos);
+                }
 
                 // $receiver.contains("x") / .startsWith(...) / .endsWith(...) — a string method.
                 // The tokenizer folds the dotted chain into the variable, so the method name is the

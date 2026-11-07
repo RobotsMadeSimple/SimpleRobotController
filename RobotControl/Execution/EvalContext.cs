@@ -83,7 +83,21 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>Evaluates an expression against <see cref="Vars"/>, the list variables and the
         /// scope's properties (looked up lazily — never copied into the snapshot).</summary>
-        public double Evaluate(string expr) => ExpressionEvaluator.Evaluate(expr, Vars, _scope.Lists, _scope.Properties);
+        public double Evaluate(string expr) =>
+            ExpressionEvaluator.Evaluate(expr, Vars, _scope.Lists, _scope.Properties,
+                _resolveString ??= ResolveString, _stringVariable ??= StringVariable);
+
+        // Cached so a per-tick evaluation does not allocate two delegates.
+        private Func<string, string>?  _resolveString;
+        private Func<string, string?>? _stringVariable;
+
+        // The text helpers ($s.contains("x"), $s.length, $s.toNumber() …) read string variables
+        // through these: a string variable's text exactly, anything else as a template would
+        // render it — the same rule condition rows use.
+        private string ResolveString(string reference) =>
+            reference.StartsWith('$') && _scope.TryGetString(reference[1..], out var s) ? s : _scope.Interpolate(reference);
+
+        private string? StringVariable(string name) => _scope.TryGetString(name, out var s) ? s : null;
 
         public bool EvaluateCondition(ConditionGroup group) => _scope.EvaluateCondition(group, Vars);
 
