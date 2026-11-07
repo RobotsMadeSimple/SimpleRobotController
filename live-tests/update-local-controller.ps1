@@ -22,10 +22,11 @@ Write-Host "Building RobotControl (Debug)"
 dotnet build (Join-Path $repo "RobotControl") -c Debug -nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "Build failed - controller left stopped." }
 
-# 3. Refresh the Checkers plugin.
-$pub = Join-Path $env:TEMP "rms-checkers-pub"
+# 3. Refresh the Checkers plugin. Self-contained: it targets .NET 8, which this PC doesn't have installed,
+#    and the installed copy already carries its own runtime.
+$pub = Join-Path $env:TEMP "rms-checkers-pub-sc"
 Write-Host "Publishing the Checkers plugin"
-dotnet publish (Join-Path $repo "examples\dotnet\Checkers") -c Release -o $pub -nologo -v q
+dotnet publish (Join-Path $repo "examples\dotnet\Checkers") -c Release -r win-x64 --self-contained true -o $pub -nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "Plugin publish failed - controller left stopped." }
 $plug = Join-Path $bin "plugins\checkers"
 New-Item -ItemType Directory -Force $plug | Out-Null
