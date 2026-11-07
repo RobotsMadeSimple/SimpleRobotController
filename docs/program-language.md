@@ -1,6 +1,8 @@
 # Program editor v2 and the text language — design spec
 
-Status: **design spec** for Kitchen order b10ec549 (2026-11-06). Nothing here is built yet. It is
+Status: **design spec** for Kitchen order b10ec549 (2026-11-06). Package A (contracts and
+scaffolding) has landed — see [Package A — as built](#package-a--as-built-the-frozen-contracts-read-this-before-bg)
+for the frozen contracts; the rest is not built yet. It is
 written for the implementation agents and is meant to be split along the work packages in
 [§8](#8-work-packages). When a package lands, move the user-facing parts into
 [program-blocks.md](program-blocks.md) and [expressions-and-variables.md](expressions-and-variables.md),
@@ -1283,6 +1285,140 @@ Rules for every package:
 - `npx tsc --noEmit` is clean;
 - a program with each new step type saves and loads unchanged through `SaveBuiltProgram` on a private
   :9100 instance.
+
+#### Package A — as built (the frozen contracts; read this before B–G)
+
+Where the build differs from or adds to the text above, **this list wins**.
+
+**Model** (`Models/ProgramSteps.cs`, mirrored in the app's `robotModels.tsx`; both goldens list every
+field):
+
+- New `StepType` values are appended **after `Unknown`** (existing ordinals unchanged): `Note`,
+  `LoopControl`, `Return`, `EndProgram`, `RaiseError`, `Switch`, `Try`, `SavePosition`,
+  `SetSpeedFactor`, `ListOp`, `Prompt`, `MoveC`.
+- Fields exactly as §4.1–4.3: `enabled`, `noteStyle`, `loopControl`, `errorMessage`, `errorCode`,
+  `switchExpr`, `switchCases` (`SwitchCase {id, values: string[], steps}`), `switchDefault`,
+  `trySteps`, `catchSteps`, `tryRetries`, `tryRetryDelayMs`, `catchCodes`, `errorVariableName`,
+  `errorCodeVariableName`, `waitTimeoutAction`, `routineArgs` (`{param: expr}`), `routineOutputs`
+  (`[{key, variableName}]` — C# reuses `PluginOutputMapping`, TS `RoutineOutputMapping`),
+  `outputAction`, `savePositionTo`, `savePositionMode`, `savePositionIndex` (int literal; expression
+  key `savePositionIndex`), `savePositionSource`, `speedFactor`, `viaPointId`, `viaPointName`,
+  `viaPointNameExpr`, `arcTolerance`, `listAction`, `listIndex` (int; key `listIndex`),
+  `listValueExpr`, `listFields`, `listSourceVariable`, `listSortField`, `listSortDescending`,
+  `promptTitle`, `promptMessage`, `promptButtons`, `promptInput`, `promptDefault` (string),
+  `promptMin`, `promptMax`, `promptResultVariableName`, `promptInputVariableName`, `promptTimeoutMs`,
+  `promptTimeoutButton`. EndProgram's message is `statusMessage`; SavePosition reuses
+  `variableName` / `pointId` / `pointName`; ListOp reuses `variableName`.
+- `ProgramStep.IsEnabled` (C#, `[JsonIgnore]`) = `enabled != false`.
+- `ProgramVariable.paramMode`: `"in" | "out" | "inOut"` (`ParamModes` constants). The text form
+  `param inout` maps to `"inOut"`.
+- `BuiltProgram.editorMode`: `"blocks" | "text"`. `SaveBuiltProgram` takes it; a save that omits it
+  keeps the stored value.
+- Goldens: `RobotControl.Tests/Golden/programstep.golden.json` (now every field, both directions:
+  `EveryControllerFieldIsInTheGolden`), `steptypes.golden.json` (the enum, in order) and
+  **`builtprogram.golden.json`** (program + variable fields, incl. `editorMode` / `paramMode`).
+  App mirror: `src/models/programStepGolden.check.ts` + `npx tsx scripts/golden-check.mts`.
+
+**`StepTree`** (`Models/StepTree.cs`): `step.ChildLists(executableOnly = false)` →
+`StepChildList(Role, Index?, Steps)` with `Path` (`loopSteps`, `elseIfBranches[1].steps`,
+`switchCases[0].steps`, …) and `IsLoopBody`; roles in `StepTree.Roles` (order frozen: loopSteps,
+ifSteps, elseIfBranches, elseSteps, switchCases, switchDefault, trySteps, catchSteps,
+cncProgramSteps). `executableOnly` drops baked `cncProgramSteps` when `cncSpec` is set.
+`StepTree.Walk(steps, enabledOnly, executableOnly)` (pre-order) and `StepTree.WalkWithPaths(steps)`.
+Used by CountSteps (both), the validator and the step-array list of `ValidateBuiltProgram`'s
+unknown-type patcher.
+
+**Catalog** (`RobotControl/Programs/`, namespace `Controller.RobotControl.Programs`):
+`StepCatalog.cs` (the table), `StepCatalogModels.cs` (wire classes), `ErrorCodes.cs`.
+`GetStepCatalog {}` → `{ catalogVersion: 1, languageVersion: 1, categories, errorCodes, steps,
+commonFields, legacyFields }`. Differences from §5.2:
+
+- `commonFields` = `id name comment type enabled expressions unknownStepType`; `legacyFields` =
+  `varPointName varPointIndex jsonImageOutbound cncProgramSteps`. `Unknown` has no entry.
+- Category keys are the app's: `motion motionSettings flow variables io vision background comms
+  plugins`. New blocks: Note/LoopControl/Return/EndProgram/RaiseError/Switch/Try → `flow`;
+  SavePosition/MoveC → `motion`; SetSpeedFactor → `motionSettings`; ListOp → `variables`;
+  Prompt → `comms`.
+- `FieldSpec` gains `props` (the ProgramStep properties a composite or reference field stores
+  into, e.g. `target` → `pointId pointName pointNameExpr gridPoint stackPoint`; `localId` →
+  `localId localName`), `exprKeys` (a composite's expression keys: target →
+  `gridRowIndex gridColIndex gridGridIndex stackIndex`; axes6 → its six fields), `varKinds`
+  (`number boolean string image stopwatch list` or `list:<Number|Boolean|Point|Record>`) and
+  `hidden`. Optional metadata that is null is omitted from the JSON.
+- Composite keys: `target`, `via` (MoveC, props `viaPoint*`), `offset`, `override` (arg `set`),
+  `toolOffset`. **No `until` composite:** the stop condition is four real fields with args `until`,
+  `untilMode`, `untilPos`, `untilFlag`. `blend` (bool) and `blendRadius` are two fields; the
+  `blend=5` text sugar is package D's.
+- Kinds (`FieldKinds.All`): §5.2's list **plus** `pluginRef` (pluginId + pluginStepId), `exprMap`
+  (`{name: expr}` — routineArgs, listFields, pluginParams), `textList` (promptButtons, catchCodes),
+  `branches` (elseIfBranches), `cases` (switchCases). **`mappingIn` is not used**: rows that send
+  values out are `rows` (jsonOutbound, exportColumns); rows that read a value into a variable are
+  `mappingOut` (jsonInbound, httpReceiveInbound, toolOutputs, pluginOutputs, routineOutputs).
+- `showIf {field, in}` compares the other field's value **as text**, an absent field reading as its
+  catalog `default` (booleans `"true"`/`"false"`).
+- `keyword`: step types keep their name; flow forms use the text words (`if switch repeat break
+  try raise call return exit label goto pause stopwatch status prompt plugin`, Loop aliases
+  `for while`, LoopControl alias `continue`). SetVariable and ListOp have keyword `$`, Note `#` —
+  statement forms, not keywords.
+- `background` = `!ProgramExecutor.IsRestrictedInBackground(type)` (now `internal`; MoveC and
+  SetSpeedFactor added to it).
+- Error codes (`ErrorCodes`, `ErrorCodes.IsCatchable(code)` — a code not in the list, i.e. a
+  RaiseError code of the user's own, is catchable): catchable `waitTimeout visionTimeout
+  visionFailed httpFailed httpTimeout receiveTimeout pluginFailed pluginTimeout pluginNotRunning
+  promptTimeout pointNotFound arcDegenerate indexOutOfRange userError`; fatal `motionFault
+  jointLimit driverDisconnected emergencyStop userStop unknownVariable expressionSyntax
+  computedVariable`. A new code goes in `ErrorCodes` (test 5 greps `ctx.Fail("…"` and
+  `ctx.Fail(ErrorCodes.X`).
+- Tests: `StepCatalogTests` (the five coverage tests + shape, keyword, wire-name checks).
+
+**Execution:** `ExecutionContext.Fail(code, message)` → `Finish(Error, message)` for now. New
+handler files `FlowExtSteps.cs` (B; **Note is implemented**: it advances without reporting a
+completion, so it is never counted), `MotionExtSteps.cs`, `DataSteps.cs`, `OperatorSteps.cs` (C);
+every other new type is `NotImplementedStep.Instance` (ends the run: "… not implemented on this
+controller yet"). **Enable/disable is done end to end**: `ProgramExecutor.ExecuteStepInner` skips a
+disabled step (`Progress.SkippedDisabled` + `CompleteNow`; a disabled Note just advances), a blended
+MoveL run stops at a disabled step, CountSteps counts a disabled step once without its body and
+skips Notes; tests in `DisabledStepTests.cs` (B may extend it).
+
+**Validator:** `ProgramValidator` and `Walker` are `partial`; `ValidationCodes` has the new names
+(`loopControlOutsideLoop unknownParam paramMissing paramOutputType duplicateCaseValue
+unsupportedOnStep pointWriteInBackground`). Hooks, called after the per-type switch and before the
+nested bodies are walked (bodies of every new block are already walked via StepTree):
+
+```csharp
+partial void CheckFlowExt(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body); // B: ProgramValidator.Flow.cs
+partial void CheckStepsExt(ProgramStep s, At at);                                                      // C: ProgramValidator.Steps.cs
+```
+
+A disabled step gets one `disabledStep` warning (field `enabled`) and nothing inside it is checked;
+disabled steps declare no implicit variables; a disabled GoToLabel does not make the rest
+unreachable.
+
+**Status DTO** (`Models/ProgramCycle.cs`): the programs summary gains `currentStepId`,
+`pauseReason` (`PauseReasons`: `breakpoint | step | pauseStep | user`), `pausedAtStepId` and
+`prompt` (`ProgramPromptInfo {id, stepId, programName, title, message, buttons, input, default,
+min, max, timeoutMs, shownUnixMs}`); the live `activePrograms` block gains `currentStepId` and
+`prompt`. `currentStepId` is new (for the run highlight in Blocks and Text). The PauseProgram step
+already reports `pauseStep` and a user Stop `user`. **`ProgramCycleManager` now has
+`SetPauseState(name, reason, pausedAtStepId)`, `SetPrompt(name, prompt|null)`, `GetPrompt(name)` and
+`GetPrompts()`** — B and C call these instead of editing ProgramCycleManager. A terminal status
+clears pause + prompt; Resume clears the pause but keeps the prompt.
+
+**Commands** (registered in `CommandDispatcher`): `GetStepCatalog` (real); `FormatProgramText`,
+`ParseProgramText` (`Commands/LanguageCommands.cs`), `AnswerPrompt` (`OperatorCommands.cs`),
+`StepBuiltProgram`, `SetBreakpoints` (`DebugCommands.cs`) are stubs that fail with
+`{ok: false, error: "notImplemented: …"}` (`CommandNotImplementedException`). Param classes in
+`Models/BuiltProgram.cs`: `ExecuteBuiltProgramParams {name, startAtStepId?, breakpoints?, stepMode?}`,
+`SetBreakpointsParams {stepIds}`, `AnswerPromptParams {promptId, button, value?}` (value as text),
+`FormatProgramTextParams`, `ParseProgramTextParams`. **`ExecuteBuiltProgram` refuses any debug
+option** with a `notImplemented` error until package B wires them (running from the top instead
+of mid-program would move the robot unexpectedly).
+
+**Text contract** (`Language/TextProblem.cs`, now package D's): `TextProblem {line, col, endLine,
+endCol, severity, code, message, stepId?, field?, source}` — 1-based, UTF-16 columns, `endCol`
+exclusive; `ProgramTextMapEntry {stepId, stepPath, line, endLine}` (inclusive lines);
+`FormatProgramTextResult {text, languageVersion, map}`; `ParseProgramTextResult {ok, program?,
+problems, map}`; `TextProblemCodes` (§6.11).
 
 ### Package B — controller flow, errors, routines and debugging (after A)
 

@@ -54,6 +54,12 @@ internal sealed class CommandDispatcher
         new VisionCommands(robot).Register(d);
         new CalibrationCommands(robot).Register(d);
         new PluginCommands(robot).Register(d);
+        // Program editor v2 (docs/program-language.md §8): the catalog, and the text-language,
+        // operator-prompt and debugger commands (stubs until packages B, C and D land).
+        new StepCatalogCommands().Register(d);
+        new LanguageCommands().Register(d);
+        new OperatorCommands(programs).Register(d);
+        new DebugCommands(executor).Register(d);
         return d;
     }
 }
