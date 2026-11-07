@@ -370,6 +370,14 @@ namespace Controller.RobotControl.Validation
                     case StepType.MoveL: case StepType.MoveJ: case StepType.JumpL: case StepType.JumpJ:
                     case StepType.AuxMove: case StepType.GripperAction:
                         Implicit(s.MoveStopFlagVariableName, SymKind.Boolean); break;
+                    // Package C: an undeclared Prompt result/input variable is created as a number
+                    // (button index / typed number); SavePosition creates its Points list.
+                    case StepType.Prompt:
+                        Implicit(s.PromptResultVariableName, SymKind.Number);
+                        if (s.PromptInput is "number" or "text") Implicit(s.PromptInputVariableName, SymKind.Number);
+                        break;
+                    case StepType.SavePosition when s.SavePositionTo != "point":
+                        Implicit(s.VariableName, SymKind.List, ListElementType.Point); break;
                 }
                 if (s.Type == StepType.RunVision)
                 {
