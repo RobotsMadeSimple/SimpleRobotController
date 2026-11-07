@@ -86,4 +86,7 @@ public static class TextProblemCodes
     public const string UnknownCamera     = "unknownCamera";
     /// <summary>Warning: an <c>@with</c> key that is not a step / variable field (it is dropped).</summary>
     public const string UnknownField      = "unknownField";
+    /// <summary>Error: a name written in its underscore form (<c>Pick_1</c>) that fits more than one
+    /// item (<c>"Pick 1"</c> and <c>"Pick-1"</c>) — the text must quote the real name.</summary>
+    public const string AmbiguousName     = "ambiguousName";
 }

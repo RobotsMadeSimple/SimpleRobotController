@@ -435,6 +435,10 @@ internal static class SrsText
     public static string Name(string name) =>
         SrsCursor.IsIdent(name) && !Reserved.Contains(name) ? name : Quote(name);
 
+    /// <summary>True for a reserved value word or any statement / clause / declaration keyword
+    /// (case-insensitive) — an underscore-form name is never printed as one of these.</summary>
+    public static bool IsReservedOrKeyword(string word) => Reserved.Contains(word) || SrsParser.IsKeyword(word);
+
     /// <summary>True when <paramref name="s"/> can be written as a string literal (no control
     /// characters other than \n \t \r).</summary>
     public static bool Quotable(string? s) => s != null && s.All(c => c >= ' ' || c is '\n' or '\t' or '\r');

@@ -49,7 +49,7 @@ Contents: [Rules](#rules) · [Program layout](#program-layout) · [Declarations]
 | Strings | `"…"` with the escapes `\"` `\\` `\n` `\t` `\r` (any other backslash is kept as written, so `"C:\data"` works). Template braces `{$x}` are kept as written and filled in at run time. |
 | Numbers | `3`, `-2.5`, `1e3`. Fields in milliseconds also take `500ms` and `1.5s`. |
 | Booleans | `on` `off` `true` `false`. |
-| Names | A point, tool, routine, device … whose name is a plain identifier is written bare (`Pick1`); anything else in quotes (`"Pick 1"`). |
+| Names | A point, tool, routine, device … whose name is a plain identifier is written bare (`Pick1`); anything else in quotes (`"Pick 1"`) or in its underscore form (`Pick_1`) — see [Names and ids](#names-and-ids). |
 | Variables | `$name` — in expressions and wherever a variable is written to (`result=$v`, `for $v in …`). |
 | Positional values | Right after the keyword, separated by spaces: a name, a string, a number, `on`/`off`, a `$var` (with `[…]` / `.field`), or an expression **in parentheses**: `SetSpeedL ($base * 2)`. |
 | Named values | `name=value`, comma-separated: `MoveL Pick1, speed=200, blend=5`. A named value runs to the next top-level comma, so it can be any expression: `speed=$base * 2`. |
@@ -304,6 +304,30 @@ Row bodies (`RunVision`, `HttpRequest`, `HttpReceive`, `ExportData`, `plugin`) c
 
 - **Names resolve to ids.** `MoveL Pick1` stores the point's id and its name; a renamed point
   keeps working and the text shows its new name. Names match exactly first, then ignoring case.
+- **Names with spaces: the underscore form.** A name that is not an identifier can be written
+  either quoted (`"Pick 1"`) or as an identifier in its *underscore form*: every run of
+  characters an identifier cannot hold (spaces, `-`, `/`, `.`, accents, emoji …) becomes one `_`.
+  `"Pick 1"` is `Pick_1`, `"Bin - left"` is `Bin_left`, `"Arduino Nano"` is `Arduino_Nano`
+  (the same spelling `$io.Arduino_Nano.…` already uses). This works for every name the text
+  resolves: points (targets, `via=`, `SavePosition point`), tools, locals, grids, stacks,
+  routines (`call`), background programs, vision programs and their tools (`Top_edge.angle -> $a`),
+  devices, cameras and `goto` labels.
+  - **Matching order:** an exact name → the name ignoring case → the underscore form,
+    case-sensitive first, then ignoring case (so `pick_1` finds `"Pick 1"`, like `pick1` finds
+    `Pick1`). An exact name always wins: with points `"Pick 1"` and `Pick_1`, `Pick_1` is the
+    second one.
+  - **Ambiguity is an error** (`ambiguousName`): when no name matches exactly and the underscore
+    form fits two or more names (`"Pick 1"` and `"Pick-1"` are both `Pick_1`), the text must use
+    the quoted name. A quoted real name always resolves, so quoting is the way out.
+  - **Printing:** the formatter writes a name bare when it is an identifier, else its underscore
+    form when that is an identifier, is not a keyword or reserved value word (`end`, `here`, `on`,
+    `_`, `MoveL`, …) and reads back as the same item, else quoted. So `"Pick 1"` prints as
+    `Pick_1`, but prints quoted when a `Pick_1` or a `"Pick-1"` also exists, when it starts with
+    a digit (`"1st pick"`), or when the point is not in the repository (an unknown name or a
+    dangling id — the underscore form would not read back as the same name).
+  - A label's own declaration (`label "Try again"`) stays quoted — it defines the name;
+    `goto Try_again` refers to it.
+  - Only the text uses the underscore form; names stored in program JSON match as written.
 - **Unknown names are warnings, not errors**, so you can write a program before teaching its
   points: the name is kept (the validator reports it until the point exists). For things linked
   by id only (devices, cameras, grids, stacks, vision tools) the text you typed is kept as written.
@@ -359,6 +383,7 @@ parsing carries on, so every problem in the text is reported at once.
 | `duplicateId` | two steps with the same `@id` |
 | `unknownPoint`, `unknownTool`, `unknownRoutine`, `unknownGrid`, `unknownDevice`, `unknownLabel` … | warnings: the name does not resolve (yet) |
 | `unknownField` | warning: an `@with` key that is not a field (dropped) |
+| `ambiguousName` | a name in its underscore form (`Pick_1`) fits more than one item (`"Pick 1"`, `"Pick-1"`) — write the quoted name |
 
 With validation on, the program validator's problems are added too (`source: "validate"`),
 placed on the step's line and, where the problem names a field, on that value.

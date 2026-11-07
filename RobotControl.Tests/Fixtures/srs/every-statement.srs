@@ -36,7 +36,7 @@ var copy: list number
 ## Motion
 @name "Approach"
 MoveL Pick1, speed=200, offset=(z=20)
-MoveJ "Pick 1", speed=50, accel=100, decel=100
+MoveJ Pick_1, speed=50, accel=100, decel=100
 MoveL here, offset=(z=20)
 MoveL $pts[$i], blend=5
 MoveL Pick1, blend=on
@@ -66,16 +66,16 @@ SavePosition point Pick1
 ## I/O
 SetOutput stb 1 on
 SetOutput relay 3 off, pulse=250ms, blocking=on
-SetOutput io "Arduino Nano" 4 on
+SetOutput io Arduino_Nano 4 on
 SetOutput stb 2 toggle
 SetOutput stb 2 ($count > 3)
 Wait 500ms
 Wait $delay
 Wait until $stb.in1 and $ok, timeout=5s, timedOut=$late, onTimeout=error
-Tare device="Arduino Nano", pin=2
-ReadLoadCell $w, device="Arduino Nano", pin=2, unit=g
-StartRecording $rec, device="Arduino Nano", pin=2
-StopRecording device="Arduino Nano", pin=2
+Tare device=Arduino_Nano, pin=2
+ReadLoadCell $w, device=Arduino_Nano, pin=2, unit=g
+StartRecording $rec, device=Arduino_Nano, pin=2
+StopRecording device=Arduino_Nano, pin=2
 ExportData csv "logs/run-{$time_ms}.csv"
   "weight" = $w
   "series" = list $rec
@@ -148,12 +148,12 @@ $vals.reverse()
 $copy.copyFrom($vals)
 
 ## Vision and communication
-RunVision "Detect Parts", frame=robot, pass=$ok
-  "Top edge".angle -> $w
+RunVision Detect_Parts, frame=robot, pass=$ok
+  Top_edge.angle -> $w
   Board.cells -> $cells
 end
 CaptureImage $photo, camera=Top
-SaveImage "shots/{$time_ms}.jpg", camera="Side Cam"
+SaveImage "shots/{$time_ms}.jpg", camera=Side_Cam
 StartBackground Conveyor
 StopBackground Conveyor
 WaitForBackground Conveyor

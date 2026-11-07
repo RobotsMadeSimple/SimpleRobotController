@@ -1555,8 +1555,13 @@ catalog-generated argument table that `DocTableTests` keeps current). Where the 
   plugin params, prompt `default`) print quoted unless the text looks like an expression.
 - **`@with` keys that are not fields** → `unknownField` warning (dropped). `missingArgument` is not
   reported for a step that has an `@with`. New codes: `unknownDevice`, `unknownCamera`,
-  `unknownField` (warnings). Unknown names of id-only references (devices, cameras, grids, stacks,
-  vision tools) keep the typed text as the id.
+  `unknownField` (warnings), `ambiguousName` (error). Unknown names of id-only references (devices,
+  cameras, grids, stacks, vision tools) keep the typed text as the id.
+- **Underscore-form names:** a name that is not an identifier may be written as one with each run of
+  non-identifier characters as `_` (`"Pick 1"` → `Pick_1`), for every resolved reference kind and
+  `goto` labels. Exact → case-insensitive → underscore form; an underscore form that fits several
+  names is `ambiguousName`. The formatter prints the underscore form when it reads back as the same
+  item and is not a keyword (program-text.md, Names and ids).
 - **Ids:** besides LCS + type pairing, a step moved elsewhere in the same list keeps its id (same
   key, unmatched on both sides). Steps that arrived as JSON in `@with` are never re-id'd. Condition
   items split from one `expr` get `<id>.<k>` ids in Normalize. Variables match by name and inherit

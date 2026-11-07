@@ -198,8 +198,21 @@ public static class SrsLanguage
             s.LabelId = id;
             return;
         }
-        s.LabelId = null;
         var span = n.FieldSpans.TryGetValue("labelId", out var sp) ? sp : n.Span;
+        var m = labels.Resolve(s.LabelName);
+        if (m.Item is { } hit)
+        {
+            // written in its underscore form: link it and keep the label's real name
+            s.LabelId = string.IsNullOrEmpty(hit.Id) ? null : hit.Id;
+            s.LabelName = hit.Name;
+            return;
+        }
+        s.LabelId = null;
+        if (m.Ambiguous)
+        {
+            Add(problems, span, "error", TextProblemCodes.AmbiguousName, NameResolver.AmbiguousMessage("label", s.LabelName, m.Candidates));
+            return;
+        }
         Add(problems, span, "warning", TextProblemCodes.UnknownLabel, $"No label named '{s.LabelName}' in this program");
     }
 

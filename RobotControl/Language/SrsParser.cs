@@ -60,6 +60,19 @@ internal sealed class SrsParser
     public static IEnumerable<string> AllKeywords =>
         FlowWords.Keys.Concat(StepCatalog.Steps.Select(s => s.Type)).Concat(["SetVariable", "ListOp", "Note", "var", "computed", "param"]);
 
+    private static HashSet<string>? _keywordSet;
+
+    /// <summary>True when <paramref name="word"/> is a statement keyword or alias, a clause word or
+    /// a declaration word (case-insensitive).</summary>
+    public static bool IsKeyword(string word)
+    {
+        _keywordSet ??= new HashSet<string>(
+            AllKeywords.Concat(Clauses).Concat(DeclWords)
+                       .Concat(StepCatalog.Steps.SelectMany(s => s.Aliases.Prepend(s.Keyword))),
+            StringComparer.OrdinalIgnoreCase);
+        return _keywordSet.Contains(word);
+    }
+
     /// <summary>Printed words of enum options that read better lower-case (both directions).</summary>
     public static readonly Dictionary<(StepType, string), (string Value, string Word)[]> EnumWords = new()
     {
@@ -890,7 +903,14 @@ internal sealed class SrsParser
                         string text, int st, int en, string fieldKey, bool isStr = true)
     {
         n.FieldSpans.TryAdd(fieldKey, SpanOf(line, st, en));
-        var id = _names.IdOf(kind, text);
+        var match = _names.Resolve(kind, text);
+        if (match.Ambiguous)
+        {
+            Error(TextProblemCodes.AmbiguousName, NameResolver.AmbiguousMessage(NameResolver.KindLabel(kind), text, match.Candidates), line, st, en);
+            if (nameProp != null) n.Json[nameProp] = text; else n.Json[idProp] = text;
+            return;
+        }
+        var id = match.Item?.Id;
         if (nameProp != null)
         {
             if (id != null) { n.Json[idProp] = id; n.Json[nameProp] = _names.NameOf(kind, id); }
@@ -935,8 +955,10 @@ internal sealed class SrsParser
                 if (c.TryChar(',')) (i2, s2) = c.ScanExpr();
                 if (!c.TryChar(']')) { Error(TextProblemCodes.Syntax, "Expected ]", c, c.P); return; }
                 var kind = grid ? SrsRefKind.Grid : SrsRefKind.Stack;
-                var id = _names.IdOf(kind, name) ?? (_names.IdExists(kind, name) ? name : null);
-                if (id == null) Warn(NameResolver.UnknownCode(kind), $"No {kind.ToString().ToLowerInvariant()} named '{name}' — kept as written", line, ns, ne);
+                var gm = _names.Resolve(kind, name);
+                if (gm.Ambiguous) Error(TextProblemCodes.AmbiguousName, NameResolver.AmbiguousMessage(kind.ToString().ToLowerInvariant(), name, gm.Candidates), line, ns, ne);
+                var id = gm.Item?.Id ?? (_names.IdExists(kind, name) ? name : null);
+                if (id == null && !gm.Ambiguous) Warn(NameResolver.UnknownCode(kind), $"No {kind.ToString().ToLowerInvariant()} named '{name}' — kept as written", line, ns, ne);
                 if (grid)
                 {
                     var gp = new JsonObject { ["gridId"] = id ?? name };
@@ -979,7 +1001,7 @@ internal sealed class SrsParser
             return;
         }
         if (SrsCursor.IsIdent(tok)) { SetRef(n, line, SrsRefKind.Point, idP, nameP, tok, st, c.P, f.Key); return; }
-        Error(TextProblemCodes.Syntax, $"'{Excerpt(tok)}' is not a target — a point name with spaces goes in quotes", line, st, c.P);
+        Error(TextProblemCodes.Syntax, $"'{Excerpt(tok)}' is not a target — write a point name with spaces in quotes (\"Pick 1\") or with underscores (Pick_1)", line, st, c.P);
     }
 
     private void IndexValue(SrsLine line, StepNode n, JsonObject into, string prop, string exprKey, string text, int st)
@@ -1795,7 +1817,13 @@ internal sealed class SrsParser
                 var v = OutVar();
                 if (v == null) return;
                 string vpId = n.Json["visionProgramId"]?.ToString() ?? "";
-                var toolId = _names.ToolId(vpId, key);
+                var tm = _names.ResolveTool(vpId, key);
+                var toolId = tm.Item?.Id;
+                if (tm.Ambiguous)
+                {
+                    Error(TextProblemCodes.AmbiguousName, NameResolver.AmbiguousMessage("vision tool", key, tm.Candidates), l, ks, ks + key.Length + 2);
+                    return;
+                }
                 if (toolId == null)
                 {
                     toolId = key;

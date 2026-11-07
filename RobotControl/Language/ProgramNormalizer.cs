@@ -364,4 +364,15 @@ internal sealed class LabelTable(List<ProgramStep> labels)
 
     public bool Has(string name) =>
         labels.Any(l => string.Equals(l.LabelName, name, StringComparison.OrdinalIgnoreCase));
+
+    private List<SrsNamed>? _named;
+    private List<SrsNamed> Named => _named ??= labels.Where(l => !string.IsNullOrEmpty(l.LabelName))
+                                                     .Select(l => new SrsNamed(l.LabelId ?? "", l.LabelName!)).ToList();
+
+    /// <summary>A goto's text name → its label (exact, case-insensitive, then underscore form).</summary>
+    public SrsNameMatch Resolve(string text) => SrsNameMatch.Find(Named, text, firstWins: true);
+
+    /// <summary>How a goto writes the label named <paramref name="name"/>.</summary>
+    public string? RefName(string? name) =>
+        SrsNameMatch.Text(name, u => Resolve(u).Item is { } m && m.Name == name);
 }

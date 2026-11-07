@@ -157,7 +157,7 @@ internal sealed class SrsPrinter
     {
         var n = _names.NameOf(kind, id) ?? name;
         if (string.IsNullOrEmpty(n) && kind is SrsRefKind.Device or SrsRefKind.Camera) n = id;
-        return NameText(n);
+        return _names.RefName(kind, id, n);
     }
 
     private string? TargetText(ProgramStep s, bool via)
@@ -166,7 +166,7 @@ internal sealed class SrsPrinter
         {
             if (s.GridPoint is { } g && !string.IsNullOrEmpty(g.GridId))
             {
-                var name = NameText(_names.NameOf(SrsRefKind.Grid, g.GridId) ?? g.GridId);
+                var name = _names.RefName(SrsRefKind.Grid, g.GridId, _names.NameOf(SrsRefKind.Grid, g.GridId) ?? g.GridId);
                 if (name == null) return null;
                 string? Idx(double? lit, string key)
                 {
@@ -184,7 +184,7 @@ internal sealed class SrsPrinter
             }
             if (s.StackPoint is { } st && !string.IsNullOrEmpty(st.StackId))
             {
-                var name = NameText(_names.NameOf(SrsRefKind.Stack, st.StackId) ?? st.StackId);
+                var name = _names.RefName(SrsRefKind.Stack, st.StackId, _names.NameOf(SrsRefKind.Stack, st.StackId) ?? st.StackId);
                 var i = HasExpr(s, "stackIndex") ? NamedExpr(Expr(s, "stackIndex"))
                       : st.Index is { } d && double.IsFinite(d) ? SrsText.Num(d) : null;
                 return name == null || i == null ? null : $"stack {name}[{i}]";
@@ -200,7 +200,7 @@ internal sealed class SrsPrinter
         var pn = via ? (_names.NameOf(SrsRefKind.Point, s.ViaPointId) ?? s.ViaPointName)
                      : (_names.NameOf(SrsRefKind.Point, s.PointId) ?? s.PointName);
         if (string.IsNullOrEmpty(pn) || pn.Contains('{') || pn.Contains('$')) return null;
-        return NameText(pn);
+        return _names.RefName(SrsRefKind.Point, via ? s.ViaPointId : s.PointId, pn);
     }
 
     private static string? AxesText(ProgramStep s, JsonObject j, FieldSpec f)
@@ -671,7 +671,7 @@ internal sealed class SrsPrinter
             case StepType.GoToLabel:
             {
                 var name = (s.LabelId != null ? _labels.NameOf(s.LabelId) : null) ?? s.LabelName;
-                var t = NameText(name);
+                var t = _labels.RefName(name);
                 return f.Line(t == null ? "goto" : "goto " + t);
             }
             case StepType.CallRoutine:
@@ -807,7 +807,7 @@ internal sealed class SrsPrinter
             case StepType.RunVision:
                 foreach (var o in s.ToolOutputs ?? [])
                 {
-                    var tool = o == null ? null : NameText(_names.ToolText(s.VisionProgramId, o.ToolId));
+                    var tool = o == null ? null : _names.ToolRefText(s.VisionProgramId, o.ToolId);
                     var val = o == null ? null : NameText(o.Value);
                     var v = Var(o?.Variable);
                     if (tool == null || val == null || v == null) return null;

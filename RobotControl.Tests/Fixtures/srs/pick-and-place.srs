@@ -16,8 +16,8 @@ end
 
 ## Find parts
 try retry=2, delay=1s
-  RunVision "Detect Parts", frame=robot, pass=$ok
-    "Top edge".points -> $parts
+  RunVision Detect_Parts, frame=robot, pass=$ok
+    Top_edge.points -> $parts
   end
   if not $ok
     raise "No parts found", code=noParts
@@ -33,7 +33,7 @@ for _, $i in $parts
   GripperAction close, device=Aux, axis=1, until=$io.Nano.Grip >= 300
   JumpL grid Tray[$count], z=40
   GripperAction open
-  ReadLoadCell $grams, device="Arduino Nano", pin=2
+  ReadLoadCell $grams, device=Arduino_Nano, pin=2
   if $grams < $target
     status warning "Slot {$count} light: {round($grams, 1)} g"
     continue
