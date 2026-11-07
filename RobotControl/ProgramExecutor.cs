@@ -597,6 +597,16 @@ namespace Controller.RobotControl
 
         private void ExecuteStepInner(ProgramStep step, StepListFrame frame)
         {
+            // A disabled step (enabled: false) is skipped with its whole body. A disabled Note is
+            // still just a note — nothing to report.
+            if (!step.IsEnabled)
+            {
+                if (step.Type == StepType.Note) { frame.Index++; return; }
+                _ctx.Progress.SkippedDisabled(step);
+                _ctx.CompleteNow(step, frame);
+                return;
+            }
+
             // Background programs skip motion/tool/homing steps rather than error
             if (_isBackground && IsRestrictedInBackground(step.Type))
             {
@@ -615,10 +625,12 @@ namespace Controller.RobotControl
                 _ctx.CompleteNow(step, frame);
         }
 
-        private static bool IsRestrictedInBackground(StepType type) => type switch
+        /// <summary>Step types a background program skips (motion, tool, homing). The step catalog's
+        /// <c>background</c> flag is the negation of this.</summary>
+        internal static bool IsRestrictedInBackground(StepType type) => type switch
         {
-            StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ => true,
-            StepType.SetTool or StepType.SetSpeedL or StepType.SetSpeedJ => true,
+            StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ or StepType.MoveC => true,
+            StepType.SetTool or StepType.SetSpeedL or StepType.SetSpeedJ or StepType.SetSpeedFactor => true,
             StepType.SetLocal or StepType.ClearLocal or StepType.RunHoming or StepType.ThreadMove => true,
             _ => false,
         };

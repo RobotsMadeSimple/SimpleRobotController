@@ -151,6 +151,20 @@ namespace Controller.RobotControl.Execution
             return StepOutcome.Finished;
         }
 
+        /// <summary>
+        /// A <em>runtime</em> failure with a catalog error code (<see cref="Programs.ErrorCodes"/>;
+        /// a RaiseError step may use its own identifier). Package B makes this unwind to an
+        /// enclosing Try when the code is catchable; until then it ends the program with an
+        /// error, exactly like <see cref="Finish"/>. Handlers call it instead of
+        /// <c>Finish(Error, …)</c> for anything a Try should be able to catch
+        /// (docs/program-language.md §4.2, "Catchable vs fatal errors").
+        /// </summary>
+        public StepOutcome Fail(string code, string message)
+        {
+            _ = code; // carried for Try/catch (package B); not part of the program's error text
+            return Finish(ProgramStatus.Error, message);
+        }
+
         /// <summary>Pauses the program in place (PauseProgram step).</summary>
         public void Pause() => _pause();
 
@@ -406,6 +420,12 @@ namespace Controller.RobotControl.Execution
             PluginSteps.Register(r);
             BackgroundSteps.Register(r);
             CncSteps.Register(r);
+            // Program editor v2 (docs/program-language.md §8): flow (package B), motion / data /
+            // operator (package C). Until those land each new type errors "not implemented yet".
+            FlowExtSteps.Register(r);
+            MotionExtSteps.Register(r);
+            DataSteps.Register(r);
+            OperatorSteps.Register(r);
             // Steps the controller does not recognise (from a newer app) are skipped.
             r[StepType.Unknown] = NoOpStep.Instance;
             return r;
@@ -416,5 +436,19 @@ namespace Controller.RobotControl.Execution
             public static readonly NoOpStep Instance = new();
             public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx) => StepOutcome.Advance;
         }
+    }
+
+    /// <summary>
+    /// Placeholder handler for a step type whose contract exists but whose behaviour has not
+    /// landed yet: it ends the program with a clear error rather than skipping silently (a
+    /// skipped MoveC or Try would run the rest of the program in a state the author did not
+    /// intend). Replaced type by type as packages B and C register the real handlers.
+    /// </summary>
+    internal sealed class NotImplementedStep : IStepHandler
+    {
+        public static readonly NotImplementedStep Instance = new();
+        public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx) =>
+            ctx.Finish(ProgramStatus.Error,
+                $"{ProgressReporter.StepDescription(step)}: {step.Type} steps are not implemented on this controller yet");
     }
 }

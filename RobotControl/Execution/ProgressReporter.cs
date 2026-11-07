@@ -147,6 +147,7 @@ namespace Controller.RobotControl.Execution
                 ProgramName          = ProgramName,
                 ProgramStatus        = ProgramStatus.Running,
                 CurrentStepNumber    = GlobalStepIndex,
+                CurrentStepId        = step.Id,
                 StepDescription      = desc,
                 WarningDescription   = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
                 ErrorDescription     = string.IsNullOrEmpty(step.StatusError)   ? null : step.StatusError,
@@ -187,6 +188,7 @@ namespace Controller.RobotControl.Execution
                 ProgramName        = ProgramName,
                 ProgramStatus      = ProgramStatus.Running,
                 CurrentStepNumber  = GlobalStepIndex,
+                CurrentStepId      = step.Id,
                 StepDescription    = desc,
                 WarningDescription = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
                 ErrorDescription   = string.IsNullOrEmpty(step.StatusError)   ? null : step.StatusError,
@@ -232,7 +234,8 @@ namespace Controller.RobotControl.Execution
             });
         }
 
-        /// <summary>A step a background program skips (motion/tool/homing) — logged, then completed.</summary>
+        /// <summary>A step skipped because it is disabled (<c>enabled: false</c>) — logged, then
+        /// completed by the caller (so it still counts as a step).</summary>
         public void SkippedDisabled(ProgramStep step)
         {
             PublishSkipped(step);
@@ -313,6 +316,7 @@ namespace Controller.RobotControl.Execution
                 CurrentStepNumber = GlobalStepIndex,
                 StepDescription   = "Stopped — Continue resumes from the current step",
             });
+            _programManager.SetPauseState(ProgramName, PauseReasons.User, null);
             PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramStopped);
         }
 
@@ -332,6 +336,7 @@ namespace Controller.RobotControl.Execution
                 CurrentToolOffsetX  = null, CurrentToolOffsetY  = null, CurrentToolOffsetZ  = null,
                 CurrentToolOffsetRX = null, CurrentToolOffsetRY = null, CurrentToolOffsetRZ = null,
             });
+            _programManager.SetPauseState(ProgramName, PauseReasons.PauseStep, null);
         }
 
         /// <summary>The run's terminal status, with the move display cleared.</summary>
@@ -418,9 +423,33 @@ namespace Controller.RobotControl.Execution
                 StepType.WaitForBackground  => $"Wait for Background → {step.BackgroundProgramName ?? "?"}",
                 StepType.StopwatchControl   => $"Stopwatch {step.StopwatchAction ?? "?"} → ${step.StopwatchVariableName ?? "?"}",
                 StepType.SaveImage          => $"Save Image → {step.SaveImagePath ?? "?"}",
+                // Program editor v2 (docs/program-language.md §4)
+                StepType.Note               => step.NoteStyle == "section"
+                    ? $"## {FirstLine(step.Comment) ?? "Section"}"
+                    : $"Note: {FirstLine(step.Comment) ?? ""}",
+                StepType.LoopControl        => step.LoopControl == "continue" ? "Next iteration" : "Break loop",
+                StepType.Return             => "Return",
+                StepType.EndProgram         => string.IsNullOrEmpty(step.StatusMessage) ? "End Program" : $"End Program: {step.StatusMessage}",
+                StepType.RaiseError         => $"Raise Error {step.ErrorCode ?? "userError"}: {step.ErrorMessage ?? ""}",
+                StepType.Switch             => $"Switch {step.SwitchExpr ?? "?"} · {step.SwitchCases?.Count ?? 0} case(s)",
+                StepType.Try                => (step.TryRetries ?? 0) > 0 ? $"Try (retry ×{step.TryRetries})" : "Try",
+                StepType.SavePosition       => step.SavePositionTo == "point"
+                    ? $"Save Position → point {step.PointName ?? step.PointId ?? "?"}"
+                    : $"Save Position → ${step.VariableName ?? "?"}",
+                StepType.SetSpeedFactor     => $"Set Speed Factor → {step.SpeedFactor ?? 100}%",
+                StepType.ListOp             => $"${step.VariableName ?? "?"}.{step.ListAction ?? "?"}",
+                StepType.Prompt             => $"Prompt: {step.PromptMessage ?? ""}",
+                StepType.MoveC              => $"MoveC → {MoveTargetLabel(step)} via {step.ViaPointName ?? step.ViaPointNameExpr ?? step.ViaPointId ?? "?"}",
                 _                           => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
+        }
+
+        private static string? FirstLine(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            int nl = text.IndexOf('\n');
+            return (nl >= 0 ? text[..nl] : text).Trim();
         }
 
         private static string BuildSetOutputDescription(ProgramStep step)
@@ -439,27 +468,29 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>
         /// Total steps a program reports as its MaxStepCount: every step, plus routine bodies
-        /// (when a repository is given), if/else branches and CNC blocks (estimated from the
-        /// spec with the same arithmetic as <see cref="CncStepGenerator.Generate"/>).
+        /// (when a repository is given), the bodies of branching blocks (If, Switch, Try — via
+        /// <see cref="StepTree"/>) and CNC blocks (estimated from the spec with the same arithmetic
+        /// as <see cref="CncStepGenerator.Generate"/>). Loop bodies add nothing (a completed step
+        /// only counts outside loops), Notes are not steps, and a disabled step counts once —
+        /// its body is skipped with it.
         /// </summary>
         public static int CountSteps(List<ProgramStep> steps, BuiltProgramRepository? repo = null)
         {
             int count = 0;
             foreach (var s in steps)
             {
+                if (s == null || s.Type == StepType.Note) continue;
                 count++;
+                if (!s.IsEnabled) continue;
                 if (s.Type == StepType.CallRoutine && repo != null)
                 {
                     var routine = !string.IsNullOrEmpty(s.RoutineId) ? repo.GetById(s.RoutineId!) : null;
                     routine ??= repo.Get(s.RoutineName ?? "");
                     if (routine != null) count += CountSteps(routine.Steps, repo);
                 }
-                if (s.Type == StepType.IfCondition)
-                {
-                    if (s.IfSteps != null) count += CountSteps(s.IfSteps, repo);
-                    foreach (var elif in s.ElseIfBranches ?? []) count += CountSteps(elif.Steps, repo);
-                    if (s.ElseSteps != null) count += CountSteps(s.ElseSteps, repo);
-                }
+                if (s.Type != StepType.CncProgram && s.Type != StepType.Loop)
+                    foreach (var child in s.ChildLists(executableOnly: true))
+                        count += CountSteps(child.Steps, repo);
                 if (s.Type == StepType.CncProgram)
                 {
                     if (s.CncSpec != null)

@@ -1,0 +1,35 @@
+{
+  "id": "program-golden-1",
+  "name": "Golden program",
+  "description": "Golden description",
+  "steps": [{ "id": "golden-step-1", "type": "Note", "comment": "Setup", "noteStyle": "section" }],
+  "variables": [
+    {
+      "id": "var-golden-1",
+      "name": "height",
+      "value": 20,
+      "valueExpression": "$robot.z",
+      "items": [{ "value": 1 }],
+      "elementType": "Number",
+      "description": "Golden variable",
+      "isBoolean": false,
+      "isGlobal": false,
+      "displayOnMonitor": true,
+      "isInput": false,
+      "isStopwatch": false,
+      "isPersistent": false,
+      "isString": false,
+      "stringValue": "",
+      "isImage": false,
+      "isComputed": false,
+      "paramMode": "inOut"
+    }
+  ],
+  "displayPageHtml": "<p>page</p>",
+  "displayPageMode": "html",
+  "lastUpdatedUnixMs": 1762480000000,
+  "isRoutine": true,
+  "isBackground": false,
+  "killBackgroundOnStop": true,
+  "editorMode": "text"
+}

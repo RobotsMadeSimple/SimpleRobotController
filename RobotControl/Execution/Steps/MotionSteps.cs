@@ -105,7 +105,8 @@ namespace Controller.RobotControl.Execution
                 var nxt = steps[j];
                 // Only plain MoveL steps without a per-step tool offset or a stop condition can
                 // join the path (a watched move must be dispatched on its own).
-                if (nxt.Type != StepType.MoveL || MoveTargetResolver.HasToolOffset(nxt)
+                // A disabled move is not part of the path (the executor skips it on its own).
+                if (nxt.Type != StepType.MoveL || !nxt.IsEnabled || MoveTargetResolver.HasToolOffset(nxt)
                     || MoveStopConditions.HasCondition(nxt)) break;
                 // Resolve relative to the previous waypoint so "current position" moves chain
                 // off where the robot actually ends up, not where the blend started.

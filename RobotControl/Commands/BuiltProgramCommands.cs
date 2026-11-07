@@ -64,9 +64,9 @@ internal sealed class BuiltProgramCommands
         bool mentionsPage = Param(msg, "displayPageHtml")   != null
                          || Param(msg, "displayPageMode")   != null
                          || Param(msg, "displayPageLayout") != null;
-        var prior = mentionsPage ? null
-            : (!string.IsNullOrEmpty(p.Id) ? _robot.builtProgramRepo.GetById(p.Id) : null)
-              ?? _robot.builtProgramRepo.Get(p.Name);
+        var saved = (!string.IsNullOrEmpty(p.Id) ? _robot.builtProgramRepo.GetById(p.Id) : null)
+                    ?? _robot.builtProgramRepo.Get(p.Name);
+        var prior = mentionsPage ? null : saved;
 
         _robot.builtProgramRepo.Save(new BuiltProgram
         {
@@ -81,6 +81,8 @@ internal sealed class BuiltProgramCommands
             IsRoutine           = p.IsRoutine,
             IsBackground        = p.IsBackground,
             KillBackgroundOnStop = p.KillBackgroundOnStop,
+            // A save that does not mention the editor view (older apps, scripts) keeps it.
+            EditorMode          = p.EditorMode ?? saved?.EditorMode,
         });
     }
 
@@ -100,7 +102,14 @@ internal sealed class BuiltProgramCommands
 
     private void ExecuteBuiltProgram(CommandMessage msg)
     {
-        var p    = CommandJson.LoadParams<BuiltProgramNameParams>(msg);
+        var p    = CommandJson.LoadParams<ExecuteBuiltProgramParams>(msg);
+        // Run-from-step, breakpoints and step mode (docs/program-language.md §4.2) are not wired
+        // into the executor yet. Refuse rather than ignore them: running from the top when the
+        // operator asked to start mid-program, or straight past a breakpoint, would move the robot
+        // somewhere they did not expect.
+        if (p.HasDebugOptions)
+            throw new InvalidOperationException(
+                "notImplemented: run from step, breakpoints and step mode are not implemented on this controller yet");
         var prog = _robot.builtProgramRepo.Get(p.Name);
         if (prog != null)
         {
@@ -221,9 +230,12 @@ internal sealed class BuiltProgramCommands
         return new { problems };
     }
 
-    // The arrays that hold steps; only their elements are step objects.
+    // The arrays that hold steps; only their elements are step objects. "steps" also covers
+    // elseIfBranches[i].steps and switchCases[i].steps (StepTree.Roles).
     private static readonly HashSet<string> StepArrays =
-        new(["steps", "loopSteps", "ifSteps", "elseSteps", "cncProgramSteps"], StringComparer.OrdinalIgnoreCase);
+        new(["steps", StepTree.Roles.LoopSteps, StepTree.Roles.IfSteps, StepTree.Roles.ElseSteps,
+             StepTree.Roles.SwitchDefault, StepTree.Roles.TrySteps, StepTree.Roles.CatchSteps,
+             StepTree.Roles.CncProgramSteps], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Same idea as the repository's loader: a step whose "type" this controller
     /// does not know becomes Unknown (with the original kept in unknownStepType).</summary>

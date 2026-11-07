@@ -233,6 +233,22 @@ public class ProgramVariable
     /// </summary>
     [JsonPropertyName("isComputed")]
     public bool? IsComputed { get; set; }
+
+    /// <summary>
+    /// On a routine's variables: makes the variable a parameter — "in" (set from the caller's
+    /// argument before the routine runs), "out" (copied to the caller's mapped variable when it
+    /// returns) or "inOut" (both). Null = not a parameter. See docs/program-language.md §4.2.
+    /// </summary>
+    [JsonPropertyName("paramMode")]
+    public string? ParamMode { get; set; }
+}
+
+/// <summary>The <see cref="ProgramVariable.ParamMode"/> values.</summary>
+public static class ParamModes
+{
+    public const string In    = "in";
+    public const string Out   = "out";
+    public const string InOut = "inOut";
 }
 
 

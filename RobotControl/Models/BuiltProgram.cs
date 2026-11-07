@@ -51,6 +51,12 @@ public class BuiltProgram
     /// <summary>When true (default), all running background programs are stopped when the main program finishes.</summary>
     [JsonPropertyName("killBackgroundOnStop")]
     public bool KillBackgroundOnStop { get; set; } = true;
+    /// <summary>
+    /// The program's preferred editor view, owned by the app: "blocks" or "text"
+    /// (docs/program-language.md §7.1). Null = the app's default. Not used by the controller.
+    /// </summary>
+    [JsonPropertyName("editorMode")]
+    public string? EditorMode { get; set; }
 }
 
 public class SaveBuiltProgramParams
@@ -66,11 +72,62 @@ public class SaveBuiltProgramParams
     [JsonPropertyName("isRoutine")]            public bool IsRoutine              { get; set; } = false;
     [JsonPropertyName("isBackground")]         public bool IsBackground           { get; set; } = false;
     [JsonPropertyName("killBackgroundOnStop")] public bool KillBackgroundOnStop   { get; set; } = true;
+    /// <summary>"blocks" | "text"; null (absent) keeps the saved program's value.</summary>
+    [JsonPropertyName("editorMode")]           public string? EditorMode          { get; set; }
 }
 
 public class BuiltProgramNameParams
 {
     [JsonPropertyName("name")] public string Name { get; set; } = "";
+}
+
+/// <summary>
+/// ExecuteBuiltProgram { name, startAtStepId?, breakpoints?, stepMode? } — the debug options are
+/// docs/program-language.md §4.2 "Debugging". Older clients send only the name.
+/// </summary>
+public class ExecuteBuiltProgramParams : BuiltProgramNameParams
+{
+    /// <summary>Run from this step: the frame stack is built down its path (enclosing loops at iteration 0).</summary>
+    [JsonPropertyName("startAtStepId")] public string?       StartAtStepId { get; set; }
+    /// <summary>Step ids to pause BEFORE (pauseReason "breakpoint"). Ignored by background programs.</summary>
+    [JsonPropertyName("breakpoints")]   public List<string>? Breakpoints   { get; set; }
+    /// <summary>Pause before every step (pauseReason "step").</summary>
+    [JsonPropertyName("stepMode")]      public bool?         StepMode      { get; set; }
+
+    /// <summary>True when any debug option is set.</summary>
+    [JsonIgnore] public bool HasDebugOptions =>
+        !string.IsNullOrEmpty(StartAtStepId) || (Breakpoints?.Count ?? 0) > 0 || StepMode == true;
+}
+
+/// <summary>SetBreakpoints { stepIds } — replaces the running foreground program's breakpoints.</summary>
+public class SetBreakpointsParams
+{
+    [JsonPropertyName("stepIds")] public List<string> StepIds { get; set; } = new();
+}
+
+/// <summary>AnswerPrompt { promptId, button, value? } — the first answer to a prompt wins.</summary>
+public class AnswerPromptParams
+{
+    [JsonPropertyName("promptId")] public string  PromptId { get; set; } = "";
+    /// <summary>Index of the pressed button (0-based).</summary>
+    [JsonPropertyName("button")]   public int     Button   { get; set; }
+    /// <summary>The typed input (number or text prompt), as text; null for a buttons-only prompt.</summary>
+    [JsonPropertyName("value")]    public string? Value    { get; set; }
+}
+
+/// <summary>FormatProgramText { program, includeIds? } (docs/program-language.md §6.9).</summary>
+public class FormatProgramTextParams
+{
+    [JsonPropertyName("program")]    public BuiltProgram? Program    { get; set; }
+    [JsonPropertyName("includeIds")] public bool          IncludeIds { get; set; }
+}
+
+/// <summary>ParseProgramText { text, base?, validate? } (docs/program-language.md §6.9).</summary>
+public class ParseProgramTextParams
+{
+    [JsonPropertyName("text")]     public string        Text     { get; set; } = "";
+    [JsonPropertyName("base")]     public BuiltProgram? Base     { get; set; }
+    [JsonPropertyName("validate")] public bool          Validate { get; set; } = true;
 }
 
 public class ProgramImageParams

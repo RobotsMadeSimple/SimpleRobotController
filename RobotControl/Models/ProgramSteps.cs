@@ -9,7 +9,9 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, StartRecording, StopRecording, ExportData, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, StartRecording, StopRecording, ExportData, Unknown,
+    // Program editor v2 (docs/program-language.md §4). Appended after Unknown so existing ordinals stay put.
+    Note, LoopControl, Return, EndProgram, RaiseError, Switch, Try, SavePosition, SetSpeedFactor, ListOp, Prompt, MoveC }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -107,6 +109,15 @@ public class ElseIfBranch
     [JsonPropertyName("steps")]     public List<ProgramStep> Steps  { get; set; } = new();
 }
 
+/// <summary>One case of a Switch step (docs/program-language.md §4.2): runs when the switch value
+/// equals any of <see cref="Values"/> (each an expression, compared with == within 1e-9).</summary>
+public class SwitchCase
+{
+    [JsonPropertyName("id")]     public string            Id     { get; set; } = "";
+    [JsonPropertyName("values")] public List<string>      Values { get; set; } = new();
+    [JsonPropertyName("steps")]  public List<ProgramStep> Steps  { get; set; } = new();
+}
+
 public class ProgramStep
 {
     [JsonPropertyName("id")]
@@ -121,6 +132,14 @@ public class ProgramStep
 
     [JsonPropertyName("type")]
     public StepType Type { get; set; }
+
+    /// <summary>False = the step is skipped (reported as "[Skipped — disabled]"); a disabled block
+    /// step skips its whole body. Null means enabled.</summary>
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+
+    /// <summary>True unless the step is explicitly disabled.</summary>
+    [JsonIgnore] public bool IsEnabled => Enabled != false;
 
     // MoveL / MoveJ / SetSpeedL / SetSpeedJ
     [JsonPropertyName("pointName")]
@@ -460,6 +479,87 @@ public class ProgramStep
     [JsonPropertyName("pluginOutputs")]   public List<PluginOutputMapping>?  PluginOutputs   { get; set; }
     /// <summary>Overrides the manifest step's timeoutMs (0 = none).</summary>
     [JsonPropertyName("pluginTimeoutMs")] public int?                        PluginTimeoutMs { get; set; }
+
+    // ── Program editor v2 (docs/program-language.md §4.1–4.3) ──────────────────
+
+    // Note — the text lives in Comment. "note" (default) | "section" (a header that can collapse).
+    [JsonPropertyName("noteStyle")]   public string? NoteStyle   { get; set; }
+
+    // LoopControl — "break" (default) | "continue"
+    [JsonPropertyName("loopControl")] public string? LoopControl { get; set; }
+
+    // RaiseError — message template (required) and an identifier code (default "userError").
+    // EndProgram uses StatusMessage for its optional finishing message.
+    [JsonPropertyName("errorMessage")] public string? ErrorMessage { get; set; }
+    [JsonPropertyName("errorCode")]    public string? ErrorCode    { get; set; }
+
+    // Switch — evaluates SwitchExpr once; the first case with an equal value runs, else SwitchDefault.
+    [JsonPropertyName("switchExpr")]    public string?            SwitchExpr    { get; set; }
+    [JsonPropertyName("switchCases")]   public List<SwitchCase>?  SwitchCases   { get; set; }
+    [JsonPropertyName("switchDefault")] public List<ProgramStep>? SwitchDefault { get; set; }
+
+    // Try — run TrySteps; a catchable failure retries TryRetries times (TryRetryDelayMs apart), then
+    // runs CatchSteps. CatchCodes empty = every catchable code. The error variables are string variables.
+    [JsonPropertyName("trySteps")]              public List<ProgramStep>? TrySteps              { get; set; }
+    [JsonPropertyName("catchSteps")]            public List<ProgramStep>? CatchSteps            { get; set; }
+    [JsonPropertyName("tryRetries")]            public int?               TryRetries            { get; set; }
+    [JsonPropertyName("tryRetryDelayMs")]       public int?               TryRetryDelayMs       { get; set; }
+    [JsonPropertyName("catchCodes")]            public List<string>?      CatchCodes            { get; set; }
+    [JsonPropertyName("errorVariableName")]     public string?            ErrorVariableName     { get; set; }
+    [JsonPropertyName("errorCodeVariableName")] public string?            ErrorCodeVariableName { get; set; }
+
+    // Wait — what a condition wait does on timeout: "continue" (default) | "error" (fails waitTimeout).
+    [JsonPropertyName("waitTimeoutAction")] public string? WaitTimeoutAction { get; set; }
+
+    // CallRoutine parameters — routineArgs: param name → expression (template for a string param),
+    // evaluated in the caller's scope; routineOutputs: out/inOut param (key) → caller variable.
+    [JsonPropertyName("routineArgs")]    public Dictionary<string, string>? RoutineArgs    { get; set; }
+    [JsonPropertyName("routineOutputs")] public List<PluginOutputMapping>?  RoutineOutputs { get; set; }
+
+    // SetOutput — "set" (default; outputValue, or expressions.outputValue non-zero = on) | "toggle".
+    [JsonPropertyName("outputAction")] public string? OutputAction { get; set; }
+
+    // SavePosition — the TCP pose (in the active local) into a Points list (VariableName) or a saved
+    // point (PointId / PointName). Mode "replace" (default) | "append" | "insert" | "set"; the index
+    // (insert/set) may be an expression under expressions.savePositionIndex. Source "actual" | "target".
+    [JsonPropertyName("savePositionTo")]     public string? SavePositionTo     { get; set; }
+    [JsonPropertyName("savePositionMode")]   public string? SavePositionMode   { get; set; }
+    [JsonPropertyName("savePositionIndex")]  public int?    SavePositionIndex  { get; set; }
+    [JsonPropertyName("savePositionSource")] public string? SavePositionSource { get; set; }
+
+    // SetSpeedFactor — program speed percentage 1–100 (expression key speedFactor).
+    [JsonPropertyName("speedFactor")] public double? SpeedFactor { get; set; }
+
+    // MoveC — the via point (end target uses the standard target fields); arcTolerance = max chord error (mm).
+    [JsonPropertyName("viaPointId")]       public string? ViaPointId       { get; set; }
+    [JsonPropertyName("viaPointName")]     public string? ViaPointName     { get; set; }
+    [JsonPropertyName("viaPointNameExpr")] public string? ViaPointNameExpr { get; set; }
+    [JsonPropertyName("arcTolerance")]     public double? ArcTolerance     { get; set; }
+
+    // ListOp — mutates the list in VariableName. listAction: append | insert | removeAt | clear | set |
+    // setField | sort | reverse | copyFrom. listIndex may be an expression (expressions.listIndex).
+    [JsonPropertyName("listAction")]         public string?                     ListAction         { get; set; }
+    [JsonPropertyName("listIndex")]          public int?                        ListIndex          { get; set; }
+    [JsonPropertyName("listValueExpr")]      public string?                     ListValueExpr      { get; set; }
+    [JsonPropertyName("listFields")]         public Dictionary<string, string>? ListFields         { get; set; }
+    [JsonPropertyName("listSourceVariable")] public string?                     ListSourceVariable { get; set; }
+    [JsonPropertyName("listSortField")]      public string?                     ListSortField      { get; set; }
+    [JsonPropertyName("listSortDescending")] public bool?                       ListSortDescending { get; set; }
+
+    // Prompt — an operator dialog published in the program status and answered with AnswerPrompt.
+    // promptInput: "none" (default) | "number" | "text". promptTimeoutMs 0/null = wait forever;
+    // promptTimeoutButton = the button index chosen on timeout (null = fail promptTimeout).
+    [JsonPropertyName("promptTitle")]              public string?       PromptTitle              { get; set; }
+    [JsonPropertyName("promptMessage")]            public string?       PromptMessage            { get; set; }
+    [JsonPropertyName("promptButtons")]            public List<string>? PromptButtons            { get; set; }
+    [JsonPropertyName("promptInput")]              public string?       PromptInput              { get; set; }
+    [JsonPropertyName("promptDefault")]            public string?       PromptDefault            { get; set; }
+    [JsonPropertyName("promptMin")]                public double?       PromptMin                { get; set; }
+    [JsonPropertyName("promptMax")]                public double?       PromptMax                { get; set; }
+    [JsonPropertyName("promptResultVariableName")] public string?       PromptResultVariableName { get; set; }
+    [JsonPropertyName("promptInputVariableName")]  public string?       PromptInputVariableName  { get; set; }
+    [JsonPropertyName("promptTimeoutMs")]          public int?          PromptTimeoutMs          { get; set; }
+    [JsonPropertyName("promptTimeoutButton")]      public int?          PromptTimeoutButton      { get; set; }
 
     // Unknown — placeholder for steps whose type string could not be parsed
     [JsonPropertyName("unknownStepType")]

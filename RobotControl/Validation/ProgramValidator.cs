@@ -99,6 +99,24 @@ namespace Controller.RobotControl.Validation
         public const string PluginOutputType      = "pluginOutputType";
         /// <summary><c>x.y(…)</c> where x is a plugin but y is not one of its functions.</summary>
         public const string UnknownPluginFunction = "unknownPluginFunction";
+
+        // Program editor v2 (docs/program-language.md §4.2–4.3). The names are frozen here (package
+        // A); the checks live in ProgramValidator.Flow.cs (package B) and ProgramValidator.Steps.cs
+        // (package C).
+        /// <summary>Break / Next iteration with no enclosing loop in the same routine.</summary>
+        public const string LoopControlOutsideLoop = "loopControlOutsideLoop";
+        /// <summary>A CallRoutine argument or output naming a parameter the routine does not declare.</summary>
+        public const string UnknownParam           = "unknownParam";
+        /// <summary>An "in" parameter with no argument (its declared value is used) — warning.</summary>
+        public const string ParamMissing           = "paramMissing";
+        /// <summary>A routine output mapped to a variable of a kind that cannot hold it.</summary>
+        public const string ParamOutputType        = "paramOutputType";
+        /// <summary>Two Switch cases share a literal value (the later one can never run) — warning.</summary>
+        public const string DuplicateCaseValue     = "duplicateCaseValue";
+        /// <summary>A field the step type does not support yet (e.g. a stop condition on MoveC).</summary>
+        public const string UnsupportedOnStep      = "unsupportedOnStep";
+        /// <summary>A background program writing a saved point (SavePosition to point) — warning.</summary>
+        public const string PointWriteInBackground = "pointWriteInBackground";
     }
 
     /// <summary>What the validator knows about one installed plugin (docs/plugins.md §6).</summary>
@@ -169,7 +187,7 @@ namespace Controller.RobotControl.Validation
     /// Static checks on a <see cref="BuiltProgram"/> before it runs — the rules of
     /// docs/expressions-and-variables.md §5. Pure: reads only the program and the context.
     /// </summary>
-    internal static class ProgramValidator
+    internal static partial class ProgramValidator
     {
         public static List<ValidationProblem> Validate(BuiltProgram program, ValidationContext ctx) =>
             new Walker(program, ctx).Run();
@@ -186,7 +204,7 @@ namespace Controller.RobotControl.Validation
 
         private sealed record Sym(SymKind Kind, ListElementType ElementType = ListElementType.Record);
 
-        private sealed class Walker
+        private sealed partial class Walker
         {
             private readonly BuiltProgram _main;
             private readonly ValidationContext _ctx;
@@ -324,29 +342,14 @@ namespace Controller.RobotControl.Validation
                 }
             }
 
-            /// <summary>Every enabled step in a list, nested bodies included (routine bodies not).</summary>
-            private static IEnumerable<ProgramStep> Descend(List<ProgramStep> steps)
-            {
-                foreach (var s in steps)
-                {
-                    if (s == null) continue;
-                    yield return s;
-                    foreach (var child in Children(s))
-                        foreach (var c in Descend(child.Steps)) yield return c;
-                }
-            }
+            /// <summary>Every enabled step in a list, nested bodies included (routine bodies not).
+            /// A disabled step and everything inside it never runs, so it declares nothing.</summary>
+            private static IEnumerable<ProgramStep> Descend(List<ProgramStep> steps) =>
+                StepTree.Walk(steps, enabledOnly: true, executableOnly: true);
 
-            private static IEnumerable<(string Field, List<ProgramStep> Steps)> Children(ProgramStep s)
-            {
-                if (s.LoopSteps != null) yield return ("loopSteps", s.LoopSteps);
-                if (s.IfSteps   != null) yield return ("ifSteps",   s.IfSteps);
-                if (s.ElseIfBranches != null)
-                    for (int j = 0; j < s.ElseIfBranches.Count; j++)
-                        if (s.ElseIfBranches[j]?.Steps != null)
-                            yield return ($"elseIfBranches[{j}].steps", s.ElseIfBranches[j].Steps);
-                if (s.ElseSteps != null) yield return ("elseSteps", s.ElseSteps);
-                if (s.CncSpec == null && s.CncProgramSteps != null) yield return ("cncProgramSteps", s.CncProgramSteps);
-            }
+            /// <summary>The nested step lists the executor can run, with their stepPath segment.</summary>
+            private static IEnumerable<(string Field, List<ProgramStep> Steps)> Children(ProgramStep s) =>
+                s.ChildLists(executableOnly: true).Select(c => (c.Path, c.Steps));
 
             private void Implicit(string? name, SymKind kind, ListElementType et = ListElementType.Record)
             {
@@ -650,6 +653,7 @@ namespace Controller.RobotControl.Validation
             /// GoToLabel, or a counted loop that runs forever.</summary>
             private static void SetTerminator(ProgramStep s, ref bool unreachable, ref string? cause)
             {
+                if (!s.IsEnabled) return; // a disabled step is skipped, so it ends nothing
                 if (s.Type == StepType.GoToLabel)
                 {
                     unreachable = true;
@@ -665,6 +669,17 @@ namespace Controller.RobotControl.Validation
 
             private void ValidateStep(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body)
             {
+                // A disabled step is skipped at run time with its whole body: say so once, and do
+                // not report problems in something that will not run.
+                if (!s.IsEnabled)
+                {
+                    if (s.Type != StepType.Note)
+                        Add(at, ValidationCodes.DisabledStep,
+                            (s.ChildLists().Any() ? "This step and its body are disabled" : "This step is disabled") +
+                            " and will be skipped", "enabled", ValidationSeverity.Warning);
+                    return;
+                }
+
                 // Every step may carry numeric field expressions.
                 if (s.Expressions != null)
                     foreach (var (key, expr) in s.Expressions)
@@ -855,10 +870,22 @@ namespace Controller.RobotControl.Validation
                         break;
                 }
 
-                // Nested bodies (if/else branches, legacy CNC steps).
+                // Program editor v2 checks (partial: ProgramValidator.Flow.cs / ProgramValidator.Steps.cs).
+                CheckFlowExt(s, sp, at, chain, body);
+                CheckStepsExt(s, at);
+
+                // Nested bodies (if/else branches, switch cases, try/catch, legacy CNC steps).
                 foreach (var (field, steps) in Children(s))
                     WalkList(steps, $"{sp}.{field}", chain, body);
             }
+
+            /// <summary>Flow blocks (LoopControl, Return, EndProgram, RaiseError, Switch, Try, routine
+            /// parameters) — implemented by package B in ProgramValidator.Flow.cs.</summary>
+            partial void CheckFlowExt(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body);
+
+            /// <summary>Motion / data / operator blocks (MoveC, SavePosition, SetSpeedFactor, ListOp,
+            /// Prompt) — implemented by package C in ProgramValidator.Steps.cs.</summary>
+            partial void CheckStepsExt(ProgramStep s, At at);
 
             private void ValidateLoop(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body)
             {

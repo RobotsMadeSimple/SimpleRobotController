@@ -13,7 +13,14 @@ block's `type` are used.
   from the list, only runnable via `CallRoutine`), or a **background** program
   (runs in parallel with the main program; motion / tool / homing blocks are
   skipped in background).
-- **Every step has:** `id` (string), `name` (optional label), and `type`.
+- **Every step has:** `id` (string), `name` (optional label), `type`, `comment`
+  (free text, not executed) and `enabled` (optional; `false` skips the step —
+  and a block's whole body — at run time, logged as `[Skipped — disabled]`; it
+  still counts as a step, and the validator reports it once as a
+  `disabledStep` warning without checking anything inside it).
+- **Step catalog:** `GetStepCatalog` describes every block type below — category,
+  label, typed fields (kind, unit, default, range, expression key, visibility)
+  and text syntax. See [program-language.md §5](program-language.md#5-the-step-catalog).
 
 ---
 
@@ -643,6 +650,53 @@ not running (`Plugin '<id>' is not running`), when it answers with an error
 (`Plugin step '<label>' timed out after N ms`; the plugin gets `step.cancel`).
 A Stop while the step is outstanding cancels it (`step.cancel`, reason
 `stopped`); Continue sends it again. Background programs run Plugin steps too.
+
+---
+
+## Program editor v2 blocks
+
+New blocks from the program-editor order (design: [program-language.md](program-language.md)
+§4). The step types, fields and enum strings are fixed (see the catalog and the
+goldens); each section is filled in by the package that implements the block
+(the letter in brackets), with small, section-scoped edits. Until then a run that
+reaches one of these blocks — except Note — ends with "… not implemented on
+this controller yet".
+
+### Note — note or section header (A)
+
+`type: "Note"`. Not executed and not counted as a step. The text is in `comment`;
+`noteStyle` is `"note"` (default) or `"section"` (a header; the editor can
+collapse the steps up to the next section).
+
+### LoopControl — break / next iteration (B)
+
+### Return (B)
+
+### EndProgram (B)
+
+### RaiseError (B)
+
+### Switch (B)
+
+### Try / Catch (B)
+
+### Wait — on timeout (B)
+
+### CallRoutine — parameters (B)
+
+### SetOutput — toggle and expression value (B)
+
+### Debugging — run from step, breakpoints, step mode (B)
+
+### SavePosition (C)
+
+### SetSpeedFactor (C)
+
+### MoveC — arc move (C)
+
+### ListOp — list operations (C)
+
+### Prompt — operator dialog (C)
 
 ---
 
