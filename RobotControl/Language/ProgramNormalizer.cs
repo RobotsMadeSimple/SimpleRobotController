@@ -23,7 +23,7 @@ namespace Controller.RobotControl.Language;
 /// <item>StatusUpdate: a missing <c>statusSeverity</c> is inferred the way the app does.</item>
 /// <item>Legacy <c>jsonImageOutbound</c> rows → <c>jsonOutbound</c> rows with <c>imageVar</c>
 /// (HttpSteps sends them identically: after the outbound rows, same key wins last).</item>
-/// <item>Defaults that the text always states: Loop mode "count", Wait mode "duration",
+/// <item>Defaults that the text always states: Loop mode "count", Wait mode "duration", SetOutput card "stb",
 /// LoopControl "break", ListOp action "append"; Note style "note" → absent; <c>enabled: true</c>
 /// → absent; false variable flags → absent; a list variable's missing element type → Record;
 /// legacy list fields (values/points/objects) → <c>items</c>; Point elements carry all six axes.</item>
@@ -124,6 +124,7 @@ internal static class ProgramNormalizer
             case StepType.Wait:        s.WaitMode ??= "duration"; break;
             case StepType.LoopControl: s.LoopControl ??= "break"; break;
             case StepType.ListOp:      s.ListAction ??= "append"; break;
+            case StepType.SetOutput:   s.OutputCard ??= "stb"; break;
             case StepType.Note:        if (s.NoteStyle == "note") s.NoteStyle = null; break;
         }
     }
