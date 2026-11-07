@@ -113,6 +113,17 @@ All communication is line-based JSON over WebSocket on port `9000`.
 
 ---
 
+## Programs
+
+Programs are built in the app (Blocks) or written as text, Simple Robot Script (`.srs`):
+see [`docs/program-text.md`](docs/program-text.md) and [`docs/program-blocks.md`](docs/program-blocks.md).
+
+**AI agents:** read [`docs/AGENT-PROGRAMMING.md`](docs/AGENT-PROGRAMMING.md) first — the complete
+context for writing programs (syntax, every step and field, expressions, error handling,
+verification and safety rules, worked examples). The MCP server for agents is in [`mcp/`](mcp/README.md).
+
+---
+
 ## Hardware Support
 
 | Device | Description |

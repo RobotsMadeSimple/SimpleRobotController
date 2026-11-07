@@ -10,6 +10,12 @@ setup: `SimpleRobotController/mcp/README.md`. Full command reference:
 `SimpleRobotController/docs/websocket-api.md`. Semantics of every block:
 `SimpleRobotController/docs/program-blocks.md`.
 
+**Before writing or editing a program, read `SimpleRobotController/docs/AGENT-PROGRAMMING.md`**
+— the agent context file: Simple Robot Script syntax, every step with every field (generated
+from the step catalog), expressions, variables and scopes, Try/error codes, routine parameters,
+background programs, the round-trip rules (`@with`, `@off`, `Pick_1` names), pitfalls, how to
+verify with `robot_program_text_set(dry_run=true)`, and worked examples that parse cleanly.
+
 ## Order of operations
 
 1. **`robot_status`** first, always. It tells you the pose, whether the robot is homed
