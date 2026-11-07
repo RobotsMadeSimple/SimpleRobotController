@@ -91,7 +91,8 @@ end
 ```
 
 `break` and `continue` act on the nearest enclosing loop, leaving any branches and Try bodies in
-between. They never cross a routine boundary: a `break` in a routine called from a loop is an error
+between. A step after `repeat forever` can only run if the loop has a `break` of its own — one
+inside a nested loop only ends that loop — otherwise the validator flags it as unreachable. They never cross a routine boundary: a `break` in a routine called from a loop is an error
 (`loopControlOutsideLoop`).
 
 ## Labels and Go To

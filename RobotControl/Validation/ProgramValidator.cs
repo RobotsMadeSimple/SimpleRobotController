@@ -659,7 +659,7 @@ namespace Controller.RobotControl.Validation
             }
 
             /// <summary>A step after which the rest of the list cannot run: an unconditional
-            /// GoToLabel, or a counted loop that runs forever.</summary>
+            /// GoToLabel, or a counted loop that runs forever with no Break of its own.</summary>
             private static void SetTerminator(ProgramStep s, ref bool unreachable, ref string? cause)
             {
                 if (!s.IsEnabled) return; // a disabled step is skipped, so it ends nothing
@@ -669,11 +669,34 @@ namespace Controller.RobotControl.Validation
                     cause = $"Go To '{s.LabelName ?? s.LabelId}'";
                 }
                 else if (s.Type == StepType.Loop && (s.LoopMode is null or "count") && s.LoopCount == 0
-                         && s.Expressions?.ContainsKey("loopCount") != true && (s.LoopSteps?.Count ?? 0) > 0)
+                         && s.Expressions?.ContainsKey("loopCount") != true && (s.LoopSteps?.Count ?? 0) > 0
+                         && !BreaksLoop(s.LoopSteps))
                 {
                     unreachable = true;
                     cause = "an infinite loop";
                 }
+            }
+
+            /// <summary>
+            /// Whether a loop body holds an enabled Break that exits THIS loop: anywhere in the
+            /// body, inside If / Switch / Try blocks too, but not inside a nested Loop (that Break
+            /// only ends the inner loop). A routine's body is not followed: Break never crosses a
+            /// routine boundary. GoTo out of the loop, Return and End Program do not count: none
+            /// of them carries on at the step after the loop (a jump target is a Label, which
+            /// ends the unreachable run by itself).
+            /// </summary>
+            internal static bool BreaksLoop(List<ProgramStep>? body)
+            {
+                if (body == null) return false;
+                foreach (var s in body)
+                {
+                    if (s == null || !s.IsEnabled) continue;
+                    if (s.Type == StepType.LoopControl && s.LoopControl != "continue") return true;
+                    if (s.Type == StepType.Loop) continue; // its Breaks are its own
+                    foreach (var child in s.ChildLists(executableOnly: true))
+                        if (BreaksLoop(child.Steps)) return true;
+                }
+                return false;
             }
 
             private void ValidateStep(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body)

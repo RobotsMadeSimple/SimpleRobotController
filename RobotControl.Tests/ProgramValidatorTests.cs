@@ -555,6 +555,67 @@ public class ProgramValidatorTests
         Assert.All(probs, x => Assert.Equal(ValidationSeverity.Warning, x.Severity));
     }
 
+    private static ProgramStep Forever(params ProgramStep[] body) =>
+        Step(StepType.Loop, s => { s.LoopCount = 0; s.LoopSteps = body.ToList(); });
+
+    private static ProgramStep Break() => Step(StepType.LoopControl, s => s.LoopControl = "break");
+
+    private static List<string> Unreachable(params ProgramStep[] steps) =>
+        Validate(Prog(steps.ToList())).Where(x => x.Code == ValidationCodes.UnreachableStep).Select(x => x.StepPath).ToList();
+
+    [Fact]
+    public void AForeverLoopWithItsOwnBreakCanExit()
+    {
+        // Directly in the body.
+        Assert.Empty(Unreachable(Forever(Step(StepType.PauseProgram), Break()), Step(StepType.PauseProgram)));
+        // Inside an If / Switch / Try within the body still breaks this loop.
+        Assert.Empty(Unreachable(Forever(Step(StepType.IfCondition, s => s.IfSteps = [Break()])), Step(StepType.PauseProgram)));
+        Assert.Empty(Unreachable(Forever(Step(StepType.IfCondition, s => s.ElseSteps = [Break()])), Step(StepType.PauseProgram)));
+        Assert.Empty(Unreachable(Forever(Step(StepType.Switch, s => s.SwitchDefault = [Break()])), Step(StepType.PauseProgram)));
+        Assert.Empty(Unreachable(Forever(Step(StepType.Try, s => s.TrySteps = [Step(StepType.IfCondition, i => i.IfSteps = [Break()])])),
+                                 Step(StepType.PauseProgram)));
+        // A Break with no action set is a Break.
+        Assert.Empty(Unreachable(Forever(Step(StepType.LoopControl)), Step(StepType.PauseProgram)));
+    }
+
+    [Fact]
+    public void ABreakInANestedLoopOnlyExitsTheInnerLoop()
+    {
+        // The inner Break ends the inner (counted) loop; the outer forever loop never ends.
+        Assert.Equal(["steps[1]"], Unreachable(
+            Forever(Step(StepType.Loop, s => { s.LoopCount = 3; s.LoopSteps = [Break()]; })),
+            Step(StepType.PauseProgram)));
+        // Same with a forever inner loop: its Break makes the step after IT reachable only.
+        Assert.Equal(["steps[1]"], Unreachable(
+            Forever(Forever(Break()), Step(StepType.PauseProgram)),
+            Step(StepType.PauseProgram)));
+        // Nested inside an If in the inner loop — still the inner loop's.
+        Assert.Equal(["steps[1]"], Unreachable(
+            Forever(Step(StepType.Loop, s => { s.LoopMode = "while"; s.LoopSteps = [Step(StepType.IfCondition, i => i.IfSteps = [Break()])]; })),
+            Step(StepType.PauseProgram)));
+        // An inner loop's Break plus one of the outer loop's own: the outer can exit.
+        Assert.Empty(Unreachable(
+            Forever(Forever(Break()), Step(StepType.IfCondition, s => s.IfSteps = [Break()])),
+            Step(StepType.PauseProgram)));
+    }
+
+    [Fact]
+    public void ContinueDisabledBreakGoToAndEndDoNotLetAForeverLoopExit()
+    {
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.LoopControl, s => s.LoopControl = "continue")), Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.LoopControl, s => { s.LoopControl = "break"; s.Enabled = false; })),
+                                               Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.IfCondition, s => { s.Enabled = false; s.IfSteps = [Break()]; })),
+                                               Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[2]"], Unreachable(Step(StepType.Label, s => s.LabelId = "top"),
+                                               Forever(Step(StepType.GoToLabel, s => s.LabelId = "top")),
+                                               Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.EndProgram)), Step(StepType.PauseProgram)));
+        // A GoTo to a Label after the loop: the Label itself ends the dead run.
+        Assert.Empty(Unreachable(Forever(Step(StepType.GoToLabel, s => s.LabelId = "out")),
+                                 Step(StepType.Label, s => s.LabelId = "out"), Step(StepType.PauseProgram)));
+    }
+
     [Fact]
     public void ARecordedAndExportedListIsUsedAndExportColumnsAreChecked()
     {
