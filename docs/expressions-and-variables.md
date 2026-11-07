@@ -56,8 +56,17 @@ place above comparison (`not $a > 5` is `not ($a > 5)`, as it always was); a
 | `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | number lists; for a point/record list name the field — `sum($pts.x)`, `max($samples.v)` (missing field reads 0) |
 | `rand()` `rand(lo,hi)` | uniform |
 | `map(x,inLo,inHi,outLo,outHi)` `lerp(a,b,t)` | |
+| `inBox(x,y,z,x1,y1,z1,x2,y2,z2)` `inCircle(x,y,cx,cy,r)` | 1/0 zone tests: inside the box with opposite corners (x1,y1,z1)–(x2,y2,z2), corners in any order; within r of (cx,cy). Edges count as inside. |
 
 Unknown function → parse error `unknownFunction`. Wrong arity → `badArity`.
+
+**Text helpers** on a string variable `$s`: `$s.contains("x")`, `$s.startsWith("x")`,
+`$s.endsWith("x")` (1/0), `$s.indexOf("x")` (position of the first match from 0, -1 when
+absent), `$s.toNumber()` (invariant culture, spaces ignored; text that is not a finite number
+is **0**) and `$s.length` (its character count — on a list `.length` is still the element
+count). The argument may be a string literal or another string variable. They work in every
+expression field (Set Variable, step fields, conditions); `ExpressionEvaluator.StringMethods`
+lists them.
 
 **Plugin functions** ([plugins.md](plugins.md) §5): a running plugin's functions
 are called with a dotted name, `<pluginId>.<name>(…)` — `scale.tare()`,
@@ -103,6 +112,7 @@ Resolved live at evaluation time; never assignable. Names are case-insensitive.
 | `$robot.speedOverride` | percent |
 | `$robot.joint1 $robot.joint2x $robot.joint2z $robot.joint4` | joint readouts |
 | `$program.runCount` `$program.stepIndex` `$program.stepCount` `$program.elapsedMs` `$program.loopDepth` | current run |
+| `$program.speedFactor` | the run's Set Speed Factor in percent (100 = full speed; 100 again when the run ends) |
 | `$time.now` (unix ms) `$time.hour` `$time.minute` `$time.second` `$time.dayOfWeek` (0=Sun) `$time.dayOfYear` | wall clock |
 | `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes |
 | `$camera.<cameraId>.calibrated` | 1 when the camera has a camera-to-robot calibration ([camera-calibration.md](camera-calibration.md)) |

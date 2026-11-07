@@ -160,6 +160,9 @@ Names are case-insensitive. Angles are in **degrees**, in and out.
 | `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | over a list variable; `len` works on any list, the others on number/boolean lists (an empty list gives 0). The argument must be a bare list reference. |
 | `rand()` `rand(lo, hi)` | uniform random number in [0, 1) or [lo, hi) |
 | `map(x, inLo, inHi, outLo, outHi)` `lerp(a, b, t)` | range re-mapping and linear interpolation |
+| `inBox(x, y, z, x1, y1, z1, x2, y2, z2)` | 1 when (x, y, z) is inside the box with opposite corners (x1, y1, z1) and (x2, y2, z2) — corners in any order, faces count as inside — else 0 |
+| `inCircle(x, y, cx, cy, r)` | 1 when (x, y) is within r of (cx, cy), edge included, else 0 |
+| `$text.length` `$text.indexOf("x")` `$text.toNumber()` | on a text variable: its length, the position of the first `x` (from 0; -1 when absent; the argument may be a text variable), and the text as a number (0 when it is not one). Alongside `$text.contains("x")` / `.startsWith` / `.endsWith` (1 / 0), they work in every expression field and condition. |
 | `<pluginId>.<name>(…)` | a plugin's function, e.g. `scale.tare()` — see [Plugin](#plugin--a-step-a-plugin-provides). Blocks the program up to the function's timeout (default 250 ms); a failure (not running, timeout, error) stops the program with the plugin's message. |
 
 #### Properties
@@ -805,13 +808,117 @@ Background programs ignore all of this. A plain start clears the debug state.
 
 ### SavePosition (C)
 
+`type: "SavePosition"` — store where the robot is ("Here"). The pose is expressed in the
+program's **active local frame**, so a later move to it under the same local lands on the same
+spot (the same rule TeachPoint uses).
+
+| Field | Meaning |
+|---|---|
+| `savePositionTo` | `"variable"` (default) — a Points list; `"point"` — a saved point |
+| `variableName` | the Points list (created if not declared) |
+| `savePositionMode` | `"replace"` (default: the list becomes exactly this pose, like a stop condition's position variable), `"append"`, `"insert"` (at the index, 0…count), `"set"` (replace the element at the index) |
+| `savePositionIndex` | index for insert / set; an expression in `expressions.savePositionIndex` |
+| `pointId` / `pointName` | the saved point — by id first, then by name; a name that does not exist yet is **created**. Written through the point repository, so the points history records it. |
+| `savePositionSource` | `"actual"` (default, the live TCP) or `"target"` (the last commanded target) |
+
+Failures: an index outside the list → `indexOutOfRange` (catchable); a list that is not a Points
+list → `badListOperation`; a point linked only by an id that no longer exists → `pointNotFound`.
+Validator: destination, mode, source, negative index, a non-Points variable, and
+`pointWriteInBackground` (warning) when a background program overwrites a saved point.
+
 ### SetSpeedFactor (C)
+
+`type: "SetSpeedFactor"`, `speedFactor` (percent, 1–100, default 100; an expression in
+`expressions.speedFactor`). Every later move of **this program** — single moves, blended runs,
+Jump legs, arcs, and a move resumed after a Stop — runs at *operator override × factor / 100*.
+It can only slow a program down: values are clamped to 1–100 %, and it multiplies the
+operator's override rather than replacing it. Manual moves and jogging are never affected.
+Readable as `$program.speedFactor`; back to 100 when the run ends, is reset, or starts again.
+Validator: a literal outside 1–100 or no value (warnings — it is clamped / 100 is used).
 
 ### MoveC — arc move (C)
 
+`type: "MoveC"` — move along the circle through the current position, a **via** point and the
+end target, in 3D (any plane).
+
+| Field | Meaning |
+|---|---|
+| target fields (`pointId` / `pointName` / `pointNameExpr` …) | the end, exactly as for MoveL |
+| `viaPointId` / `viaPointName` / `viaPointNameExpr` | the via point: a saved point (by id, then name), a template naming one, or a `$pts[i]` element |
+| `speed` `accel` `decel` | as for MoveL (expressions allowed) |
+| `arcTolerance` | largest gap between the true arc and the straight segments it is cut into (mm, default 0.1, smallest 0.001) |
+| `offset*`, `override*`, `localId` | applied to **both** the via and the end |
+
+The arc is cut into equal segments so each chord stays within `arcTolerance` of the circle and
+spans at most 2°, and sent as one continuous (blended) path, so the robot does not stop between
+segments; it stops exactly on the end. RX / RY / RZ go linearly from the start's to the end's by
+arc angle (the via point's orientation is not used). The start is where the robot is when the
+step runs. Start, via and end on one line (or two of them the same) fail `arcDegenerate`
+(catchable); an unknown via fails `pointNotFound`.
+
+Not part of a Move Arc: a stop condition (validator error `unsupportedOnStep`), a tool offset
+and blending (warnings — ignored). Validator also: a missing or unknown via, a via that is the
+end point, and a tolerance at or below 0.
+
 ### ListOp — list operations (C)
 
+`type: "ListOp"`, `variableName` (the list), `listAction`, and per action:
+
+| `listAction` | Uses | Does |
+|---|---|---|
+| `append` (default) | value / fields | adds an element at the end. On a **Points** list with no fields it appends the current position (in the active local) — "append Here". |
+| `insert` | `listIndex`, value / fields | inserts at the index (0…count) |
+| `removeAt` | `listIndex` | removes the element |
+| `clear` | — | empties the list |
+| `set` | `listIndex`, value / fields | replaces the element; on a Points / Record list the fields given are written over the element's others |
+| `setField` | `listIndex`, `listFields` | writes fields of one element (Points / Record lists) |
+| `sort` | `listSortField`, `listSortDescending` | stable sort — by value (Number / Boolean lists), by the field (Points: an axis; Records: any field, missing = 0) |
+| `reverse` | — | reverses the order |
+| `copyFrom` | `listSourceVariable` | replaces the contents with a copy of another list (same type, Number ↔ Boolean, or anything into a Record list) |
+
+The **value** of a Number / Boolean element is `listValueExpr` (an expression; a Boolean stores
+0 / 1). The **fields** of a Point / Record element are `listFields: {field: expression}` — a
+Point's are its axes `x y z rx ry rz` (a new element's missing axes are 0). `listIndex` may be an
+expression in `expressions.listIndex`; it is rounded.
+
+Everything is evaluated before the list changes, so a failing step leaves the list as it was.
+An index outside the list fails `indexOutOfRange` (catchable). A step that does not fit the
+list — fields on a Number list, a single value for a Points list, no value, an unknown axis or
+action, an incompatible copy — fails `badListOperation`, which is an authoring error and is
+**not** catchable. The program's declared list is never changed: a re-run starts from it.
+Validator: the same rules, per action and element type, before the run.
+
 ### Prompt — operator dialog (C)
+
+`type: "Prompt"` — show the operator a message with buttons and wait for the answer.
+
+| Field | Meaning |
+|---|---|
+| `promptMessage` | the message (template, required) |
+| `promptTitle` | optional title (template) |
+| `promptButtons` | 1–4 labels (default `["OK"]`; blanks dropped, extras cut) |
+| `promptResultVariableName` | a number variable gets the button index (from 0), a text variable its label; created as a number if not declared |
+| `promptInput` | `"none"` (default), `"number"` or `"text"` |
+| `promptDefault` | the input's default: an expression for a number, a template for text |
+| `promptMin` / `promptMax` | the range a number answer must be in |
+| `promptInputVariableName` | receives the typed value (a text variable gets text; a number variable the number, 0 when the text is not one) |
+| `promptTimeoutMs` | 0 / empty = wait forever |
+| `promptTimeoutButton` | the button pressed on timeout (its input = the default); empty → fail `promptTimeout` (catchable) |
+
+While it waits, the program status carries `prompt {id, stepId, programName, title, message,
+buttons, input, default, min, max, timeoutMs, shownUnixMs}` (the app shows it as a dialog);
+background programs can prompt too, one prompt per program. The answer is the
+**`AnswerPrompt { promptId, button, value? }`** command (`value` as text) → `{}`. The first
+answer wins. Refusals (`ok: false`, the error starts with its code): `stalePrompt` (already
+answered, timed out, replaced, or the run ended), `programPaused` (the program is stopped),
+`badButton`, `badValue` (a number answer that is missing with no default, not a number, or out
+of range). A **Stop** keeps the prompt on screen but refuses answers; **Continue** shows it again
+under a fresh id with its timeout restarted.
+
+Validator: message, 1–4 buttons (more is an error, a blank label a warning), the input kind,
+min above max, the default, result / input variables that cannot hold the answer, an input
+variable without an input (warning), and a timeout button that does not exist (error) or can
+never be pressed because there is no timeout (warning).
 
 ---
 
