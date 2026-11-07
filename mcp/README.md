@@ -105,6 +105,8 @@ is on another subnet (e.g. over Tailscale).
 | `robot_validate_program` | | The controller's checks (offline structural checks if it is unreachable), without saving. |
 | `robot_save_program` | | Create or replace a program. Validates on the controller first and refuses on errors; `allow_untaught` saves missing points/grids/routines as *pending*; `dry_run` only checks. Reads the program back and lists `droppedFields`. Does **not** run it. |
 | `robot_modify_program` | | Targeted edits to a saved program (`set` / `replace` / `insert` / `remove` steps by id, `setVariable` / `removeVariable`, `setProgram`), validated like a save, with `newProblems` / `fixedProblems` against the saved version. `dry_run` previews. |
+| `robot_program_text_get` | | One program as Simple Robot Script text (`docs/program-text.md`): one statement per step, names instead of ids. `include_ids`, `header` (the `@program` line for a file). |
+| `robot_program_text_set` | | Create or replace a program from `.srs` text: parsed on the controller (problems as `line:col`), step ids kept by matching against the saved version, then validated and saved like `robot_save_program` (`allow_untaught`, `dry_run`, `force`). |
 | `robot_teach_point` | | Save the current position under a name. Records, does not move. |
 | `robot_io` | | Read IO config + state: every IO device (Nano etc.: id, connected, pins) and the relay board. `deviceId` and `nanoId` are accepted interchangeably. |
 | `robot_configure_pin` | | Set a Nano pin's role (Input/Output/Neopixel/Unconfigured) and/or name. Persists; applies on the connected device. |
@@ -166,6 +168,7 @@ that `step_schema.py` lists every `StepType` the controller has).
 | `stdio_check.py` | End-to-end check — spawns the server as a subprocess and drives it over stdio the way a client does. Covers reads, the save round trip, validation, and every gate refusal. `python stdio_check.py [host]`, default `localhost`. Moves nothing. |
 | `selftest.py` | Narrower in-process round trip: saves `_mcp_selftest`, reads it back, deletes it. Moves nothing. |
 | `program_tools_check.py` | The save gate, `allow_untaught`, `droppedFields`, `robot_modify_program` edits/diffs, and step-schema drift against `ProgramSteps.cs`. Writes and deletes `_mcp_program_check`. Moves nothing. |
+| `program_text_check.py` | The text tools: every program formats and parses back unchanged (dry run), an edit keeps step ids, parse errors come back with positions. Writes and deletes `_mcp_text_check`. Moves nothing. |
 | `skill/SKILL.md` | Agent context — copy into `.claude/skills/robot-programming/`. |
 
 MCP is spoken directly over stdio rather than through the `mcp` SDK, so the only

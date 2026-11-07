@@ -162,8 +162,10 @@ class RobotLink:
 
     # -- request/response ----------------------------------------------------
 
-    def send(self, command, params=None, expect_reply=True):
-        """Send one command and return its ACK payload (minus the envelope keys)."""
+    def send(self, command, params=None, expect_reply=True, keep_ok=False):
+        """Send one command and return its ACK payload (minus the envelope keys). keep_ok: the
+        command's own result has an `ok` field (ParseProgramText) - return it instead of treating
+        ok:false as a rejection; only an ack carrying `error` is one then."""
         self.connect()
         cid = uuid.uuid4().hex
         frame = {"type": "Command", "id": cid, "command": command, "params": params or {}}
@@ -195,10 +197,10 @@ class RobotLink:
             except (ValueError, TypeError):
                 continue
             if msg.get("type") == "ack" and msg.get("id") == cid:
-                if msg.get("ok") is False:
+                if msg.get("ok") is False and (not keep_ok or "error" in msg):
                     raise RobotError(f"{command} rejected: {msg.get('error', 'no reason given')}")
                 return {k: _maybe_json(v) for k, v in msg.items()
-                        if k not in ("type", "command", "id", "ok")}
+                        if k not in ("type", "command", "id") and (keep_ok or k != "ok")}
             # anything else is a broadcast to all clients - not ours
 
         raise RobotError(f"Timed out after {ACK_TIMEOUT:.0f}s waiting for an ACK to {command}.")
@@ -1118,6 +1120,59 @@ def tool_robot_stop(args):
 
 # ── Registry ─────────────────────────────────────────────────────────────────
 
+# ── Text view (Simple Robot Script, docs/program-text.md) ─────────────────────
+
+def _problem_lines(problems):
+    """Parse/validation problems as 'line:col severity code: message' strings, plus the raw list."""
+    return [f"{p.get('line')}:{p.get('col')} {p.get('severity')} {p.get('code')}: {p.get('message')}"
+            for p in problems]
+
+
+def tool_robot_program_text_get(args):
+    name = args["name"]
+    prog = _get_program(name)
+    if prog is None:
+        progs = ROBOT.send("GetBuiltPrograms").get("programs", [])
+        return _ok({"error": f"No program named '{name}'.", "available": [p.get("name") for p in progs]})
+    res = ROBOT.send("FormatProgramText", {"program": prog,
+                                           "includeIds": bool(args.get("include_ids")),
+                                           "includeHeader": bool(args.get("header"))})
+    return _ok({"name": prog.get("name"), "languageVersion": res.get("languageVersion"), "text": res.get("text", ""),
+                "note": "Edit the text and pass it to robot_program_text_set. Step ids are kept by matching; "
+                        "@with {...} lines carry fields the text has no words for - leave them as they are."})
+
+
+def tool_robot_program_text_set(args):
+    name = args["name"]
+    text = args["text"]
+    previous = None
+    try:
+        previous = _get_program(name)
+    except RobotError:
+        pass
+    parsed = ROBOT.send("ParseProgramText", {"text": text, "base": previous,
+                                             "validate": bool(args.get("validate", True))}, keep_ok=True)
+    problems = parsed.get("problems") or []
+    parse_errors = [p for p in problems if p.get("source") == "parse" and p.get("severity") == "error"]
+    if not parsed.get("ok") or parsed.get("program") is None:
+        return _ok({"saved": False, "parsed": False, "errors": _problem_lines(parse_errors),
+                    "problems": problems,
+                    "hint": "Fix the lines above and call again. Lines and columns are 1-based. Nothing was saved."})
+    prog = parsed["program"]
+    prog["name"] = name
+    if not prog.get("id"):
+        prog["id"] = (previous or {}).get("id") or uuid.uuid4().hex
+    if previous is None:
+        for flag in ("isRoutine", "isBackground"):
+            arg = "is_routine" if flag == "isRoutine" else "is_background"
+            if arg in args:
+                prog[flag] = bool(args[arg])
+    result = _save_checked(prog, args, previous)
+    result["textProblems"] = _problem_lines([p for p in problems if p.get("source") == "parse"])
+    result["created"] = previous is None
+    return _ok(result)
+
+
 def _t(name, description, properties, required=(), handler=None, gated=False):
     return {
         "name": name,
@@ -1206,6 +1261,30 @@ TOOLS = [
         "dry_run": {"type": "boolean", "description": "Validate and diff only; do not save."},
         "force": {"type": "boolean", "description": "Save despite validation errors."}},
        required=["name", "edits"], handler=tool_robot_modify_program),
+    _t("robot_program_text_get",
+       "A built program as Simple Robot Script text (.srs) - the same program the Blocks editor shows, "
+       "one statement per step: MoveL Pick1, speed=200 / if $n > 3 ... end / $count = $count + 1. "
+       "Names (points, tools, routines, devices) appear instead of ids. Read this, edit the text, and "
+       "save it with robot_program_text_set. Reference: docs/program-text.md.",
+       {"name": {"type": "string", "description": "Program name."},
+        "include_ids": {"type": "boolean", "description": "Write @id \"...\" above every step (default false)."},
+        "header": {"type": "boolean", "description": "Add the @program {...} header line (for exporting a file)."}},
+       required=["name"], handler=tool_robot_program_text_get),
+    _t("robot_program_text_set",
+       "Create or replace a built program from Simple Robot Script text. The controller parses it "
+       "(problems come back with line:col), reconciles step ids against the saved program so unchanged "
+       "steps keep their ids, then the result is validated and saved like robot_save_program "
+       "(allow_untaught / dry_run / force behave the same). Saving does NOT run the program. "
+       "Write the text the way robot_program_text_get prints it; see docs/program-text.md.",
+       {"name": {"type": "string", "description": "Program name (created when it does not exist)."},
+        "text": {"type": "string", "description": "The whole program as .srs text."},
+        "validate": {"type": "boolean", "description": "Also run the validator and map its problems onto lines (default true)."},
+        "is_routine": {"type": "boolean", "description": "New programs only: make it a routine."},
+        "is_background": {"type": "boolean", "description": "New programs only: make it a background program."},
+        "allow_untaught": {"type": "boolean", "description": "As robot_save_program."},
+        "dry_run": {"type": "boolean", "description": "Parse and validate only; do not save."},
+        "force": {"type": "boolean", "description": "Save despite validation errors (never despite parse errors)."}},
+       required=["name", "text"], handler=tool_robot_program_text_set),
     _t("robot_teach_point",
        "Save the robot's CURRENT position under a name. The robot must already be where you want the "
        "point - this records, it does not move.",

@@ -29,7 +29,12 @@ setup: `SimpleRobotController/mcp/README.md`. Full command reference:
    as `pending` — tell the operator what to teach). Check `droppedFields` after every
    save: anything listed there was silently discarded (a misspelt field). It does
    **not** run anything.
-6. **`robot_run_program`** only when the operator has asked for it and is watching.
+6. **Text is often easier: `robot_program_text_get` / `robot_program_text_set`.** The
+   program as Simple Robot Script (`MoveL Pick1, speed=200`, `if $n > 3 … end`,
+   `$count = $count + 1`; reference `docs/program-text.md`). Edit the text and set it
+   back: step ids are kept by matching, parse problems come back as `line:col`, and the
+   save is validated like `robot_save_program`. Keep `@with {…}` lines as they are.
+7. **`robot_run_program`** only when the operator has asked for it and is watching.
 
 ## The `$` rule — the one that bites
 
