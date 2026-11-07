@@ -584,6 +584,10 @@ those until the controller has shipped.
 
 ## 6. The text language (SRS)
 
+> **Built (package D).** The user reference is [program-text.md](program-text.md); differences
+> from this section are listed under [Package D — as built](#package-d--as-built). This section
+> stays as the design record.
+
 ### 6.1 Name
 
 Proposed: **Simple Robot Script (SRS)**, with file extension **`.srs`**.
@@ -1514,6 +1518,62 @@ which package C's new handlers call.
 
 It needs only package A, because new-step syntax is catalog-driven and it does not need B or C to
 execute anything. It must cover the new steps' fields from day one.
+
+#### Package D — as built
+
+The user reference is **[program-text.md](program-text.md)** (with the final grammar and a
+catalog-generated argument table that `DocTableTests` keeps current). Where the build differs from
+§6, this list wins:
+
+- **How "every field round-trips" is guaranteed.** The parser builds each step as JSON (ProgramStep
+  names). The printer writes each step's sugar, then *parses that statement back on its own* and
+  diffs the result against the step; the difference is written as `@with {…}` (deep merge, `null`
+  removes). A step whose sugar cannot be read back falls back to its bare keyword (every StepType
+  name is a keyword: `IfCondition`, `Loop`, `SetVariable`, `ListOp`, `Note` …) plus `@with`. Bodies
+  and else-if/case lines stay structural unless a branch cannot be written, in which case the whole
+  `elseIfBranches` / `switchCases` array (with ids) travels in `@with`.
+- **Normalize** (`ProgramNormalizer`) has the §6.9 rules plus: implied defaults written out (Loop
+  `loopMode` "count", Wait `waitMode` "duration", LoopControl "break", ListOp "append", SetOutput
+  `outputCard` "stb"); `noteStyle` "note" and `enabled: true` → absent; false variable flags →
+  absent; a list variable's missing `elementType` → Record; legacy `values/points/objects` →
+  `items`; Point elements carry all six axes; missing ids filled from names that resolve;
+  StatusUpdate's missing `statusSeverity` inferred as the app does (rule 7 only infers the severity
+  — moving text between `statusMessage`/`statusWarning` would change the run, so it does not); old
+  editor leftovers dropped (`outputNumber`/`outputValue` off SetOutput, `waitMs` off Wait,
+  `loopCount` off Loop). Legacy left/operator/right condition rows become `expr` only where exact
+  (numeric operators; string `contains`/`startsWith`/`endsWith` on a declared string variable with
+  literal text); others stay rows and ride in `@with`.
+- **Mapping bodies are optional:** `RunVision` / `HttpRequest` / `HttpReceive` / `ExportData` /
+  `plugin` take rows and `end` only when they have rows (a row line is recognisable: it starts with
+  a string, `send`/`receive`, or `name =` / `name ->` / `name.`).
+- **Positionals** may also be separated by commas (`SetJointPosition J3, 90`) and may follow named
+  args (`AuxEnable device=Aux, on`). `Wait until …`, `SavePosition point X`, `GripperAction to 25`,
+  `SetOutput … toggle`, `J<n>`, `else if` are sugar. Enum words: stopwatch `start|stop|reset`,
+  gripper `open|close|to`, conveyor `forward|reverse|stop`; other enums use the option value.
+- **Values:** `(…)` always means an expression (`speed=(200)` is the expression `200`); a positional
+  expression must be a `$var` token or parenthesised. Expression-or-template slots (`call` args,
+  plugin params, prompt `default`) print quoted unless the text looks like an expression.
+- **`@with` keys that are not fields** → `unknownField` warning (dropped). `missingArgument` is not
+  reported for a step that has an `@with`. New codes: `unknownDevice`, `unknownCamera`,
+  `unknownField` (warnings). Unknown names of id-only references (devices, cameras, grids, stacks,
+  vision tools) keep the typed text as the id.
+- **Ids:** besides LCS + type pairing, a step moved elsewhere in the same list keeps its id (same
+  key, unmatched on both sides). Steps that arrived as JSON in `@with` are never re-id'd. Condition
+  items split from one `expr` get `<id>.<k>` ids in Normalize. Variables match by name and inherit
+  `value` when they have a `valueExpression`.
+- **Commands:** `FormatProgramText` also takes `includeHeader` (the `@program {…}` line, for
+  export; `FormatProgramTextParams.IncludeHeader`). Note the WebSocket ack merges result fields, so
+  `ParseProgramText`'s `ok` *is* the ack's `ok` (the app's client already handles this; the MCP
+  `send` has `keep_ok=True` for it).
+- **Cross-package edits (minimal):** `BuiltProgramCommands.BuildValidationContext` is `internal`
+  and `CommandDispatcher` passes it to `LanguageCommands(robot, …)`; `StepCatalogTests` no longer
+  expects the language commands to be stubs.
+- **Tests:** `RoundTripTests` (golden step, golden step as every type, every type empty and with
+  catalog defaults, the samples, 500 random seeds, ids mode), `ParserErrorTests` (every code with
+  its line/col/endCol, UTF-16 columns, recovery), `ReconcilerTests`, `PrinterGoldenTests`
+  (`Fixtures/srs/*.srs`, `SRS_UPDATE_GOLDEN=1` rewrites), `DocTableTests`, and `RealProgramTests`
+  (round-trips a copied data dir given in `SRS_REAL_DIR`; all 20 of Lucas's programs pass).
+  MCP: `mcp/program_text_check.py` (live, moves nothing).
 
 ### Package E — app Blocks editor (after A, parallel)
 
