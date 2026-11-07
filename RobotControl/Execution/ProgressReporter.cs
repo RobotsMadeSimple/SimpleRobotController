@@ -25,6 +25,10 @@ namespace Controller.RobotControl.Execution
             _vars           = vars;
         }
 
+        /// <summary>The program status this reporter publishes to (the Prompt step posts its
+        /// pending prompt here).</summary>
+        internal ProgramCycleManager Programs => _programManager;
+
         /// <summary>Name of the program being run; set by the executor on Start.</summary>
         public string ProgramName { get; set; } = "";
 

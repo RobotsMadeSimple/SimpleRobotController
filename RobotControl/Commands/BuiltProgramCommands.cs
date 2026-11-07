@@ -380,6 +380,7 @@ internal sealed class BuiltProgramCommands
         var functions = ExpressionEvaluator.Functions
             .Select(f => (object)new { name = f.Name, signature = f.Signature, description = f.Description })
             .ToList();
+        functions.AddRange(TextHelperSymbols());
 
         var io = IoSymbols().Select(i => new { name = i.Name, description = i.Description }).ToList();
 
@@ -387,6 +388,17 @@ internal sealed class BuiltProgramCommands
 
         return new { variables, properties, functions, io, plugins };
     }
+
+    /// <summary>
+    /// The text helpers (<see cref="ExpressionEvaluator.StringMethods"/>) as function entries for
+    /// the helper panel. Named with a leading dot (<c>.contains</c>) since they follow a text
+    /// variable rather than standing alone; <c>kind = "textMethod"</c> tells them apart.
+    /// </summary>
+    internal static IEnumerable<object> TextHelperSymbols() =>
+        ExpressionEvaluator.StringMethods.Select(m => (object)new
+        {
+            name = "." + m.Name, signature = m.Signature, description = m.Description, kind = "textMethod",
+        });
 
     /// <summary>
     /// GetExpressionSymbols' plugin parts (docs/plugins.md §6): appends every installed plugin's

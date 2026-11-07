@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using Controller.RobotControl.Programs;
 
@@ -153,13 +152,8 @@ namespace Controller.RobotControl.Execution
         private static readonly ConditionalWeakTable<ExecutionContext, RunState> States = new();
 
         // The prompt is published through the program status, which the executor's progress
-        // reporter owns; it has no public accessor, so it is read once by reflection here
-        // (PromptTests fails loudly if the field is ever renamed).
-        private static readonly FieldInfo? ManagerField =
-            typeof(ProgressReporter).GetField("_programManager", BindingFlags.NonPublic | BindingFlags.Instance);
-
-        internal static ProgramCycleManager? Programs(ExecutionContext ctx) =>
-            ManagerField?.GetValue(ctx.Progress) as ProgramCycleManager;
+        // reporter owns.
+        internal static ProgramCycleManager? Programs(ExecutionContext ctx) => ctx.Progress.Programs;
 
         public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
         {

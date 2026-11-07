@@ -111,12 +111,15 @@ namespace Controller.RobotControl
         /// <summary>
         /// Evaluates <paramref name="expr"/> against this executor's live variables, IO and
         /// properties — what a step evaluating it right now would see. Throws like
-        /// <see cref="ExpressionEvaluator.Evaluate"/>.
+        /// <see cref="ExpressionEvaluator.Evaluate"/>. Goes through the scope's
+        /// <see cref="Execution.EvalContext"/> so the text helpers (<c>$s.length</c>,
+        /// <c>$s.contains("x")</c> …) resolve string variables exactly as a running step does.
+        /// Ticks run under the same lock, so this never sees a tick's cached snapshot.
         /// </summary>
         internal double EvaluateLive(string expr)
         {
             lock (_controlLock)
-                return ExpressionEvaluator.Evaluate(expr, _vars.EvalVars(), _vars.Lists, _vars.Properties);
+                return _vars.Eval.Evaluate(expr);
         }
 
         /// <summary>Current values of every variable in scope: number, string, or a list's element count.</summary>
