@@ -38,6 +38,9 @@ public static class ErrorCodes
     public const string ExpressionSyntax = "expressionSyntax";
     /// <summary>A write to a computed variable.</summary>
     public const string ComputedVariable = "computedVariable";
+    /// <summary>A List / Save Position step that does not fit its list: fields on a Number list,
+    /// a Number value for a Points list, a missing value, an unknown action. An authoring bug.</summary>
+    public const string BadListOperation = "badListOperation";
 
     public static readonly IReadOnlyList<ErrorCodeSpec> All =
     [
@@ -63,6 +66,7 @@ public static class ErrorCodes
         new() { Code = UnknownVariable,  Label = "Unknown variable",                  Catchable = false },
         new() { Code = ExpressionSyntax, Label = "Expression error",                  Catchable = false },
         new() { Code = ComputedVariable, Label = "Write to a computed variable",      Catchable = false },
+        new() { Code = BadListOperation, Label = "List step does not fit the list",  Catchable = false },
     ];
 
     private static readonly Dictionary<string, ErrorCodeSpec> ByCode =

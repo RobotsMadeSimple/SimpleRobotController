@@ -30,6 +30,21 @@ namespace Controller.RobotControl.Execution
         /// <summary>Program default blend radius (set by SetBlendRadius); per-move BlendRadius overrides it.</summary>
         public double DefaultBlendRadius { get; set; }
 
+        /// <summary>
+        /// The program's SetSpeedFactor, in percent (1–100; 100 = no change). Stamped on every
+        /// program move dispatched from here (blended runs and resumed moves too), where the
+        /// motion thread multiplies it into the operator override. Back to 100 on
+        /// <see cref="Reset"/> — every start, finish and reset of a run.
+        /// </summary>
+        public double SpeedFactorPercent
+        {
+            get => _speedFactorPercent;
+            set => _speedFactorPercent = double.IsFinite(value) ? Math.Clamp(value, 1, 100) : 100;
+        }
+        private double _speedFactorPercent = 100;
+
+        private double SpeedFactor => _speedFactorPercent / 100.0;
+
         // ── Stop-condition watch ──────────────────────────────────────────────
 
         /// <summary>
@@ -83,6 +98,7 @@ namespace Controller.RobotControl.Execution
             _lastRunWaypoints  = null;
             _lastRunRadii      = null;
             _lastRunStart      = null;
+            if (cmd.ApplySpeedOverride) cmd.SpeedFactor = SpeedFactor;
             _controller.QueuedCommands.Enqueue(cmd);
         }
 
@@ -115,6 +131,7 @@ namespace Controller.RobotControl.Execution
                 Accel              = accel,
                 Decel              = decel,
                 ApplySpeedOverride = true,
+                SpeedFactor        = SpeedFactor,
             });
         }
 
@@ -222,6 +239,7 @@ namespace Controller.RobotControl.Execution
         public void Reset()
         {
             DefaultBlendRadius    = 0;
+            SpeedFactorPercent    = 100;
 
             AwaitingMove          = false;
             PendingStep           = null;

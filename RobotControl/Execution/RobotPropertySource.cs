@@ -92,6 +92,8 @@ namespace Controller.RobotControl.Execution
             new("program.stepCount", "Total steps in this run",                 "number", Group.Program, Program: p => p.StepCount),
             new("program.elapsedMs", "Milliseconds since this run started",     "number", Group.Program, Program: p => p.ElapsedMs),
             new("program.loopDepth", "Number of loops currently executing",     "number", Group.Program, Program: p => p.LoopDepth),
+            new("program.speedFactor", "This program's Set Speed Factor (percent, 100 = full speed)", "number", Group.Program,
+                Program: p => p is ExecutionContext ctx ? ctx.Motion.SpeedFactorPercent : 100),
 
             new("time.now",       "Unix time in milliseconds",           "number", Group.Time, Time: () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
             new("time.hour",      "Local hour (0–23)",                   "number", Group.Time, Time: () => DateTime.Now.Hour),

@@ -262,6 +262,14 @@ namespace Controller.RobotControl
         // Speed override: MinSpeedOverrideFactor–MaxSpeedOverrideFactor (5%–200%), default 1.0 (100%)
         public double SpeedOverrideFactor { get; internal set; } = 1.0;
 
+        /// <summary>
+        /// A program's SetSpeedFactor as carried on its move commands (<see cref="RobotCommand.SpeedFactor"/>),
+        /// limited to 1 %–100 %: it multiplies the operator override, so a program can slow itself
+        /// down but never run faster than the operator allows. A non-number reads as 100 %.
+        /// </summary>
+        internal static double ProgramSpeedFactor(double factor) =>
+            double.IsFinite(factor) ? Math.Clamp(factor, 0.01, 1.0) : 1.0;
+
         // ── Nano IO ───────────────────────────────────────────────────────────
         public NanoManager NanoManager { get; private set; } = null!;
         private long _lastStatusLightMs = 0;
@@ -1120,13 +1128,13 @@ namespace Controller.RobotControl
                             LatchMotionError($"Point '{Command.Name}' not found");
                             break;
                         }
-                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
+                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
                     }
                     break;
 
                 case "OffsetL":
                     Vector6 NewPosition = CurrentPosition + Command.Vector6;
-                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
+                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
                     break;
 
                 case "MoveJ":
@@ -1139,7 +1147,7 @@ namespace Controller.RobotControl
                             LatchMotionError($"Point '{Command.Name}' not found");
                             break;
                         }
-                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
+                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
                     }
                     break;
 
@@ -1148,7 +1156,7 @@ namespace Controller.RobotControl
                     // program thread mutating continuousProfiler directly.
                     if (Command.Waypoints is { Count: >= 2 })
                         StartContinuousMove(Command.Waypoints, Command.BlendRadii ?? new List<double>(),
-                            Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride);
+                            Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride, Command.SpeedFactor);
                     break;
 
                 case "SetTool":
@@ -1545,7 +1553,7 @@ namespace Controller.RobotControl
             _homing.Reset();
         }
 
-        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
+        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0)
         {
             if (IsMoving)
                 return;
@@ -1556,7 +1564,7 @@ namespace Controller.RobotControl
             // The global speed override scales program moves only (applyOverride) — including
             // program steps that don't set an explicit speed. Manual point moves and jogging
             // run at their commanded speed.
-            double jointSpeed = (Speed ?? this.SpeedJ) * (applyOverride ? SpeedOverrideFactor : 1.0);
+            double jointSpeed = (Speed ?? this.SpeedJ) * (applyOverride ? SpeedOverrideFactor * ProgramSpeedFactor(programFactor) : 1.0);
             double jointAccel = Accel ??= this.AccelJ;
             double jointDecel = Decel ??= this.DecelJ;
 
@@ -1579,7 +1587,7 @@ namespace Controller.RobotControl
 
         
 
-        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
+        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0)
         {
             if (IsMoving)
                 return;
@@ -1588,7 +1596,7 @@ namespace Controller.RobotControl
 
             // Gather the commands motion params if there specified otherwise default to the last set ones.
             // Override scales program moves only (see MoveJ); manual/jog moves are unaffected.
-            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor : 1.0);
+            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor * ProgramSpeedFactor(programFactor) : 1.0);
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
 
@@ -1613,13 +1621,13 @@ namespace Controller.RobotControl
         /// single trapezoidal speed profile over its total blended length.
         /// </summary>
         public void StartContinuousMove(List<Vector6> waypoints, List<double> blendRadii,
-            double? Speed, double? Accel, double? Decel, bool applyOverride = false)
+            double? Speed, double? Accel, double? Decel, bool applyOverride = false, double programFactor = 1.0)
         {
             if (IsMoving) return;
             if (_faulted) return;  // no automatic moves while a joint-limit fault is latched
             if (waypoints == null || waypoints.Count < 2) return;
 
-            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor : 1.0);
+            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor * ProgramSpeedFactor(programFactor) : 1.0);
             double lineAccel = Accel ?? this.AccelS;
             double lineDecel = Decel ?? this.DecelS;
 
