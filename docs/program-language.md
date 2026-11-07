@@ -1420,6 +1420,56 @@ exclusive; `ProgramTextMapEntry {stepId, stepPath, line, endLine}` (inclusive li
 `FormatProgramTextResult {text, languageVersion, map}`; `ParseProgramTextResult {ok, program?,
 problems, map}`; `TextProblemCodes` (§6.11).
 
+**App** (SimpleRobotApp):
+
+- `src/models/robotModels.tsx`: the StepType union (new members appended, same order as the
+  controller), every new ProgramStep field, `SwitchCase`, `RoutineOutputMapping`, enum types
+  (`NoteStyle`, `ListAction`, `PromptInput`, …), `ParamMode`, `EditorMode`, `isStepEnabled(step)`,
+  `ProgramSummary.currentStepId / pauseReason / pausedAtStepId / prompt` (`ProgramPrompt`,
+  `PauseReason`), `ExecuteOptions`, `StepCatalog` / `StepSpec` / `FieldSpec` / `FieldKind` /
+  `StepCategoryKey`, `TextProblem`, `ProgramTextMapEntry`, `FormatProgramTextResult`,
+  `ParseProgramTextResult`, and the new `KnownValidationCode` names.
+- `src/models/programStepGolden.check.ts`: `goldenProgramStep` (all fields), `STEP_TYPES_ALL`
+  (with a both-ways type-equality check against `StepType`) and `goldenBuiltProgram`.
+  **`npx tsx scripts/golden-check.mts`** compares them with the controller's golden files key by
+  key, both directions, and checks `stepTree` against the golden step's bodies and paths.
+- `src/models/stepTree.ts`: `STEP_LIST_ROLES`, `childLists(step, executableOnly?)` (with
+  `role`, `index`, `branchId`, `path`), `walkSteps(steps, {enabledOnly?, root?})` (with `path`
+  and `depth`), `flattenSteps`, `findStep`, `mapStepTree(step, fn)` (immutable deep map). Already
+  used by paste (fresh ids incl. switch cases), `rehydrateIds` and `backfillPointIds`;
+  `stepClipboard.ts`, `renameVariable.ts`, validation indexing and scope navigation (`ScopeFrame`
+  has no switch/try kinds yet) are package E's to move over.
+- `RobotConnectService`: `getStepCatalog()`, `formatProgramText(program, {includeIds})`,
+  `parseProgramText(text, {base, validate})`, `answerPrompt(promptId, button, value?)`,
+  `stepBuiltProgram()`, `setBreakpoints(stepIds)`, `executeBuiltProgram(name, options?)` and
+  `executeBuiltProgramDebug(name, options)` (rejects with the typed error). A `notImplemented: …`
+  answer becomes **`NotImplementedCommandError`** (`isNotImplementedCommand(e)`; a subclass of
+  `CommandFailedError`); an older controller still gives `UnsupportedCommandError`.
+  `SaveBuiltProgram` / `ValidateBuiltProgram` now carry `editorMode`.
+- `src/components/ui/builder/useStepCatalog.ts`: module-level store, `loadStepCatalog()`,
+  `stepSpecFor(type)`, `fieldSpecFor(type, key)`, `useStepCatalog(connected?)` (fetch on mount
+  and on reconnect; `status: "unsupported"` on an older controller → keep using stepUtils).
+  The builder already calls `useStepCatalog(connected)`.
+- `src/components/ui/builder/useBreakpoints.ts` (complete): `useBreakpoints(programId)` →
+  `{ids, list, has, toggle, set, clear, retain}`, persisted per program id in AsyncStorage
+  (`rms.breakpoints.<id>`); plain `getBreakpoints(id)` / `setBreakpointsFor(id, ids)` for non-React
+  callers (the monitor).
+- `stepUtils.tsx`: icon, theme, label and picker entry for each new type; Switch, Try, Break/Next,
+  Raise Error, Return, End Program and Note are in Logic & Flow; Move Arc and Save Position in
+  Motion; Set Speed Factor in Motion Settings; List in Variables & Timing; Prompt in
+  Communication. `BACKGROUND_RESTRICTED` gains MoveC and SetSpeedFactor.
+- `builder.tsx`: `newBlockDefaults(type)` (catalog defaults: Switch starts with one case `["1"]`,
+  Try with empty bodies and 0 retries, Prompt with `["OK"]`, …); `editorMode` is builder state
+  (not in the undo document — a view switch is not an edit), loaded from and saved with the
+  program; `changeEditorMode(mode)` leaves block scope and selection; in Text mode the steps
+  section is `<TextProgramView>` with the props below; `applyTextProgram(p)` commits steps +
+  variables as one undoable edit. Select bar has **Disable / Enable**; `StepRow` dims a disabled
+  step and labels it "· DISABLED". StepConfigModal has no fields for the new types yet (E).
+- `EditorToolbar.tsx`: optional `editorMode` / `onEditorModeChange` props render the Blocks | Text
+  `EditorModeToggle` before undo/redo.
+- `TextProgramView.tsx` (stub, package F fills it): props `{program, onApply, onSwitchToBlocks,
+  connected, problems?, breakpoints?, runningStepId?}` — `program` is the current unsaved document.
+
 ### Package B — controller flow, errors, routines and debugging (after A)
 
 | Owns | Files |
