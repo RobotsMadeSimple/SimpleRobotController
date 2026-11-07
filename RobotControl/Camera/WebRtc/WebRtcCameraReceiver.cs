@@ -34,6 +34,11 @@ namespace Controller.RobotControl.Camera.WebRtc
         private Thread?       _reader;
         private System.Threading.Timer? _keyframeTimer;
         private volatile bool _running = true;
+        private System.Threading.Timer? _watchdogTimer;
+        private int           _ended;        // 1 once the session has stopped (End ran)
+        private long          _startedMs;    // when the answer went out (watchdog grace starts here)
+        private long          _lastRtpMs;    // last access unit from the phone (0 = none yet)
+        private long          _lastDecodedMs; // last decoded picture (0 = none yet)
         private long          _frames;
         private long          _rtpFrames;    // video access units received from the peer
         private long          _keyFrames;    // key frames received (to verify PLI cadence)
@@ -57,12 +62,25 @@ namespace Controller.RobotControl.Camera.WebRtc
         private static readonly int[] PreviewJpegParams = { (int)ImwriteFlags.JpegQuality, 80 };
         private const int OpenTimeoutMs = 10000;
 
+        // Stall watchdog. The peer connection can stay "connected" (ICE/DTLS keep-alives still flow)
+        // while no video does — e.g. Android hands the phone's camera to another app — and the decode
+        // loop also ends on its own read timeout. Either way the session is ended and the signaling
+        // socket closed, so the phone sees the drop and reconnects instead of silently streaming nothing.
+        internal const int StallMs        = 6000;    // no new picture for this long once streaming
+        internal const int FirstPictureMs = 15000;   // grace for the first picture after the answer
+        private  const int WatchdogTickMs = 1000;
+
         /// <summary>A local ICE candidate was gathered — forward it to the phone (JSON per the W3C shape).</summary>
         public event Action<string>? OnLocalIceCandidate;
         /// <summary>The peer connection state changed (connected / failed / closed …).</summary>
         public event Action<RTCPeerConnectionState>? OnConnectionStateChanged;
+        /// <summary>The session stopped on its own (stall, decoder end, peer failure). Carries a short reason.
+        /// Not raised by <see cref="Dispose"/>.</summary>
+        public event Action<string>? OnEnded;
 
         public long FrameCount => Interlocked.Read(ref _frames);
+        /// <summary>Why the session stopped, once it has.</summary>
+        public string? EndReason { get; private set; }
 
         public WebRtcCameraReceiver(CameraDevice cam, RTCConfiguration? config = null)
         {
@@ -92,8 +110,53 @@ namespace Controller.RobotControl.Camera.WebRtc
                 if (state is RTCPeerConnectionState.failed
                           or RTCPeerConnectionState.disconnected
                           or RTCPeerConnectionState.closed)
-                    _running = false;
+                    End($"peer connection {state}");
             };
+        }
+
+        /// <summary>
+        /// Stops the session once, logs why, and (unless <paramref name="notify"/> is false) raises
+        /// <see cref="OnEnded"/> so the signaling socket can be closed and the phone reconnects.
+        /// Aborting the decoder unblocks a reader stuck in a read.
+        /// </summary>
+        private void End(string reason, bool notify = true)
+        {
+            if (Interlocked.Exchange(ref _ended, 1) == 1) return;
+            _running = false;
+            EndReason = reason;
+            Console.WriteLine($"[WebRTC] {_tag} stream stopped: {reason} (received={Interlocked.Read(ref _rtpFrames)}, decoded={FrameCount})");
+            try { _watchdogTimer?.Dispose(); } catch { }
+            try { _keyframeTimer?.Dispose(); } catch { }
+            try { _decoder?.Abort(); } catch { }
+            if (notify) { try { OnEnded?.Invoke(reason); } catch { } }
+        }
+
+        /// <summary>
+        /// The watchdog's decision: null while healthy, else why the stream counts as stopped.
+        /// All times are <see cref="Environment.TickCount64"/> ms; 0 means "never".
+        /// </summary>
+        internal static string? StallReason(long nowMs, long startedMs, long lastRtpMs, long lastDecodedMs)
+        {
+            if (startedMs == 0) return null;   // not negotiated yet
+            if (lastDecodedMs == 0)
+            {
+                if (nowMs - startedMs < FirstPictureMs) return null;
+                return lastRtpMs == 0
+                    ? $"no video arrived from the phone within {FirstPictureMs / 1000} s"
+                    : $"video arrived but no picture was decoded within {FirstPictureMs / 1000} s";
+            }
+            if (nowMs - lastDecodedMs < StallMs) return null;
+            return lastRtpMs == 0 || nowMs - lastRtpMs >= StallMs
+                ? $"no video from the phone for {StallMs / 1000} s (its camera stopped or the network dropped)"
+                : $"video is arriving but the decoder produced no picture for {StallMs / 1000} s";
+        }
+
+        private void CheckStall()
+        {
+            if (!_running) return;
+            var reason = StallReason(Environment.TickCount64, Interlocked.Read(ref _startedMs),
+                                     Interlocked.Read(ref _lastRtpMs), Interlocked.Read(ref _lastDecodedMs));
+            if (reason != null) End(reason);
         }
 
         /// <summary>Applies the phone's SDP offer and returns the controller's SDP answer. Starts the decode loop.</summary>
@@ -111,9 +174,11 @@ namespace Controller.RobotControl.Camera.WebRtc
             await _pc.setLocalDescription(answer);
 
             Console.WriteLine($"[WebRTC] {_tag} offer applied, answer sent (answer has H264={answer.sdp?.Contains("H264") == true})");
+            Interlocked.Exchange(ref _startedMs, Environment.TickCount64);
             StartReader();
             // Periodically request a key frame so motion stays crisp and losses recover fast.
             _keyframeTimer = new System.Threading.Timer(_ => RequestKeyFrame(), null, KeyframeRequestMs, KeyframeRequestMs);
+            _watchdogTimer = new System.Threading.Timer(_ => CheckStall(), null, WatchdogTickMs, WatchdogTickMs);
             return answer.sdp;
         }
 
@@ -146,6 +211,7 @@ namespace Controller.RobotControl.Camera.WebRtc
             var dec = _decoder;
             if (dec == null || !_running || frame.Length == 0) return;
             var n = Interlocked.Increment(ref _rtpFrames);
+            Interlocked.Exchange(ref _lastRtpMs, Environment.TickCount64);
             bool key = IsKeyFrame(frame);
             if (key) Interlocked.Increment(ref _keyFrames);
             if (n == 1 || n % 60 == 0) Console.WriteLine($"[WebRTC] {_tag} rx video frame #{n} ({frame.Length}B, key={key}, keyframes={Interlocked.Read(ref _keyFrames)})");
@@ -187,12 +253,27 @@ namespace Controller.RobotControl.Camera.WebRtc
                 while (_running)
                 {
                     using var pic = dec.Read();
-                    if (pic == null) break;
+                    if (pic == null)
+                    {
+                        // Read gives up after the decoder's read timeout with no data — usually the
+                        // phone stopped sending (camera taken by another app, network drop).
+                        var stale = Environment.TickCount64 - Interlocked.Read(ref _lastRtpMs);
+                        End(_lastRtpMs == 0 || stale >= NetworkCameraSource.DefaultReadTimeoutMs - 500
+                            ? $"no video from the phone for {NetworkCameraSource.DefaultReadTimeoutMs / 1000} s (its camera stopped or the network dropped)"
+                            : "the decoder stopped producing pictures");
+                        break;
+                    }
                     _cam.PushFrame(pic.ToJpeg(JpegParams), pic.Width, pic.Height, MakePreview(pic));
                     Interlocked.Increment(ref _frames);
+                    Interlocked.Exchange(ref _lastDecodedMs, Environment.TickCount64);
                 }
             }
-            catch (Exception ex) { Console.WriteLine($"[WebRTC] {_tag} decode loop ended: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                End(Interlocked.Read(ref _rtpFrames) == 0
+                    ? $"no video arrived from the phone within {OpenTimeoutMs / 1000} s"
+                    : $"decoder failed: {ex.Message}");
+            }
             finally { _running = false; }
         }
 
@@ -240,7 +321,8 @@ namespace Controller.RobotControl.Camera.WebRtc
 
         public void Dispose()
         {
-            _running = false;
+            End("signaling socket closed", notify: false);   // logs why, unless it already stopped
+            try { _watchdogTimer?.Dispose(); } catch { }
             try { _keyframeTimer?.Dispose(); } catch { }
             try { _decoder?.Abort(); } catch { }
             try { if (_reader is { IsAlive: true } && _reader != Thread.CurrentThread) _reader.Join(1500); } catch { }

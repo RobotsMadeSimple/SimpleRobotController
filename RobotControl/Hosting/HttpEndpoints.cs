@@ -361,21 +361,42 @@ namespace Controller.RobotControl.Hosting
             // cand is already a JSON object string from RTCIceCandidate.toJSON().
             receiver.OnLocalIceCandidate += cand => _ = Send($"{{\"type\":\"ice\",\"candidate\":{cand}}}");
 
+            // When the stream stops on its own (no video, decoder ended, peer failed), close this socket
+            // with the reason: the phone treats the close as "reconnect", instead of the peer connection
+            // looking alive while nothing flows. If the phone never answers the close, stop waiting.
+            using var endCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            receiver.OnEnded += reason => _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await sendLock.WaitAsync(endCts.Token);
+                    try
+                    {
+                        if (ws.State == WebSocketState.Open)
+                            await ws.CloseOutputAsync(WebSocketCloseStatus.EndpointUnavailable, CloseReason(reason), CancellationToken.None);
+                    }
+                    finally { sendLock.Release(); }
+                }
+                catch { /* socket or session already gone */ }
+                try { endCts.CancelAfter(2000); } catch { }
+            });
+
             var buffer = new byte[16 * 1024];
             using var msg = new MemoryStream();
             try
             {
-                while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
+                while (!endCts.IsCancellationRequested && ws.State == WebSocketState.Open)
                 {
                     msg.SetLength(0);
                     WebSocketReceiveResult result;
                     bool oversized = false;
                     do
                     {
-                        result = await ws.ReceiveAsync(buffer, ct);
+                        result = await ws.ReceiveAsync(buffer, endCts.Token);
                         if (result.MessageType == WebSocketMessageType.Close)
                         {
-                            await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
+                            if (ws.State == WebSocketState.CloseReceived)
+                                await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
                             return;
                         }
                         if (!oversized) msg.Write(buffer, 0, result.Count);
@@ -388,7 +409,16 @@ namespace Controller.RobotControl.Hosting
             }
             catch (OperationCanceledException) { }
             catch (Exception) { /* client went away mid-session */ }
-            finally { sendLock.Dispose(); }
+            finally { endCts.Cancel(); }
+            // sendLock is left to the GC: an in-flight ICE send or the close above may still hold it.
+        }
+
+        /// <summary>A WebSocket close reason must fit in 123 UTF-8 bytes.</summary>
+        internal static string CloseReason(string reason)
+        {
+            var r = reason ?? "";
+            while (System.Text.Encoding.UTF8.GetByteCount(r) > 123) r = r[..^1];
+            return r;
         }
 
         /// <summary>Applies one signaling frame: an offer yields an answer; an ICE candidate is added.</summary>
