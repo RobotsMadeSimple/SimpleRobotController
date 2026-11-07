@@ -80,4 +80,10 @@ public static class TextProblemCodes
     public const string StringRequired    = "stringRequired";
     public const string DuplicateId       = "duplicateId";
     public const string UnknownLabel      = "unknownLabel";
+    /// <summary>Warning: a device name that matches no IO / aux device (the text is kept as the id).</summary>
+    public const string UnknownDevice     = "unknownDevice";
+    /// <summary>Warning: a camera name that matches no camera (the text is kept as the id).</summary>
+    public const string UnknownCamera     = "unknownCamera";
+    /// <summary>Warning: an <c>@with</c> key that is not a step / variable field (it is dropped).</summary>
+    public const string UnknownField      = "unknownField";
 }

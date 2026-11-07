@@ -238,17 +238,14 @@ public class StepCatalogTests
     {
         var d = new CommandDispatcher();
         new StepCatalogCommands().Register(d);
-        new LanguageCommands().Register(d);
+        new LanguageCommands(null!, () => new Controller.RobotControl.Validation.ValidationContext()).Register(d);
         new DebugCommands(null).Register(d);
         Assert.True(d.TryGet("GetStepCatalog", out var get));
         Assert.IsType<StepCatalogInfo>(get(new CommandMessage()).Result);
 
-        // StepBuiltProgram / SetBreakpoints are real now (package B; DebuggerTests).
+        // StepBuiltProgram / SetBreakpoints are real now (package B; DebuggerTests), and so are
+        // FormatProgramText / ParseProgramText (package D; RobotControl.Tests/Language).
         foreach (var name in new[] { "FormatProgramText", "ParseProgramText" })
-        {
-            Assert.True(d.TryGet(name, out var h), name);
-            var ex = Assert.Throws<CommandNotImplementedException>(() => h(new CommandMessage()).GetAwaiter().GetResult());
-            Assert.StartsWith("notImplemented:", ex.Message);
-        }
+            Assert.True(d.TryGet(name, out _), name);
     }
 }

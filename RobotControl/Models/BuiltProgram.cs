@@ -120,6 +120,9 @@ public class FormatProgramTextParams
 {
     [JsonPropertyName("program")]    public BuiltProgram? Program    { get; set; }
     [JsonPropertyName("includeIds")] public bool          IncludeIds { get; set; }
+    /// <summary>Also print the <c>@program {…}</c> header line (name, kind, display page) — for
+    /// exporting a .srs file; parsing without a base reads it back.</summary>
+    [JsonPropertyName("includeHeader")] public bool       IncludeHeader { get; set; }
 }
 
 /// <summary>ParseProgramText { text, base?, validate? } (docs/program-language.md §6.9).</summary>

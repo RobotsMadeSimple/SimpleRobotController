@@ -269,7 +269,7 @@ internal sealed class BuiltProgramCommands
         }
     }
 
-    private ValidationContext BuildValidationContext()
+    internal ValidationContext BuildValidationContext()
     {
         var repo   = _robot.builtProgramRepo;
         var vision = _robot.VisionRepo;

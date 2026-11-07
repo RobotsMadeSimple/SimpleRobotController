@@ -1,0 +1,182 @@
+#!srs 1
+var count = 0
+var ok: bool = on
+var label: string = "Bin {$i}"
+var pts: list point = ((x=1, y=2, z=3), (x=4, rz=90))
+var vals: list number = (1, 2.5, 3)
+var flags: list bool = (on, off)
+var cells: list record = ((row=0, col=1), (row=1, col=0))
+var photo: image
+var lap: stopwatch
+var startZ = $robot.z
+computed area = $count * 2
+computed ready: bool = $area > 100 and $ok
+global persistent monitor var runs = 0
+input var speed = 100
+param in height = 20
+param out found: bool = off
+param inout tally = 0
+var hit = 0
+var hitPts: list point
+var late: bool = off
+var choice = 0
+var qty = 0
+var r = 0
+var c = 0
+var i = 0
+var n = 0
+var delay = 100
+var code: string
+var move = 0
+var x = 0
+var w = 0
+var rec: list record
+var copy: list number
+
+## Motion
+@name "Approach"
+MoveL Pick1, speed=200, offset=(z=20)
+MoveJ "Pick 1", speed=50, accel=100, decel=100
+MoveL here, offset=(z=20)
+MoveL $pts[$i], blend=5
+MoveL Pick1, blend=on
+MoveL Pick1, blend=$r
+MoveL Pick1, offset=(x=1, z=$n), set=(z=30), toolOffset=(z=-5), local=Fixture1
+MoveL Pick1, until=$io.Nano.Load >= 2000, untilMode=record, untilPos=$hitPts, untilFlag=$hit
+JumpL Place1, z=50, zStart=40, zEnd=60
+JumpJ grid Tray[$r, $c], z=$n * 2
+JumpL stack Bins[$i], z=10
+MoveL "bin{$i}"
+MoveC Place1, via=Pick1, speed=50, tolerance=0.1
+ThreadMove distance=10, pitch=0.5, peck=on, peckDepth=2, peckRetract=1, exitHeight=5, reverseOut=on
+RunHoming
+SetJointPosition J3, 90
+SetJointPosition J1, ($n * 0.1)
+CncProgram "part.dxf", safeZ=5
+SetSpeedL 200, accel=500, decel=500
+SetSpeedJ 50
+SetBlendRadius 5
+SetSpeedFactor 50
+SetTool Gripper
+SetLocal Fixture1
+ClearLocal
+SavePosition $pts, mode=append
+SavePosition point Pick1
+
+## I/O
+SetOutput stb 1 on
+SetOutput relay 3 off, pulse=250ms, blocking=on
+SetOutput io "Arduino Nano" 4 on
+SetOutput stb 2 toggle
+SetOutput stb 2 ($count > 3)
+Wait 500ms
+Wait $delay
+Wait until $stb.in1 and $ok, timeout=5s, timedOut=$late, onTimeout=error
+Tare device="Arduino Nano", pin=2
+ReadLoadCell $w, device="Arduino Nano", pin=2, unit=g
+StartRecording $rec, device="Arduino Nano", pin=2
+StopRecording device="Arduino Nano", pin=2
+ExportData csv "logs/run-{$time_ms}.csv"
+  "weight" = $w
+  "series" = list $rec
+  "photo" = image $photo
+end
+AuxMove device=Aux, axis=0, unit=mm, distance=10, velocity=20, accel=50, absolute=on, wait=on
+AuxMove device=Aux, axis=0, steps=-200, until=$stb.in2
+AuxContinuous device=Aux, axis=0, velocity=-10, accel=50
+AuxStop device=Aux, axis=0, decel=1000, immediate=on
+AuxEnable on, device=Aux, axis=0
+GripperAction close, device=Aux, axis=1, until=$io.Nano.Grip >= 300
+GripperAction to 25, device=Aux, axis=1
+ConveyorAction forward, device=Aux, axis=2
+RotaryIndex +1, count=3, device=Aux, axis=3
+
+## Flow
+if $count > 5 and $ok
+  pause
+elif $count == 2
+  break
+else
+  continue
+end
+repeat 3 as $i
+  $count = $count + 1
+end
+repeat forever
+  return
+end
+while $stb.in1 == 0
+  Wait 10ms
+end
+for $x, $i in $vals
+  $vals.removeAt($i)
+end
+switch $n
+case 1, 2
+  status "one or two"
+case 3
+  status "three"
+default
+  status error "other"
+end
+try retry=2, delay=500ms
+  raise "No part at slot {$i}", code=noPart
+catch $label, code=$code, only=(waitTimeout, httpFailed)
+  status warning "{$label}"
+end
+exit "Done after {$count} parts"
+label again
+goto again
+call Pick
+call Pick(height=20, count=$n), out found=$ok
+stopwatch start $lap
+stopwatch reset $lap
+
+## Variables and lists
+$count = $count + 1
+$label = "Bin {$i}"
+$vals.append($w)
+$vals.insert(0, $w)
+$vals.removeAt($i)
+$vals.clear()
+$vals[$i] = $w
+$pts[$i].z = 10
+$pts.append(x=$robot.x, y=$robot.y, z=5)
+$pts.append()
+$cells.sort(by=value, desc)
+$vals.reverse()
+$copy.copyFrom($vals)
+
+## Vision and communication
+RunVision "Detect Parts", frame=robot, pass=$ok
+  "Top edge".angle -> $w
+  Board.cells -> $cells
+end
+CaptureImage $photo, camera=Top
+SaveImage "shots/{$time_ms}.jpg", camera="Side Cam"
+StartBackground Conveyor
+StopBackground Conveyor
+WaitForBackground Conveyor
+HttpRequest "http://192.168.4.10:8080/move", wait=on, timeout=5s
+  send "board" = list $cells
+  send "photo" = image $photo
+  send "n" = $count
+  receive "move" -> $move
+end
+HttpReceive "checkers", timeout=60s
+  receive "x" -> $x
+end
+prompt "Load the tray, then continue", title="Setup", buttons=("Continue", "Skip"), result=$choice
+prompt "How many parts?", input=number, default=10, min=1, max=50, value=$qty, timeout=60s, onTimeout=0
+plugin scale.weigh, timeout=5s
+  samples = $n * 2
+  unit = "g"
+  grams -> $w
+end
+unknown "MoveWithForce"
+
+# A note paragraph
+# over two lines
+
+@off
+SetSpeedJ 10

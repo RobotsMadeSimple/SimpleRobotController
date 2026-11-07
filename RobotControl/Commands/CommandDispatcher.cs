@@ -44,7 +44,8 @@ internal sealed class CommandDispatcher
         new LocalCommands(robot).Register(d);
         new GridCommands(robot).Register(d);
         new StackCommands(robot).Register(d);
-        new BuiltProgramCommands(robot, programs, executor, background).Register(d);
+        var built = new BuiltProgramCommands(robot, programs, executor, background);
+        built.Register(d);
         new RevisionCommands(robot).Register(d);
         new ProgramCycleCommands(robot, programs, executor).Register(d);
         new IoCommands(robot).Register(d);
@@ -57,7 +58,7 @@ internal sealed class CommandDispatcher
         // Program editor v2 (docs/program-language.md §8): the catalog, and the text-language,
         // operator-prompt and debugger commands (stubs until packages B, C and D land).
         new StepCatalogCommands().Register(d);
-        new LanguageCommands().Register(d);
+        new LanguageCommands(robot, built.BuildValidationContext).Register(d);
         new OperatorCommands(programs).Register(d);
         new DebugCommands(executor).Register(d);
         return d;
