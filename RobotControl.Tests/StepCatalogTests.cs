@@ -243,7 +243,8 @@ public class StepCatalogTests
         Assert.True(d.TryGet("GetStepCatalog", out var get));
         Assert.IsType<StepCatalogInfo>(get(new CommandMessage()).Result);
 
-        foreach (var name in new[] { "FormatProgramText", "ParseProgramText", "StepBuiltProgram", "SetBreakpoints" })
+        // StepBuiltProgram / SetBreakpoints are real now (package B; DebuggerTests).
+        foreach (var name in new[] { "FormatProgramText", "ParseProgramText" })
         {
             Assert.True(d.TryGet(name, out var h), name);
             var ex = Assert.Throws<CommandNotImplementedException>(() => h(new CommandMessage()).GetAwaiter().GetResult());

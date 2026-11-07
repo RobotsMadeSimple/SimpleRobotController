@@ -366,6 +366,68 @@ namespace Controller.RobotControl.Execution
             }
         }
 
+        // ── Routine parameters (docs/program-language.md §4.2) ────────────────
+
+        /// <summary>
+        /// The value a CallRoutine argument gives <paramref name="param"/>, evaluated now — in the
+        /// caller's scope, before the routine's variables are (re)initialised. A text parameter
+        /// takes a template; a list parameter takes a list variable reference (<c>$name</c>, copied);
+        /// a number or boolean parameter takes an expression (a boolean is stored 0 / 1).
+        /// Unknown variables and syntax errors propagate like everywhere else.
+        /// </summary>
+        public object EvaluateParamArg(ProgramVariable param, string arg)
+        {
+            if (param.IsString == true) return Interpolate(arg);
+            if (param.ToListVar() != null)
+            {
+                var name = arg.Trim().TrimStart('$');
+                if (_listVariables.TryGetValue(name, out var list)) return CloneList(list);
+                throw new InvalidOperationException(
+                    $"argument for list parameter '{param.Name}' must be a list variable, got '{arg}'");
+            }
+            double v = Eval.Evaluate(arg);
+            return param.IsBoolean == true ? (Math.Abs(v) > 1e-9 ? 1.0 : 0.0) : v;
+        }
+
+        /// <summary>Writes a value from <see cref="EvaluateParamArg"/> into the parameter.</summary>
+        public void AssignParam(ProgramVariable param, object value)
+        {
+            switch (value)
+            {
+                case string s:  SetString(param.Name, s); break;
+                case ListVar l: SetList(param.Name, l);   break;
+                case double d:  Set(param.Name, d);       break;
+            }
+        }
+
+        /// <summary>
+        /// Copies variable <paramref name="from"/> into <paramref name="to"/> (a routine's out /
+        /// inOut parameter back into the caller's variable): text → text, list → a copy of the
+        /// list, anything else as its number. False when <paramref name="from"/> holds nothing.
+        /// </summary>
+        public bool CopyVariable(string from, string to)
+        {
+            if (_stringVariables.TryGetValue(from, out var s)) { SetString(to, s); return true; }
+            if (_listVariables.TryGetValue(from, out var l))   { SetList(to, CloneList(l)); return true; }
+            if (MergedVars().TryGetValue(from, out var v) || TryEvaluateComputed(from, out v))
+            {
+                Set(to, v);
+                return true;
+            }
+            return false;
+        }
+
+        private static ListVar CloneList(ListVar l) => new()
+        {
+            ElementType = l.ElementType,
+            Items = l.Items.ConvertAll(r =>
+            {
+                var c = new ObjectRecord();
+                foreach (var kv in r) c[kv.Key] = kv.Value;
+                return c;
+            }),
+        };
+
         /// <summary>
         /// Override declared input variables from a launch-time seed map (StartProgram's
         /// <c>variables</c>). Applied right after <see cref="Initialize"/>, so a seeded value wins

@@ -384,6 +384,7 @@ namespace Controller.RobotControl.Validation
                             Implicit(m.VariableName, o.Type == "boolean" ? SymKind.Boolean : SymKind.Number);
                 foreach (var m in s.JsonInbound ?? [])        Implicit(m.VariableName, SymKind.Number);
                 foreach (var m in s.HttpReceiveInbound ?? []) Implicit(m.VariableName, SymKind.Number);
+                CollectImplicitFlow(s); // package B: Try error variables, routine outputs
             }
 
             private Sym? Lookup(string name)
@@ -967,9 +968,9 @@ namespace Controller.RobotControl.Validation
                     StringComparer.OrdinalIgnoreCase));
 
                 _callStack.Add(routine);
-                // Routine frames sit on top of the caller's at run time, so a GoToLabel in the
-                // routine can reach the caller's labels too.
-                WalkList(routine.Steps ?? new(), prefix + "steps", chain, new Body());
+                // A routine is its own scope for jumps: a GoToLabel (or Break / Next) in it never
+                // reaches the caller's labels or loops (the executor's Routine frame boundary).
+                WalkList(routine.Steps ?? new(), prefix + "steps", new List<List<ProgramStep>>(), new Body());
                 _callStack.RemoveAt(_callStack.Count - 1);
             }
 

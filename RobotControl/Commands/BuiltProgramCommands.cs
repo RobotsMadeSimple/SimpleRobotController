@@ -103,14 +103,20 @@ internal sealed class BuiltProgramCommands
     private void ExecuteBuiltProgram(CommandMessage msg)
     {
         var p    = CommandJson.LoadParams<ExecuteBuiltProgramParams>(msg);
-        // Run-from-step, breakpoints and step mode (docs/program-language.md §4.2) are not wired
-        // into the executor yet. Refuse rather than ignore them: running from the top when the
-        // operator asked to start mid-program, or straight past a breakpoint, would move the robot
-        // somewhere they did not expect.
-        if (p.HasDebugOptions)
-            throw new InvalidOperationException(
-                "notImplemented: run from step, breakpoints and step mode are not implemented on this controller yet");
         var prog = _robot.builtProgramRepo.Get(p.Name);
+
+        // Run from a step, breakpoints and step mode (docs/program-language.md §4.2). A start
+        // step that cannot be reached is refused here, before anything moves — never silently
+        // run from the top instead.
+        ProgramExecutor.DebugOptions? debug = null;
+        if (p.HasDebugOptions)
+        {
+            if (prog == null) throw new InvalidOperationException($"Program '{p.Name}' not found");
+            if (!string.IsNullOrEmpty(p.StartAtStepId) && ProgramExecutor.CheckStartAt(prog, p.StartAtStepId) is { } why)
+                throw new InvalidOperationException($"Cannot run from this step: {why}");
+            debug = new ProgramExecutor.DebugOptions(p.StartAtStepId, p.Breakpoints, p.StepMode == true);
+        }
+
         if (prog != null)
         {
             _robot.DisplaceRunningBuiltProgram(p.Name);
@@ -119,7 +125,7 @@ internal sealed class BuiltProgramCommands
             // delaying the program's first move by a second or more.
             _robot.StopJog();
             var imgBytes = _robot.builtProgramRepo.GetImage(p.Name);
-            _executor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null);
+            _executor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null, debug: debug);
         }
     }
 

@@ -1,3 +1,4 @@
+using Controller.RobotControl.Programs;
 using Controller.RobotControl.Vision;
 using Controller.RobotControl.Vision.Calibration;
 
@@ -61,7 +62,7 @@ namespace Controller.RobotControl.Execution
                     // Processor was stopped externally — treat as error
                     vision.Awaiting  = false;
                     vision.ProgramId = null;
-                    return ctx.Finish(ProgramStatus.Error, $"Vision processor lost for '{step.VisionProgramName}'");
+                    return ctx.Fail(ErrorCodes.VisionFailed, $"Vision processor lost for '{step.VisionProgramName}'");
                 }
 
                 var result = proc.GetLatestResult();
@@ -72,8 +73,15 @@ namespace Controller.RobotControl.Execution
                     // 0 or less waits forever).
                     int timeout = step.WaitTimeoutMs ?? DefaultVisionTimeoutMs;
                     if (timeout > 0 && NowMs() - vision.StartMs >= timeout)
-                        return ctx.Finish(ProgramStatus.Error,
+                    {
+                        // Stopped here (not only by the run's reset): a Try may catch this and
+                        // run the vision program again.
+                        ctrl.VisionManager.StopProgram(vision.ProgramId!);
+                        vision.Awaiting  = false;
+                        vision.ProgramId = null;
+                        return ctx.Fail(ErrorCodes.VisionTimeout,
                             $"Vision → {step.VisionProgramName ?? programId}: no result within {timeout} ms");
+                    }
                     return StepOutcome.Yield;
                 }
 
@@ -84,7 +92,7 @@ namespace Controller.RobotControl.Execution
                     ctrl.VisionManager.StopProgram(vision.ProgramId!);
                     vision.Awaiting  = false;
                     vision.ProgramId = null;
-                    return ctx.Finish(ProgramStatus.Error, $"Vision → {step.VisionProgramName ?? programId}: {frameError}");
+                    return ctx.Fail(ErrorCodes.VisionFailed, $"Vision → {step.VisionProgramName ?? programId}: {frameError}");
                 }
                 VisionStepOutputs.WriteOutputs(step, result, ctx.Vars, outputFrame);
 
@@ -147,7 +155,7 @@ namespace Controller.RobotControl.Execution
 
                 var frameBytes = LatestFrame(ctx, cameraId);
                 if (frameBytes == null || frameBytes.Length == 0)
-                    return ctx.Finish(ProgramStatus.Error,
+                    return ctx.Fail(ErrorCodes.VisionFailed,
                         $"CaptureImage: no frame available from camera '{CameraLabel(cameraId)}'");
 
                 ctx.Vars.SetImage(varName, Convert.ToBase64String(frameBytes));
@@ -175,7 +183,7 @@ namespace Controller.RobotControl.Execution
                 var cameraId   = step.SaveImageCameraId ?? "";
                 var frameBytes = LatestFrame(ctx, cameraId);
                 if (frameBytes == null || frameBytes.Length == 0)
-                    return ctx.Finish(ProgramStatus.Error,
+                    return ctx.Fail(ErrorCodes.VisionFailed,
                         $"SaveImage: no frame available from camera '{CameraLabel(cameraId)}'");
 
                 try

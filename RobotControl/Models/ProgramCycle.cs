@@ -56,8 +56,12 @@ public class ProgramModel
     public double? CurrentToolOffsetRY { get; set; }
     public double? CurrentToolOffsetRZ { get; set; }
 
-    /// <summary>Id of the step most recently started (built programs); null when idle or unknown.</summary>
+    /// <summary>Id of the step most recently started (built programs); null when idle or unknown.
+    /// After an Error it is the step that failed.</summary>
     public string? CurrentStepId { get; set; }
+    /// <summary>The error code of a run that ended in Error (<c>Programs.ErrorCodes</c>, or a Raise
+    /// Error step's own code); null otherwise or when unknown. Cleared when a new run starts.</summary>
+    public string? ErrorCode { get; set; }
     /// <summary>
     /// Why a Stopped program is paused: "breakpoint" | "step" (step mode) | "pauseStep" (a
     /// PauseProgram step) | "user" (Stop). Null while running or after it finishes.
@@ -133,6 +137,10 @@ public class ProgramCycleUpdate
 
     [JsonPropertyName("errorDescription")]
     public string? ErrorDescription { get; set; }
+
+    /// <summary>The run's error code (with an Error status); null leaves it unchanged.</summary>
+    [JsonPropertyName("errorCode")]
+    public string? ErrorCode { get; set; }
 
     [JsonPropertyName("warningDescription")]
     public string? WarningDescription { get; set; }

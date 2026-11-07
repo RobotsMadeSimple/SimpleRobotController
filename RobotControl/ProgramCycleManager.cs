@@ -99,6 +99,7 @@ namespace Controller.RobotControl
                 if (update.CurrentStepNumber.HasValue) program.CurrentStepNumber    = update.CurrentStepNumber.Value;
                 if (update.MaxStepCount.HasValue)      program.MaxStepCount         = update.MaxStepCount.Value;
                 if (update.ErrorDescription      != null && update.ErrorDescription   != program.ErrorDescription)   { program.ErrorDescription   = update.ErrorDescription;   listLevelChanged = true; }
+                if (update.ErrorCode             != null && update.ErrorCode          != program.ErrorCode)          { program.ErrorCode          = update.ErrorCode;          listLevelChanged = true; }
                 if (update.WarningDescription    != null && update.WarningDescription != program.WarningDescription) { program.WarningDescription = update.WarningDescription; listLevelChanged = true; }
                 if (update.CurrentPointName != null)
                 {
@@ -248,6 +249,7 @@ namespace Controller.RobotControl
                 program.MaxStepCount           = maxStepCount;
                 program.CurrentStepDescription = "";
                 program.ErrorDescription       = "";
+                program.ErrorCode              = null;
                 program.WarningDescription     = "";
                 program.CurrentStepId          = null;
                 ClearPauseAndPrompt(program);
@@ -296,6 +298,7 @@ namespace Controller.RobotControl
                     p.MaxStepCount           = maxSteps;
                     p.CurrentStepDescription = "";
                     p.ErrorDescription       = "";
+                    p.ErrorCode              = null;
                     p.WarningDescription     = "";
                     p.CurrentStepId          = null;
                     ClearPauseAndPrompt(p);
@@ -346,6 +349,7 @@ namespace Controller.RobotControl
                     runCount               = p.RunCount,
                     lastStartedUnixMs      = p.LastStartedUnixMs,
                     errorDescription       = p.ErrorDescription,
+                    errorCode              = p.ErrorCode,
                     warningDescription     = p.WarningDescription,
                     currentPointName    = p.CurrentPointName,
                     currentOffsetX      = p.CurrentOffsetX,

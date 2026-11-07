@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Controller.RobotControl.Plugins;
+using Controller.RobotControl.Programs;
 
 namespace Controller.RobotControl.Execution
 {
@@ -41,9 +42,9 @@ namespace Controller.RobotControl.Execution
                     st.Clear();
                     frame.WaitStarted = false;
                     if (!reply.Ok)
-                        return ctx.Finish(ProgramStatus.Error, $"{label}: {reply.Message ?? reply.Error ?? "failed"}");
+                        return ctx.Fail(ErrorCodes.PluginFailed, $"{label}: {reply.Message ?? reply.Error ?? "failed"}");
                     if (ApplyOutputs(step, def, reply, ctx.Vars, label) is { } error)
-                        return ctx.Finish(ProgramStatus.Error, error);
+                        return ctx.Fail(ErrorCodes.PluginFailed, error);
                     return StepOutcome.Advance;
                 }
 
@@ -53,7 +54,7 @@ namespace Controller.RobotControl.Execution
                     int timeout = st.TimeoutMs;
                     st.Reset("timeout");
                     frame.WaitStarted = false;
-                    return ctx.Finish(ProgramStatus.Error, $"Plugin step '{stepLabel}' timed out after {timeout} ms");
+                    return ctx.Fail(ErrorCodes.PluginTimeout, $"Plugin step '{stepLabel}' timed out after {timeout} ms");
                 }
                 return StepOutcome.Yield;
             }
@@ -69,7 +70,7 @@ namespace Controller.RobotControl.Execution
                 if (def is null)
                     return ctx.Finish(ProgramStatus.Error, $"Plugin '{host.Id}' has no step '{step.PluginStepId}'");
                 if (!host.IsRunning)
-                    return ctx.Finish(ProgramStatus.Error, $"Plugin '{host.Id}' is not running");
+                    return ctx.Fail(ErrorCodes.PluginNotRunning, $"Plugin '{host.Id}' is not running");
 
                 string label = $"{host.Name}: {(string.IsNullOrWhiteSpace(def.Label) ? def.Id : def.Label)}";
                 var request = new PluginStepRequest
@@ -101,7 +102,7 @@ namespace Controller.RobotControl.Execution
                 }
                 catch (PluginNotRunningException ex)
                 {
-                    return ctx.Finish(ProgramStatus.Error, ex.Message);
+                    return ctx.Fail(ErrorCodes.PluginNotRunning, ex.Message);
                 }
 
                 int timeout = step.PluginTimeoutMs ?? def.TimeoutMs;

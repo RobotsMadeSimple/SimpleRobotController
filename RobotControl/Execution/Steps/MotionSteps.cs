@@ -110,7 +110,10 @@ namespace Controller.RobotControl.Execution
                     || MoveStopConditions.HasCondition(nxt)) break;
                 // Resolve relative to the previous waypoint so "current position" moves chain
                 // off where the robot actually ends up, not where the blend started.
-                if (!ctx.ResolveMoveTarget(nxt, out Vector6 t, waypoints[^1])) return StepOutcome.Finished;
+                // A later move whose target does not resolve ends the run before it: the moves
+                // up to it still blend, and it then fails on its own turn (where a Try around
+                // it, or the error message, points at the right step).
+                if (!ctx.TryResolveMoveTarget(nxt, out Vector6 t, out _, waypoints[^1])) break;
                 run.Add(nxt);
                 waypoints.Add(t);
                 // A blend-on move with a zero radius stops here (terminates the run).
@@ -119,6 +122,8 @@ namespace Controller.RobotControl.Execution
             }
 
             if (run.Count < 2) return null; // only one move — nothing to blend
+            // The last move of a run cut short above was meant to blend into the next one; it
+            // now ends the run, so it is an exact stop (radius 0 below) — as at any run end.
 
             // Corner radius at waypoint k comes from the move arriving there; the final
             // waypoint is always an exact stop.

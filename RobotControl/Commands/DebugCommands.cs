@@ -1,14 +1,16 @@
 namespace Controller.RobotControl.Commands;
 
 /// <summary>
-/// Program debugging (docs/program-language.md §4.2, Debugging). Package A registers the names;
-/// package B fills them in:
+/// Program debugging (docs/program-language.md §4.2, Debugging), for the foreground program:
 /// <list type="bullet">
-/// <item><c>StepBuiltProgram {}</c> — run the paused foreground program's next step, then pause again (pauseReason "step").</item>
-/// <item><c>SetBreakpoints { stepIds }</c> (<see cref="SetBreakpointsParams"/>) — replace the running program's breakpoints.</item>
+/// <item><c>StepBuiltProgram {}</c> — a paused program runs its next step, then pauses again before
+/// the one after (pauseReason "step"); a running one pauses before its next step. Fails when no
+/// program is running or paused.</item>
+/// <item><c>SetBreakpoints { stepIds }</c> (<see cref="SetBreakpointsParams"/>) — replaces the running
+/// program's breakpoints → <c>{ count }</c>.</item>
 /// </list>
 /// The run options (startAtStepId, breakpoints, stepMode) ride ExecuteBuiltProgram
-/// (<see cref="ExecuteBuiltProgramParams"/>), which refuses them until B lands.
+/// (<see cref="ExecuteBuiltProgramParams"/>); Continue is the usual StartProgram / resume.
 /// </summary>
 internal sealed class DebugCommands
 {
@@ -18,7 +20,21 @@ internal sealed class DebugCommands
 
     public void Register(CommandDispatcher d)
     {
-        d.Add("StepBuiltProgram", CommandNotImplementedException.Handler("StepBuiltProgram"));
-        d.Add("SetBreakpoints",   CommandNotImplementedException.Handler("SetBreakpoints"));
+        d.Add("StepBuiltProgram", StepBuiltProgram);
+        d.Add("SetBreakpoints",   SetBreakpoints);
+    }
+
+    private object? StepBuiltProgram(CommandMessage msg)
+    {
+        if (_executor == null || !_executor.StepOnce())
+            throw new InvalidOperationException("No program is running or paused");
+        return new { programName = _executor.CurrentProgramName };
+    }
+
+    private object? SetBreakpoints(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<SetBreakpointsParams>(msg);
+        int count = _executor?.SetBreakpoints(p.StepIds) ?? 0;
+        return new { count };
     }
 }

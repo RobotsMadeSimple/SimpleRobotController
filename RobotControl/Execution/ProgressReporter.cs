@@ -112,6 +112,8 @@ namespace Controller.RobotControl.Execution
 
         public void Reset()
         {
+            // _failStepId / _failCode survive: Finish resets the run state before it reports
+            // the terminal status that reads them (they are cleared there and on Starting).
             GlobalStepIndex        = 0;
             CurrentStepDescription = "";
             StepCount              = 0;
@@ -247,6 +249,19 @@ namespace Controller.RobotControl.Execution
             });
         }
 
+        /// <summary>A Try caught a failure (package B): logged with what happens next
+        /// (<paramref name="outcome"/>: "retry 1 of 3", "running the catch steps", "ignored").</summary>
+        public void ErrorCaught(ProgramStep tryStep, string code, string message, string outcome) =>
+            _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+            {
+                ProgramName       = ProgramName,
+                ProgramStatus     = ProgramStatus.Running,
+                CurrentStepNumber = GlobalStepIndex,
+                CurrentStepId     = tryStep.Id,
+                StepDescription   = $"[Caught {code}] {message} — {outcome}",
+                ShouldLog         = true,
+            });
+
         public void SkippedInBackground(ProgramStep step)
         {
             PublishSkipped(step);
@@ -281,6 +296,8 @@ namespace Controller.RobotControl.Execution
 
             // Clear any terminal state so the incoming Running update is not blocked by the guard
             _programManager.ResetToReady(program.Name, totalSteps);
+            _failStepId = null;
+            _failCode   = null;
             _programManager.MarkStarted(program.Name);
             RunCount   = RunCounts.AddOrUpdate(program.Name, 1, (_, n) => n + 1);
             StepCount  = totalSteps;
@@ -339,9 +356,28 @@ namespace Controller.RobotControl.Execution
             _programManager.SetPauseState(ProgramName, PauseReasons.PauseStep, null);
         }
 
+        // What the next Error ending is about (package B): the failing step and its error code.
+        private string? _failStepId;
+        private string? _failCode;
+
+        /// <summary>
+        /// Records the step that is failing and its error code, for the Error status that
+        /// follows: the monitor marks that step (not the last one that reported progress) and
+        /// shows the code. Consumed by the next <see cref="Finished"/>.
+        /// </summary>
+        public void Failing(ProgramStep? step, string? code)
+        {
+            _failStepId = step?.Id ?? _failStepId;
+            _failCode   = code ?? _failCode;
+        }
+
         /// <summary>The run's terminal status, with the move display cleared.</summary>
         public void Finished(ProgramStatus status, string description, int finalStepIndex)
         {
+            string? failStepId = status == ProgramStatus.Error ? _failStepId : null;
+            string? failCode   = status == ProgramStatus.Error ? _failCode   : null;
+            _failStepId = null;
+            _failCode   = null;
             switch (status)
             {
                 case ProgramStatus.Error:
@@ -358,6 +394,8 @@ namespace Controller.RobotControl.Execution
                 CurrentStepNumber    = finalStepIndex,
                 StepDescription      = description,
                 ErrorDescription     = status == ProgramStatus.Error ? description : null,
+                ErrorCode            = failCode,
+                CurrentStepId        = failStepId,
                 CurrentPointName  = "",
                 CurrentOffsetX   = null, CurrentOffsetY  = null, CurrentOffsetZ  = null,
                 CurrentOffsetRX  = null, CurrentOffsetRY = null, CurrentOffsetRZ = null,

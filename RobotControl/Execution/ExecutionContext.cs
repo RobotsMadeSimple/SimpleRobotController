@@ -106,6 +106,10 @@ namespace Controller.RobotControl.Execution
 
         // ── Per-run state ─────────────────────────────────────────────────────
 
+        /// <summary>The step whose handler is running right now (set by the executor around each
+        /// dispatch); null between steps. An Error ending marks this step as the one that failed.</summary>
+        public ProgramStep? CurrentStep { get; set; }
+
         /// <summary>The program being run (set on Start; kept after it finishes).</summary>
         public BuiltProgram? Program { get; set; }
 
@@ -153,16 +157,115 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>
         /// A <em>runtime</em> failure with a catalog error code (<see cref="Programs.ErrorCodes"/>;
-        /// a RaiseError step may use its own identifier). Package B makes this unwind to an
-        /// enclosing Try when the code is catchable; until then it ends the program with an
-        /// error, exactly like <see cref="Finish"/>. Handlers call it instead of
+        /// a RaiseError step may use its own identifier). Handlers call it instead of
         /// <c>Finish(Error, …)</c> for anything a Try should be able to catch
         /// (docs/program-language.md §4.2, "Catchable vs fatal errors").
         /// </summary>
+        /// <remarks>
+        /// When the code is catchable and an enclosing Try (at any depth, routines included)
+        /// accepts it, the frames above that Try are abandoned and the Try either retries its
+        /// body or runs its catch steps — see <see cref="TryCatch"/>; the handler's step is then
+        /// not completed, and the program goes on next tick. Otherwise the program ends with the
+        /// error. Returns <see cref="StepOutcome.Yield"/> when caught, <see cref="StepOutcome.Finished"/>
+        /// when not — either way the handler just returns it.
+        /// </remarks>
         public StepOutcome Fail(string code, string message)
         {
-            _ = code; // carried for Try/catch (package B); not part of the program's error text
+            if (string.IsNullOrWhiteSpace(code)) code = Programs.ErrorCodes.UserError;
+            if (Programs.ErrorCodes.IsCatchable(code) && TryCatch(code, message)) return StepOutcome.Yield;
+            Progress.Failing(CurrentStep, code);
             return Finish(ProgramStatus.Error, message);
+        }
+
+        /// <summary>
+        /// Bumped whenever a Try catches a failure (the frame stack was rewritten). The debugger
+        /// uses it so a retried step counts as a fresh step for step mode and breakpoints.
+        /// </summary>
+        public int CatchGeneration { get; private set; }
+
+        /// <summary>Whether the Try <paramref name="tryStep"/> catches <paramref name="code"/>:
+        /// an empty catchCodes list catches every catchable code.</summary>
+        internal static bool Catches(ProgramStep tryStep, string code)
+        {
+            var codes = tryStep.CatchCodes;
+            if (codes == null || codes.Count == 0 || codes.All(string.IsNullOrWhiteSpace)) return true;
+            return codes.Any(c => string.Equals(c?.Trim(), code, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Unwinds to the innermost Try body frame that catches <paramref name="code"/>. With
+        /// retries left it restarts the body (after tryRetryDelayMs); otherwise it pops the Try,
+        /// writes the error variables and pushes the catch steps (an empty catch: carry on after
+        /// the block). False when no Try on the stack catches the code.
+        /// </summary>
+        private bool TryCatch(string code, string message)
+        {
+            var frames = Frames.ToArray(); // innermost first
+            for (int i = 0; i < frames.Length; i++)
+            {
+                var tf = frames[i];
+                if (tf.Kind != FrameKind.Try || tf.TryStep is not { } t || !Catches(t, code)) continue;
+
+                // Abandon everything inside the Try: loops, branches and whole routine calls
+                // (whose out-parameters are not copied back — the call did not finish).
+                for (int k = 0; k < i; k++) Frames.Pop();
+                ClearStepState();
+                CatchGeneration++;
+
+                int retries = Math.Max(0, t.TryRetries ?? 0); // literal only (the catalog marks no exprKey)
+                if (tf.TryAttempt < retries)
+                {
+                    tf.TryAttempt++;
+                    tf.Index       = 0;
+                    tf.WaitStarted = false;
+                    int delay = Math.Max(0, t.TryRetryDelayMs ?? 0);
+                    tf.ResumeAtMs = delay > 0 ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + delay : 0;
+                    Progress.ErrorCaught(t, code, message, $"retry {tf.TryAttempt} of {retries}");
+                    return true;
+                }
+
+                Frames.Pop(); // the Try body itself
+                if (!string.IsNullOrWhiteSpace(t.ErrorVariableName))
+                    Vars.SetString(t.ErrorVariableName.Trim().TrimStart('$'), message);
+                if (!string.IsNullOrWhiteSpace(t.ErrorCodeVariableName))
+                    Vars.SetString(t.ErrorCodeVariableName.Trim().TrimStart('$'), code);
+                var catchSteps = t.CatchSteps ?? new();
+                if (catchSteps.Count > 0) Frames.Push(StepListFrame.Plain(catchSteps));
+                Progress.ErrorCaught(t, code, message, catchSteps.Count > 0 ? "running the catch steps" : "ignored");
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Per-step multi-tick state the failed step may have left behind (a vision processor
+        /// still running, a Jump between legs). Pending async work of <em>earlier</em> steps (a
+        /// fire-and-continue HTTP request, output pulses, recordings) is left alone.
+        /// </summary>
+        private void ClearStepState()
+        {
+            Vision.Reset(Controller);
+            Jump.Reset();
+            ThreadMove.Reset();
+        }
+
+        /// <summary>
+        /// Leaves a routine frame (its body ran out, or a Return): copies each mapped out / inOut
+        /// parameter into the caller's variable. A mapping whose key is not an out / inOut
+        /// parameter of the routine is ignored (the validator reports it).
+        /// </summary>
+        public void LeaveRoutine(StepListFrame routineFrame)
+        {
+            if (routineFrame.Kind != FrameKind.Routine || routineFrame.RoutineOutputs is not { Count: > 0 } outs) return;
+            var routine = routineFrame.Routine;
+            foreach (var m in outs)
+            {
+                if (m == null || string.IsNullOrWhiteSpace(m.Key) || string.IsNullOrWhiteSpace(m.VariableName)) continue;
+                var param = routine?.Variables?.FirstOrDefault(v =>
+                    string.Equals(v.Name, m.Key.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (param?.ParamMode is not (ParamModes.Out or ParamModes.InOut)) continue;
+                Vars.CopyVariable(param.Name, m.VariableName.Trim().TrimStart('$'));
+            }
         }
 
         /// <summary>Pauses the program in place (PauseProgram step).</summary>
@@ -303,15 +406,28 @@ namespace Controller.RobotControl.Execution
         // ── Shared helpers ────────────────────────────────────────────────────
 
         /// <summary>Resolves a move target (see <see cref="MoveTargetResolver"/>); on failure
-        /// finishes the program with the error and returns false.</summary>
+        /// fails the step and returns false. A computed target (<c>pointNameExpr</c>: a template
+        /// naming a saved point, or a points-variable element) that resolves to nothing fails with
+        /// the catchable <c>pointNotFound</c>; a missing saved point, grid or stack picked in the
+        /// editor is an authoring error and ends the program.</summary>
         public bool ResolveMoveTarget(ProgramStep step, out Vector6 target, Vector6? currentPos = null)
         {
-            if (MoveTargetResolver.TryResolve(step, TargetSources, Vars, ActiveLocal, LivePosition,
-                                              out target, out var error, currentPos))
-                return true;
-            Finish(ProgramStatus.Error, error);
+            if (TryResolveMoveTarget(step, out target, out var error, currentPos)) return true;
+            if (IsComputedTarget(step)) Fail(Programs.ErrorCodes.PointNotFound, error);
+            else Finish(ProgramStatus.Error, error);
             return false;
         }
+
+        /// <summary>Resolves a move target with no side effects (false + the error text).</summary>
+        public bool TryResolveMoveTarget(ProgramStep step, out Vector6 target, out string error, Vector6? currentPos = null) =>
+            MoveTargetResolver.TryResolve(step, TargetSources, Vars, ActiveLocal, LivePosition,
+                                          out target, out error, currentPos);
+
+        /// <summary>The target comes from <c>pointNameExpr</c> (the resolver's precedence: grid,
+        /// stack and the legacy variable point win over it).</summary>
+        private static bool IsComputedTarget(ProgramStep step) =>
+            step.GridPoint == null && step.StackPoint == null && string.IsNullOrEmpty(step.VarPointName)
+            && !string.IsNullOrEmpty(step.PointNameExpr);
 
         /// <summary>Evaluates a while-loop condition; an unknown variable or a syntax error
         /// finishes the program with an error and reads as false.</summary>

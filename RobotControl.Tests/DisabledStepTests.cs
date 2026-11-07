@@ -135,6 +135,24 @@ public sealed class DisabledStepTests : IDisposable
         Assert.Equal(1, _exec.EvaluateLive("$x"));
     }
 
+    [Fact]
+    public void DisabledFlowBlocksDoNothing()
+    {
+        // A disabled Break does not leave the loop; a disabled Raise does not fail; a disabled
+        // Try skips its body.
+        var loop = Step(StepType.Loop, s =>
+        {
+            s.LoopCount = 3;
+            s.LoopSteps = [Set("x", "$x + 1"), Step(StepType.LoopControl, b => { b.LoopControl = "break"; b.Enabled = false; })];
+        });
+        var raise = Step(StepType.RaiseError, r => { r.ErrorMessage = "no"; r.Enabled = false; });
+        var tr = Step(StepType.Try, t => { t.Enabled = false; t.TrySteps = [Set("y", "9")]; });
+        Run(Prog(loop, raise, tr));
+        Assert.Equal("Complete", Summary().GetProperty("status").GetString());
+        Assert.Equal(3, _exec.EvaluateLive("$x"));
+        Assert.Equal(0, _exec.EvaluateLive("$y"));
+    }
+
     // ── Validator ─────────────────────────────────────────────────────────────
 
     [Fact]
