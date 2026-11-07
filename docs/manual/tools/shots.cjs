@@ -3,7 +3,8 @@
 // Needs: a THROWAWAY controller seeded by seed.mjs, and the Expo web app on :8081.
 //   copy docs/manual/tools/shots.cjs into SimpleRobotApp/, then from SimpleRobotApp/:
 //   CTRL_PORT=9124 node shots.cjs [ref|main|all]      (default all), and delete the copy.
-// Uses the app's own Playwright (SimpleRobotApp/node_modules).
+// Uses the app's own Playwright (SimpleRobotApp/node_modules). Existing ref-*.png are kept unless
+// FORCE=1, so an interrupted run can be resumed.
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
@@ -41,6 +42,15 @@ async function openBuilder(page, name) {
 
 async function refShots(page) {
   for (const s of ref.steps) {
+    const file = path.join(OUT, `ref-${s.type}.png`);
+    if (fs.existsSync(file) && !process.env.FORCE) { note(`ref-${s.type}`, `${s.name} in the Blocks editor`); continue; }
+    try { await refShot(page, s); } catch (e) { console.log(`! ${s.type}: ${String(e.message).split(/\r?\n/)[0]}`); }
+  }
+  console.log(" reference shots done");
+}
+
+async function refShot(page, s) {
+  {
     await openBuilder(page, `Example ${s.type}`);
     const add = await vis(page.getByText("Add Step", { exact: true })).first().boundingBox();
     const hdr = await vis(page.getByText("STEPS", { exact: true })).first().boundingBox();
@@ -57,7 +67,6 @@ async function refShots(page) {
     note(`ref-${s.type}`, `${s.name} in the Blocks editor`);
     process.stdout.write(".");
   }
-  console.log(" reference shots done");
 }
 
 async function modal(page, programName, cardNo, label, desc, id, caption) {

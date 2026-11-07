@@ -405,6 +405,296 @@
       "caption": "A Prompt step shows its dialog on whatever screen the operator is on."
     },
     {
+      "id": "ref-AuxContinuous",
+      "file": "screens/ref-AuxContinuous.png",
+      "caption": "Aux Continuous Run in the Blocks editor"
+    },
+    {
+      "id": "ref-AuxEnable",
+      "file": "screens/ref-AuxEnable.png",
+      "caption": "Aux Motor Enable in the Blocks editor"
+    },
+    {
+      "id": "ref-AuxMove",
+      "file": "screens/ref-AuxMove.png",
+      "caption": "Aux Move in the Blocks editor"
+    },
+    {
+      "id": "ref-AuxStop",
+      "file": "screens/ref-AuxStop.png",
+      "caption": "Aux Stop in the Blocks editor"
+    },
+    {
+      "id": "ref-CallRoutine",
+      "file": "screens/ref-CallRoutine.png",
+      "caption": "Call Routine in the Blocks editor"
+    },
+    {
+      "id": "ref-CaptureImage",
+      "file": "screens/ref-CaptureImage.png",
+      "caption": "Capture Image in the Blocks editor"
+    },
+    {
+      "id": "ref-ClearLocal",
+      "file": "screens/ref-ClearLocal.png",
+      "caption": "Clear Local in the Blocks editor"
+    },
+    {
+      "id": "ref-CncProgram",
+      "file": "screens/ref-CncProgram.png",
+      "caption": "CNC Program in the Blocks editor"
+    },
+    {
+      "id": "ref-ConveyorAction",
+      "file": "screens/ref-ConveyorAction.png",
+      "caption": "Conveyor in the Blocks editor"
+    },
+    {
+      "id": "ref-EndProgram",
+      "file": "screens/ref-EndProgram.png",
+      "caption": "End Program in the Blocks editor"
+    },
+    {
+      "id": "ref-ExportData",
+      "file": "screens/ref-ExportData.png",
+      "caption": "Export Data in the Blocks editor"
+    },
+    {
+      "id": "ref-GoToLabel",
+      "file": "screens/ref-GoToLabel.png",
+      "caption": "Go To Label in the Blocks editor"
+    },
+    {
+      "id": "ref-GripperAction",
+      "file": "screens/ref-GripperAction.png",
+      "caption": "Gripper in the Blocks editor"
+    },
+    {
+      "id": "ref-HttpReceive",
+      "file": "screens/ref-HttpReceive.png",
+      "caption": "HTTP Receive in the Blocks editor"
+    },
+    {
+      "id": "ref-HttpRequest",
+      "file": "screens/ref-HttpRequest.png",
+      "caption": "HTTP Request in the Blocks editor"
+    },
+    {
+      "id": "ref-IfCondition",
+      "file": "screens/ref-IfCondition.png",
+      "caption": "If Condition in the Blocks editor"
+    },
+    {
+      "id": "ref-JumpJ",
+      "file": "screens/ref-JumpJ.png",
+      "caption": "Jump Joint in the Blocks editor"
+    },
+    {
+      "id": "ref-JumpL",
+      "file": "screens/ref-JumpL.png",
+      "caption": "Jump Linear in the Blocks editor"
+    },
+    {
+      "id": "ref-Label",
+      "file": "screens/ref-Label.png",
+      "caption": "Label in the Blocks editor"
+    },
+    {
+      "id": "ref-ListOp",
+      "file": "screens/ref-ListOp.png",
+      "caption": "List in the Blocks editor"
+    },
+    {
+      "id": "ref-Loop",
+      "file": "screens/ref-Loop.png",
+      "caption": "Loop in the Blocks editor"
+    },
+    {
+      "id": "ref-LoopControl",
+      "file": "screens/ref-LoopControl.png",
+      "caption": "Break / Next in the Blocks editor"
+    },
+    {
+      "id": "ref-MoveC",
+      "file": "screens/ref-MoveC.png",
+      "caption": "Move Arc in the Blocks editor"
+    },
+    {
+      "id": "ref-MoveJ",
+      "file": "screens/ref-MoveJ.png",
+      "caption": "Move Joint in the Blocks editor"
+    },
+    {
+      "id": "ref-MoveL",
+      "file": "screens/ref-MoveL.png",
+      "caption": "Move Linear in the Blocks editor"
+    },
+    {
+      "id": "ref-Note",
+      "file": "screens/ref-Note.png",
+      "caption": "Note in the Blocks editor"
+    },
+    {
+      "id": "ref-PauseProgram",
+      "file": "screens/ref-PauseProgram.png",
+      "caption": "Pause Program in the Blocks editor"
+    },
+    {
+      "id": "ref-Plugin",
+      "file": "screens/ref-Plugin.png",
+      "caption": "Plugin in the Blocks editor"
+    },
+    {
+      "id": "ref-Prompt",
+      "file": "screens/ref-Prompt.png",
+      "caption": "Prompt in the Blocks editor"
+    },
+    {
+      "id": "ref-RaiseError",
+      "file": "screens/ref-RaiseError.png",
+      "caption": "Raise Error in the Blocks editor"
+    },
+    {
+      "id": "ref-ReadLoadCell",
+      "file": "screens/ref-ReadLoadCell.png",
+      "caption": "Read Load Cell in the Blocks editor"
+    },
+    {
+      "id": "ref-Return",
+      "file": "screens/ref-Return.png",
+      "caption": "Return in the Blocks editor"
+    },
+    {
+      "id": "ref-RotaryIndex",
+      "file": "screens/ref-RotaryIndex.png",
+      "caption": "Rotary Index in the Blocks editor"
+    },
+    {
+      "id": "ref-RunHoming",
+      "file": "screens/ref-RunHoming.png",
+      "caption": "Run Homing in the Blocks editor"
+    },
+    {
+      "id": "ref-RunVision",
+      "file": "screens/ref-RunVision.png",
+      "caption": "Run Vision in the Blocks editor"
+    },
+    {
+      "id": "ref-SaveImage",
+      "file": "screens/ref-SaveImage.png",
+      "caption": "Save Image in the Blocks editor"
+    },
+    {
+      "id": "ref-SavePosition",
+      "file": "screens/ref-SavePosition.png",
+      "caption": "Save Position in the Blocks editor"
+    },
+    {
+      "id": "ref-SetBlendRadius",
+      "file": "screens/ref-SetBlendRadius.png",
+      "caption": "Set Blend Radius in the Blocks editor"
+    },
+    {
+      "id": "ref-SetJointPosition",
+      "file": "screens/ref-SetJointPosition.png",
+      "caption": "Set Joint Position in the Blocks editor"
+    },
+    {
+      "id": "ref-SetLocal",
+      "file": "screens/ref-SetLocal.png",
+      "caption": "Set Local in the Blocks editor"
+    },
+    {
+      "id": "ref-SetOutput",
+      "file": "screens/ref-SetOutput.png",
+      "caption": "Set Output in the Blocks editor"
+    },
+    {
+      "id": "ref-SetSpeedFactor",
+      "file": "screens/ref-SetSpeedFactor.png",
+      "caption": "Set Speed Factor in the Blocks editor"
+    },
+    {
+      "id": "ref-SetSpeedJ",
+      "file": "screens/ref-SetSpeedJ.png",
+      "caption": "Set Speed (Joint) in the Blocks editor"
+    },
+    {
+      "id": "ref-SetSpeedL",
+      "file": "screens/ref-SetSpeedL.png",
+      "caption": "Set Speed (Linear) in the Blocks editor"
+    },
+    {
+      "id": "ref-SetTool",
+      "file": "screens/ref-SetTool.png",
+      "caption": "Set Tool in the Blocks editor"
+    },
+    {
+      "id": "ref-SetVariable",
+      "file": "screens/ref-SetVariable.png",
+      "caption": "Set Variable in the Blocks editor"
+    },
+    {
+      "id": "ref-StartBackground",
+      "file": "screens/ref-StartBackground.png",
+      "caption": "Start Background in the Blocks editor"
+    },
+    {
+      "id": "ref-StartRecording",
+      "file": "screens/ref-StartRecording.png",
+      "caption": "Start Recording in the Blocks editor"
+    },
+    {
+      "id": "ref-StatusUpdate",
+      "file": "screens/ref-StatusUpdate.png",
+      "caption": "Status Update in the Blocks editor"
+    },
+    {
+      "id": "ref-StopBackground",
+      "file": "screens/ref-StopBackground.png",
+      "caption": "Stop Background in the Blocks editor"
+    },
+    {
+      "id": "ref-StopRecording",
+      "file": "screens/ref-StopRecording.png",
+      "caption": "Stop Recording in the Blocks editor"
+    },
+    {
+      "id": "ref-StopwatchControl",
+      "file": "screens/ref-StopwatchControl.png",
+      "caption": "Stopwatch in the Blocks editor"
+    },
+    {
+      "id": "ref-Switch",
+      "file": "screens/ref-Switch.png",
+      "caption": "Switch in the Blocks editor"
+    },
+    {
+      "id": "ref-Tare",
+      "file": "screens/ref-Tare.png",
+      "caption": "Tare Load Cell in the Blocks editor"
+    },
+    {
+      "id": "ref-ThreadMove",
+      "file": "screens/ref-ThreadMove.png",
+      "caption": "Thread Move in the Blocks editor"
+    },
+    {
+      "id": "ref-Try",
+      "file": "screens/ref-Try.png",
+      "caption": "Try in the Blocks editor"
+    },
+    {
+      "id": "ref-Wait",
+      "file": "screens/ref-Wait.png",
+      "caption": "Wait in the Blocks editor"
+    },
+    {
+      "id": "ref-WaitForBackground",
+      "file": "screens/ref-WaitForBackground.png",
+      "caption": "Wait for Background in the Blocks editor"
+    },
+    {
       "id": "step-picker",
       "file": "screens/step-picker.png",
       "caption": "Add Step opens the step picker, grouped by category."

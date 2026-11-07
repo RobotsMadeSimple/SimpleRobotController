@@ -77,7 +77,7 @@ call PickPart(slot=$i), out picked=$ok
 
 ## Card 5 — Expressions
 
-| | |
+| Topic | Names |
 |---|---|
 | Arithmetic | `+ - * / % ^` |
 | Compare | `== != < <= > >=` (→ 1 / 0) |
