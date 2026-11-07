@@ -1,0 +1,5109 @@
+{
+  "catalogVersion": 1,
+  "languageVersion": 1,
+  "categories": [
+    {
+      "key": "motion",
+      "label": "Motion",
+      "description": "Send the robot somewhere — points, jumps, arcs, threads and homing."
+    },
+    {
+      "key": "motionSettings",
+      "label": "Motion Settings",
+      "description": "Change how later moves behave: speed, blending, tool and frame."
+    },
+    {
+      "key": "flow",
+      "label": "Logic & Flow",
+      "description": "Decide what runs next — branches, loops, jumps, errors and pauses."
+    },
+    {
+      "key": "variables",
+      "label": "Variables & Timing",
+      "description": "Store values, edit lists, count time, and wait before continuing."
+    },
+    {
+      "key": "io",
+      "label": "I/O & Aux Axes",
+      "description": "Drive digital outputs, load cells and auxiliary stepper axes."
+    },
+    {
+      "key": "vision",
+      "label": "Vision",
+      "description": "Run camera inspections and capture or save images."
+    },
+    {
+      "key": "background",
+      "label": "Background",
+      "description": "Start, stop and wait on programs running in parallel."
+    },
+    {
+      "key": "comms",
+      "label": "Communication",
+      "description": "Talk to the operator and to other machines over HTTP."
+    },
+    {
+      "key": "plugins",
+      "label": "Plugins",
+      "description": "Steps provided by installed plugins."
+    }
+  ],
+  "errorCodes": [
+    {
+      "code": "waitTimeout",
+      "label": "Wait timed out",
+      "catchable": true
+    },
+    {
+      "code": "visionTimeout",
+      "label": "Vision timed out",
+      "catchable": true
+    },
+    {
+      "code": "visionFailed",
+      "label": "Vision failed",
+      "catchable": true
+    },
+    {
+      "code": "httpFailed",
+      "label": "HTTP request failed",
+      "catchable": true
+    },
+    {
+      "code": "httpTimeout",
+      "label": "HTTP request timed out",
+      "catchable": true
+    },
+    {
+      "code": "receiveTimeout",
+      "label": "HTTP receive timed out",
+      "catchable": true
+    },
+    {
+      "code": "pluginFailed",
+      "label": "Plugin step failed",
+      "catchable": true
+    },
+    {
+      "code": "pluginTimeout",
+      "label": "Plugin step timed out",
+      "catchable": true
+    },
+    {
+      "code": "pluginNotRunning",
+      "label": "Plugin not running",
+      "catchable": true
+    },
+    {
+      "code": "promptTimeout",
+      "label": "Prompt timed out",
+      "catchable": true
+    },
+    {
+      "code": "pointNotFound",
+      "label": "Point not found",
+      "catchable": true
+    },
+    {
+      "code": "arcDegenerate",
+      "label": "Arc points are in a line",
+      "catchable": true
+    },
+    {
+      "code": "indexOutOfRange",
+      "label": "List index out of range",
+      "catchable": true
+    },
+    {
+      "code": "userError",
+      "label": "Raised error",
+      "catchable": true
+    },
+    {
+      "code": "motionFault",
+      "label": "Motion fault",
+      "catchable": false
+    },
+    {
+      "code": "jointLimit",
+      "label": "Joint limit",
+      "catchable": false
+    },
+    {
+      "code": "driverDisconnected",
+      "label": "Driver disconnected",
+      "catchable": false
+    },
+    {
+      "code": "emergencyStop",
+      "label": "Emergency stop",
+      "catchable": false
+    },
+    {
+      "code": "userStop",
+      "label": "Stopped by user",
+      "catchable": false
+    },
+    {
+      "code": "unknownVariable",
+      "label": "Unknown variable",
+      "catchable": false
+    },
+    {
+      "code": "expressionSyntax",
+      "label": "Expression error",
+      "catchable": false
+    },
+    {
+      "code": "computedVariable",
+      "label": "Write to a computed variable",
+      "catchable": false
+    },
+    {
+      "code": "badListOperation",
+      "label": "List step does not fit the list",
+      "catchable": false
+    }
+  ],
+  "steps": [
+    {
+      "type": "MoveL",
+      "category": "motion",
+      "label": "Move Linear",
+      "description": "Move to a target in a straight line",
+      "keyword": "MoveL",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "MoveL <target>[, speed=…][, blend=…][, offset=(…)][, until=…]",
+      "summary": "→ {target} · {speed} · blend {blendRadius}",
+      "fields": [
+        {
+          "key": "target",
+          "arg": "",
+          "position": 0,
+          "label": "Target",
+          "group": "Target",
+          "kind": "target",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "gridRowIndex",
+            "gridColIndex",
+            "gridGridIndex",
+            "stackIndex"
+          ],
+          "required": false,
+          "help": "A saved point, a $points[i] element, a template naming a point, a grid or stack cell — or nothing for the current position (use with offsets).",
+          "props": [
+            "pointId",
+            "pointName",
+            "pointNameExpr",
+            "gridPoint",
+            "stackPoint"
+          ]
+        },
+        {
+          "key": "speed",
+          "arg": "speed",
+          "position": null,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": false,
+          "help": "Overrides the program's speed for this move only."
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        },
+        {
+          "key": "blend",
+          "arg": "blend",
+          "position": null,
+          "label": "Blend into next move",
+          "group": "Blending",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false,
+          "help": "Round the corner into the next move instead of stopping."
+        },
+        {
+          "key": "blendRadius",
+          "arg": "blendRadius",
+          "position": null,
+          "label": "Blend radius",
+          "group": "Blending",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "min": 0,
+          "exprKey": "blendRadius",
+          "required": false,
+          "showIf": {
+            "field": "blend",
+            "in": [
+              "true"
+            ]
+          },
+          "help": "Empty = the radius set by Set Blend Radius."
+        },
+        {
+          "key": "offset",
+          "arg": "offset",
+          "position": null,
+          "label": "Offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ],
+          "required": false,
+          "help": "Added to the target (relative move when there is no target).",
+          "props": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ]
+        },
+        {
+          "key": "override",
+          "arg": "set",
+          "position": null,
+          "label": "Override",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ],
+          "required": false,
+          "help": "Replaces an axis of the target outright.",
+          "props": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ]
+        },
+        {
+          "key": "toolOffset",
+          "arg": "toolOffset",
+          "position": null,
+          "label": "Tool offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ],
+          "required": false,
+          "help": "Applied in the tool frame at execution time.",
+          "props": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ]
+        },
+        {
+          "key": "localId",
+          "arg": "local",
+          "position": null,
+          "label": "Local frame",
+          "group": "Frame",
+          "kind": "localRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Run this move in a local frame instead of the active one.",
+          "props": [
+            "localId",
+            "localName"
+          ]
+        },
+        {
+          "key": "moveStopCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Stop condition",
+          "group": "Stop condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000."
+        },
+        {
+          "key": "moveStopMode",
+          "arg": "untilMode",
+          "position": null,
+          "label": "When true",
+          "group": "Stop condition",
+          "kind": "enum",
+          "default": "stop",
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "arg": "untilPos",
+          "position": null,
+          "label": "Position variable",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "A Points list set to the one pose where the condition fired.",
+          "varKinds": [
+            "list:Point"
+          ]
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "arg": "untilFlag",
+          "position": null,
+          "label": "Fired flag",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "MoveJ",
+      "category": "motion",
+      "label": "Move Joint",
+      "description": "Move to a target by joint interpolation",
+      "keyword": "MoveJ",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "MoveJ <target>[, speed=…][, offset=(…)][, until=…]",
+      "summary": "→ {target} · {speed}",
+      "fields": [
+        {
+          "key": "target",
+          "arg": "",
+          "position": 0,
+          "label": "Target",
+          "group": "Target",
+          "kind": "target",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "gridRowIndex",
+            "gridColIndex",
+            "gridGridIndex",
+            "stackIndex"
+          ],
+          "required": false,
+          "help": "A saved point, a $points[i] element, a template naming a point, a grid or stack cell — or nothing for the current position (use with offsets).",
+          "props": [
+            "pointId",
+            "pointName",
+            "pointNameExpr",
+            "gridPoint",
+            "stackPoint"
+          ]
+        },
+        {
+          "key": "speed",
+          "arg": "speed",
+          "position": null,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": false,
+          "help": "Overrides the program's speed for this move only."
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        },
+        {
+          "key": "offset",
+          "arg": "offset",
+          "position": null,
+          "label": "Offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ],
+          "required": false,
+          "help": "Added to the target (relative move when there is no target).",
+          "props": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ]
+        },
+        {
+          "key": "override",
+          "arg": "set",
+          "position": null,
+          "label": "Override",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ],
+          "required": false,
+          "help": "Replaces an axis of the target outright.",
+          "props": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ]
+        },
+        {
+          "key": "toolOffset",
+          "arg": "toolOffset",
+          "position": null,
+          "label": "Tool offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ],
+          "required": false,
+          "help": "Applied in the tool frame at execution time.",
+          "props": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ]
+        },
+        {
+          "key": "localId",
+          "arg": "local",
+          "position": null,
+          "label": "Local frame",
+          "group": "Frame",
+          "kind": "localRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Run this move in a local frame instead of the active one.",
+          "props": [
+            "localId",
+            "localName"
+          ]
+        },
+        {
+          "key": "moveStopCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Stop condition",
+          "group": "Stop condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000."
+        },
+        {
+          "key": "moveStopMode",
+          "arg": "untilMode",
+          "position": null,
+          "label": "When true",
+          "group": "Stop condition",
+          "kind": "enum",
+          "default": "stop",
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "arg": "untilPos",
+          "position": null,
+          "label": "Position variable",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "A Points list set to the one pose where the condition fired.",
+          "varKinds": [
+            "list:Point"
+          ]
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "arg": "untilFlag",
+          "position": null,
+          "label": "Fired flag",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "JumpL",
+      "category": "motion",
+      "label": "Jump Linear",
+      "description": "Lift, move linearly over the target, then lower",
+      "keyword": "JumpL",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "JumpL <target>, z=…[, zStart=…][, zEnd=…][, speed=…]",
+      "summary": "→ {target} · z {jumpZ}",
+      "fields": [
+        {
+          "key": "target",
+          "arg": "",
+          "position": 0,
+          "label": "Target",
+          "group": "Target",
+          "kind": "target",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "gridRowIndex",
+            "gridColIndex",
+            "gridGridIndex",
+            "stackIndex"
+          ],
+          "required": false,
+          "help": "A saved point, a $points[i] element, a template naming a point, a grid or stack cell — or nothing for the current position (use with offsets).",
+          "props": [
+            "pointId",
+            "pointName",
+            "pointNameExpr",
+            "gridPoint",
+            "stackPoint"
+          ]
+        },
+        {
+          "key": "jumpZ",
+          "arg": "z",
+          "position": null,
+          "label": "Lift height",
+          "group": "Jump",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "jumpZ",
+          "required": false,
+          "help": "Z used for the lift and lower legs."
+        },
+        {
+          "key": "jumpZStart",
+          "arg": "zStart",
+          "position": null,
+          "label": "Lift height (start)",
+          "group": "Jump",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "jumpZStart",
+          "required": false,
+          "help": "Overrides the lift leg only."
+        },
+        {
+          "key": "jumpZEnd",
+          "arg": "zEnd",
+          "position": null,
+          "label": "Lift height (end)",
+          "group": "Jump",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "jumpZEnd",
+          "required": false,
+          "help": "Overrides the lower leg only."
+        },
+        {
+          "key": "speed",
+          "arg": "speed",
+          "position": null,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": false,
+          "help": "Overrides the program's speed for this move only."
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        },
+        {
+          "key": "blend",
+          "arg": "blend",
+          "position": null,
+          "label": "Blend into next move",
+          "group": "Blending",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false,
+          "help": "Round the corner into the next move instead of stopping."
+        },
+        {
+          "key": "blendRadius",
+          "arg": "blendRadius",
+          "position": null,
+          "label": "Blend radius",
+          "group": "Blending",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "min": 0,
+          "exprKey": "blendRadius",
+          "required": false,
+          "showIf": {
+            "field": "blend",
+            "in": [
+              "true"
+            ]
+          },
+          "help": "Empty = the radius set by Set Blend Radius."
+        },
+        {
+          "key": "offset",
+          "arg": "offset",
+          "position": null,
+          "label": "Offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ],
+          "required": false,
+          "help": "Added to the target (relative move when there is no target).",
+          "props": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ]
+        },
+        {
+          "key": "override",
+          "arg": "set",
+          "position": null,
+          "label": "Override",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ],
+          "required": false,
+          "help": "Replaces an axis of the target outright.",
+          "props": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ]
+        },
+        {
+          "key": "toolOffset",
+          "arg": "toolOffset",
+          "position": null,
+          "label": "Tool offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ],
+          "required": false,
+          "help": "Applied in the tool frame at execution time.",
+          "props": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ]
+        },
+        {
+          "key": "localId",
+          "arg": "local",
+          "position": null,
+          "label": "Local frame",
+          "group": "Frame",
+          "kind": "localRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Run this move in a local frame instead of the active one.",
+          "props": [
+            "localId",
+            "localName"
+          ]
+        },
+        {
+          "key": "moveStopCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Stop condition",
+          "group": "Stop condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000."
+        },
+        {
+          "key": "moveStopMode",
+          "arg": "untilMode",
+          "position": null,
+          "label": "When true",
+          "group": "Stop condition",
+          "kind": "enum",
+          "default": "stop",
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "arg": "untilPos",
+          "position": null,
+          "label": "Position variable",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "A Points list set to the one pose where the condition fired.",
+          "varKinds": [
+            "list:Point"
+          ]
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "arg": "untilFlag",
+          "position": null,
+          "label": "Fired flag",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "JumpJ",
+      "category": "motion",
+      "label": "Jump Joint",
+      "description": "Lift, move by joint interpolation over the target, then lower",
+      "keyword": "JumpJ",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "JumpJ <target>, z=…[, zStart=…][, zEnd=…][, speed=…]",
+      "summary": "→ {target} · z {jumpZ}",
+      "fields": [
+        {
+          "key": "target",
+          "arg": "",
+          "position": 0,
+          "label": "Target",
+          "group": "Target",
+          "kind": "target",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "gridRowIndex",
+            "gridColIndex",
+            "gridGridIndex",
+            "stackIndex"
+          ],
+          "required": false,
+          "help": "A saved point, a $points[i] element, a template naming a point, a grid or stack cell — or nothing for the current position (use with offsets).",
+          "props": [
+            "pointId",
+            "pointName",
+            "pointNameExpr",
+            "gridPoint",
+            "stackPoint"
+          ]
+        },
+        {
+          "key": "jumpZ",
+          "arg": "z",
+          "position": null,
+          "label": "Lift height",
+          "group": "Jump",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "jumpZ",
+          "required": false
+        },
+        {
+          "key": "jumpZStart",
+          "arg": "zStart",
+          "position": null,
+          "label": "Lift height (start)",
+          "group": "Jump",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "jumpZStart",
+          "required": false
+        },
+        {
+          "key": "jumpZEnd",
+          "arg": "zEnd",
+          "position": null,
+          "label": "Lift height (end)",
+          "group": "Jump",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "jumpZEnd",
+          "required": false
+        },
+        {
+          "key": "speed",
+          "arg": "speed",
+          "position": null,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": false,
+          "help": "Overrides the program's speed for this move only."
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        },
+        {
+          "key": "offset",
+          "arg": "offset",
+          "position": null,
+          "label": "Offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ],
+          "required": false,
+          "help": "Added to the target (relative move when there is no target).",
+          "props": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ]
+        },
+        {
+          "key": "override",
+          "arg": "set",
+          "position": null,
+          "label": "Override",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ],
+          "required": false,
+          "help": "Replaces an axis of the target outright.",
+          "props": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ]
+        },
+        {
+          "key": "toolOffset",
+          "arg": "toolOffset",
+          "position": null,
+          "label": "Tool offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ],
+          "required": false,
+          "help": "Applied in the tool frame at execution time.",
+          "props": [
+            "toolOffsetX",
+            "toolOffsetY",
+            "toolOffsetZ",
+            "toolOffsetRX",
+            "toolOffsetRY",
+            "toolOffsetRZ"
+          ]
+        },
+        {
+          "key": "localId",
+          "arg": "local",
+          "position": null,
+          "label": "Local frame",
+          "group": "Frame",
+          "kind": "localRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Run this move in a local frame instead of the active one.",
+          "props": [
+            "localId",
+            "localName"
+          ]
+        },
+        {
+          "key": "moveStopCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Stop condition",
+          "group": "Stop condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000."
+        },
+        {
+          "key": "moveStopMode",
+          "arg": "untilMode",
+          "position": null,
+          "label": "When true",
+          "group": "Stop condition",
+          "kind": "enum",
+          "default": "stop",
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "arg": "untilPos",
+          "position": null,
+          "label": "Position variable",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "A Points list set to the one pose where the condition fired.",
+          "varKinds": [
+            "list:Point"
+          ]
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "arg": "untilFlag",
+          "position": null,
+          "label": "Fired flag",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "MoveC",
+      "category": "motion",
+      "label": "Move Arc",
+      "description": "Move along a circular arc through a via point to the end target",
+      "keyword": "MoveC",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "MoveC <end>, via=<point>[, speed=…][, tolerance=…]",
+      "summary": "→ {target} via {via} · {speed}",
+      "fields": [
+        {
+          "key": "target",
+          "arg": "",
+          "position": 0,
+          "label": "Target",
+          "group": "Target",
+          "kind": "target",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "gridRowIndex",
+            "gridColIndex",
+            "gridGridIndex",
+            "stackIndex"
+          ],
+          "required": false,
+          "help": "A saved point, a $points[i] element, a template naming a point, a grid or stack cell — or nothing for the current position (use with offsets).",
+          "props": [
+            "pointId",
+            "pointName",
+            "pointNameExpr",
+            "gridPoint",
+            "stackPoint"
+          ]
+        },
+        {
+          "key": "via",
+          "arg": "via",
+          "position": null,
+          "label": "Via point",
+          "group": "Target",
+          "kind": "target",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "help": "A point the arc passes through (saved point, $points[i] element or template).",
+          "props": [
+            "viaPointId",
+            "viaPointName",
+            "viaPointNameExpr"
+          ]
+        },
+        {
+          "key": "speed",
+          "arg": "speed",
+          "position": null,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": false,
+          "help": "Overrides the program's speed for this move only."
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        },
+        {
+          "key": "arcTolerance",
+          "arg": "tolerance",
+          "position": null,
+          "label": "Arc tolerance",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm",
+          "default": 0.1,
+          "min": 0.001,
+          "exprKey": null,
+          "required": false,
+          "help": "Largest allowed gap between the true arc and its straight segments."
+        },
+        {
+          "key": "offset",
+          "arg": "offset",
+          "position": null,
+          "label": "Offset",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ],
+          "required": false,
+          "help": "Added to the target (relative move when there is no target).",
+          "props": [
+            "offsetX",
+            "offsetY",
+            "offsetZ",
+            "offsetRX",
+            "offsetRY",
+            "offsetRZ"
+          ]
+        },
+        {
+          "key": "override",
+          "arg": "set",
+          "position": null,
+          "label": "Override",
+          "group": "Offsets",
+          "kind": "axes6",
+          "unit": "mm / deg",
+          "default": null,
+          "exprKey": null,
+          "exprKeys": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ],
+          "required": false,
+          "help": "Replaces an axis of the target outright.",
+          "props": [
+            "overrideX",
+            "overrideY",
+            "overrideZ",
+            "overrideRX",
+            "overrideRY",
+            "overrideRZ"
+          ]
+        },
+        {
+          "key": "localId",
+          "arg": "local",
+          "position": null,
+          "label": "Local frame",
+          "group": "Frame",
+          "kind": "localRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Run this move in a local frame instead of the active one.",
+          "props": [
+            "localId",
+            "localName"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ThreadMove",
+      "category": "motion",
+      "label": "Thread Move",
+      "description": "Move the tool in Z while rotating RZ to follow a thread",
+      "keyword": "ThreadMove",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "ThreadMove distance=…, pitch=…[, peck=on, peckDepth=…, peckRetract=…][, exitHeight=…][, reverseOut=on]",
+      "summary": "{threadDistance} · pitch {threadPitch}",
+      "fields": [
+        {
+          "key": "threadDistance",
+          "arg": "distance",
+          "position": null,
+          "label": "Distance",
+          "group": "Thread",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "threadDistance",
+          "required": true
+        },
+        {
+          "key": "threadPitch",
+          "arg": "pitch",
+          "position": null,
+          "label": "Pitch",
+          "group": "Thread",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "min": 0,
+          "exprKey": "threadPitch",
+          "required": true
+        },
+        {
+          "key": "threadPeck",
+          "arg": "peck",
+          "position": null,
+          "label": "Peck",
+          "group": "Thread",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "threadPeckDepth",
+          "arg": "peckDepth",
+          "position": null,
+          "label": "Peck depth",
+          "group": "Thread",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "min": 0,
+          "exprKey": "threadPeckDepth",
+          "required": false,
+          "showIf": {
+            "field": "threadPeck",
+            "in": [
+              "true"
+            ]
+          }
+        },
+        {
+          "key": "threadPeckRetract",
+          "arg": "peckRetract",
+          "position": null,
+          "label": "Peck retract",
+          "group": "Thread",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "min": 0,
+          "exprKey": "threadPeckRetract",
+          "required": false,
+          "showIf": {
+            "field": "threadPeck",
+            "in": [
+              "true"
+            ]
+          },
+          "help": "Empty = retract fully to the start each peck."
+        },
+        {
+          "key": "threadExitHeight",
+          "arg": "exitHeight",
+          "position": null,
+          "label": "Exit height",
+          "group": "Thread",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": "threadExitHeight",
+          "required": false
+        },
+        {
+          "key": "threadReverseOut",
+          "arg": "reverseOut",
+          "position": null,
+          "label": "Reverse out",
+          "group": "Thread",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "speed",
+          "arg": "speed",
+          "position": null,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": false,
+          "help": "Overrides the program's speed for this move only."
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "RunHoming",
+      "category": "motion",
+      "label": "Run Homing",
+      "description": "Run the full homing sequence and wait for it to finish",
+      "keyword": "RunHoming",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "RunHoming",
+      "summary": "",
+      "fields": []
+    },
+    {
+      "type": "SetJointPosition",
+      "category": "motion",
+      "label": "Set Joint Position",
+      "description": "Declare one joint's value with no motion (manual homing)",
+      "keyword": "SetJointPosition",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "SetJointPosition J<n>, <value>",
+      "summary": "J{jointIndex} = {jointValue}",
+      "fields": [
+        {
+          "key": "jointIndex",
+          "arg": "",
+          "position": 0,
+          "label": "Joint",
+          "group": "Joint",
+          "kind": "integer",
+          "default": 0,
+          "options": [
+            {
+              "value": 0,
+              "label": "J1"
+            },
+            {
+              "value": 1,
+              "label": "J2"
+            },
+            {
+              "value": 2,
+              "label": "J3"
+            },
+            {
+              "value": 3,
+              "label": "J4"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "jointValue",
+          "arg": "",
+          "position": 1,
+          "label": "Value",
+          "group": "Joint",
+          "kind": "number",
+          "unit": "deg / mm",
+          "default": null,
+          "exprKey": "jointValue",
+          "required": true
+        }
+      ]
+    },
+    {
+      "type": "CncProgram",
+      "category": "motion",
+      "label": "CNC Program",
+      "description": "Follow a toolpath generated from a DXF or SVG file",
+      "keyword": "CncProgram",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "CncProgram \"<file>\"[, safeZ=…]",
+      "summary": "{cncDxfFile}",
+      "fields": [
+        {
+          "key": "cncDxfFile",
+          "arg": "",
+          "position": 0,
+          "label": "File",
+          "group": "Toolpath",
+          "kind": "text",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "cncSafeZ",
+          "arg": "safeZ",
+          "position": null,
+          "label": "Safe Z",
+          "group": "Toolpath",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "cncSpec",
+          "arg": "cncSpec",
+          "position": null,
+          "label": "Toolpath",
+          "group": "Toolpath",
+          "kind": "json",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Edited in the CNC builder.",
+          "hidden": true
+        }
+      ]
+    },
+    {
+      "type": "SavePosition",
+      "category": "motion",
+      "label": "Save Position",
+      "description": "Store the current position in a Points list or a saved point",
+      "keyword": "SavePosition",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "SavePosition $<list>[, mode=replace|append|insert|set][, index=…][, source=actual|target] | SavePosition point <name>",
+      "summary": "→ {variableName}{pointId} · {savePositionMode}",
+      "fields": [
+        {
+          "key": "savePositionTo",
+          "arg": "to",
+          "position": null,
+          "label": "Save to",
+          "group": "Destination",
+          "kind": "enum",
+          "default": "variable",
+          "options": [
+            {
+              "value": "variable",
+              "label": "Points variable"
+            },
+            {
+              "value": "point",
+              "label": "Saved point"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "variableName",
+          "arg": "",
+          "position": 0,
+          "label": "Points variable",
+          "group": "Destination",
+          "kind": "listVar",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "savePositionTo",
+            "in": [
+              "variable"
+            ]
+          },
+          "varKinds": [
+            "list:Point"
+          ]
+        },
+        {
+          "key": "pointId",
+          "arg": "point",
+          "position": null,
+          "label": "Saved point",
+          "group": "Destination",
+          "kind": "pointRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "savePositionTo",
+            "in": [
+              "point"
+            ]
+          },
+          "help": "Overwritten (or created) with the current position; recorded in the points history.",
+          "props": [
+            "pointId",
+            "pointName"
+          ]
+        },
+        {
+          "key": "savePositionMode",
+          "arg": "mode",
+          "position": null,
+          "label": "Mode",
+          "group": "Destination",
+          "kind": "enum",
+          "default": "replace",
+          "options": [
+            {
+              "value": "replace",
+              "label": "Replace the list"
+            },
+            {
+              "value": "append",
+              "label": "Append"
+            },
+            {
+              "value": "insert",
+              "label": "Insert at index"
+            },
+            {
+              "value": "set",
+              "label": "Set at index"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "savePositionTo",
+            "in": [
+              "variable"
+            ]
+          }
+        },
+        {
+          "key": "savePositionIndex",
+          "arg": "index",
+          "position": null,
+          "label": "Index",
+          "group": "Destination",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": "savePositionIndex",
+          "required": false,
+          "showIf": {
+            "field": "savePositionMode",
+            "in": [
+              "insert",
+              "set"
+            ]
+          }
+        },
+        {
+          "key": "savePositionSource",
+          "arg": "source",
+          "position": null,
+          "label": "Position",
+          "group": "Destination",
+          "kind": "enum",
+          "default": "actual",
+          "options": [
+            {
+              "value": "actual",
+              "label": "Actual position"
+            },
+            {
+              "value": "target",
+              "label": "Last commanded target"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "SetSpeedL",
+      "category": "motionSettings",
+      "label": "Set Speed (Linear)",
+      "description": "Set the linear move speed, accel and decel",
+      "keyword": "SetSpeedL",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "SetSpeedL <speed>[, accel=…][, decel=…]",
+      "summary": "{speed} · accel {accel}",
+      "fields": [
+        {
+          "key": "speed",
+          "arg": "",
+          "position": 0,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": true
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "SetSpeedJ",
+      "category": "motionSettings",
+      "label": "Set Speed (Joint)",
+      "description": "Set the joint move speed, accel and decel",
+      "keyword": "SetSpeedJ",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "SetSpeedJ <speed>[, accel=…][, decel=…]",
+      "summary": "{speed} · accel {accel}",
+      "fields": [
+        {
+          "key": "speed",
+          "arg": "",
+          "position": 0,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": true
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "SetBlendRadius",
+      "category": "motionSettings",
+      "label": "Set Blend Radius",
+      "description": "Set the default corner radius for later blended moves",
+      "keyword": "SetBlendRadius",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "SetBlendRadius <mm>",
+      "summary": "{blendRadius}",
+      "fields": [
+        {
+          "key": "blendRadius",
+          "arg": "",
+          "position": 0,
+          "label": "Blend radius",
+          "group": "Blending",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "min": 0,
+          "exprKey": "blendRadius",
+          "required": true
+        }
+      ]
+    },
+    {
+      "type": "SetSpeedFactor",
+      "category": "motionSettings",
+      "label": "Set Speed Factor",
+      "description": "Scale this program's move speeds by a percentage",
+      "keyword": "SetSpeedFactor",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "SetSpeedFactor <percent>",
+      "summary": "{speedFactor}",
+      "fields": [
+        {
+          "key": "speedFactor",
+          "arg": "",
+          "position": 0,
+          "label": "Speed factor",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "%",
+          "default": 100,
+          "min": 1,
+          "max": 100,
+          "step": 1,
+          "exprKey": "speedFactor",
+          "required": true,
+          "help": "Never exceeds the operator's speed override; resets to 100 when the program ends."
+        }
+      ]
+    },
+    {
+      "type": "SetTool",
+      "category": "motionSettings",
+      "label": "Set Tool",
+      "description": "Change the active tool used by later moves",
+      "keyword": "SetTool",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "SetTool <tool>",
+      "summary": "{toolId}",
+      "fields": [
+        {
+          "key": "toolId",
+          "arg": "",
+          "position": 0,
+          "label": "Tool",
+          "group": "Tool",
+          "kind": "toolRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "None = no tool offset.",
+          "props": [
+            "toolId",
+            "toolName"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "SetLocal",
+      "category": "motionSettings",
+      "label": "Set Local",
+      "description": "Activate a local coordinate frame for later moves",
+      "keyword": "SetLocal",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "SetLocal <local>",
+      "summary": "{localId}",
+      "fields": [
+        {
+          "key": "localId",
+          "arg": "",
+          "position": 0,
+          "label": "Local frame",
+          "group": "Frame",
+          "kind": "localRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "localId",
+            "localName"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ClearLocal",
+      "category": "motionSettings",
+      "label": "Clear Local",
+      "description": "Return later moves to the world frame",
+      "keyword": "ClearLocal",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "ClearLocal",
+      "summary": "",
+      "fields": []
+    },
+    {
+      "type": "IfCondition",
+      "category": "flow",
+      "label": "If Condition",
+      "description": "Run steps only when a condition holds, with else-if and else branches",
+      "keyword": "if",
+      "aliases": [],
+      "background": true,
+      "body": "branches",
+      "syntax": "if <condition> … [elif <condition> …] [else …] end",
+      "summary": "{condition}",
+      "fields": [
+        {
+          "key": "condition",
+          "arg": "",
+          "position": 0,
+          "label": "Condition",
+          "group": "Condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "ifSteps",
+          "arg": "",
+          "position": null,
+          "label": "Then",
+          "group": "Body",
+          "kind": "steps",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "elseIfBranches",
+          "arg": "",
+          "position": null,
+          "label": "Else if",
+          "group": "Body",
+          "kind": "branches",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "elseSteps",
+          "arg": "",
+          "position": null,
+          "label": "Else",
+          "group": "Body",
+          "kind": "steps",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "Switch",
+      "category": "flow",
+      "label": "Switch",
+      "description": "Run the case whose value equals an expression",
+      "keyword": "switch",
+      "aliases": [],
+      "background": true,
+      "body": "cases",
+      "syntax": "switch <expr> case <v>[, <v>…] … [default …] end",
+      "summary": "{switchExpr}",
+      "fields": [
+        {
+          "key": "switchExpr",
+          "arg": "",
+          "position": 0,
+          "label": "Value",
+          "group": "Switch",
+          "kind": "expr",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "help": "Evaluated once; compared with each case value."
+        },
+        {
+          "key": "switchCases",
+          "arg": "",
+          "position": null,
+          "label": "Cases",
+          "group": "Body",
+          "kind": "cases",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "switchDefault",
+          "arg": "",
+          "position": null,
+          "label": "Default",
+          "group": "Body",
+          "kind": "steps",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "Loop",
+      "category": "flow",
+      "label": "Loop",
+      "description": "Repeat steps a number of times, for each list element, or while a condition holds",
+      "keyword": "repeat",
+      "aliases": [
+        "for",
+        "while"
+      ],
+      "background": true,
+      "body": "steps",
+      "syntax": "repeat <n>|forever [as $i] … end | for $v[, $i] in $list … end | while <condition> … end",
+      "summary": "{loopMode} {loopCount}{forEachVariableName}{loopWhileCondition}",
+      "fields": [
+        {
+          "key": "loopMode",
+          "arg": "mode",
+          "position": null,
+          "label": "Repeat",
+          "group": "Loop",
+          "kind": "enum",
+          "default": "count",
+          "options": [
+            {
+              "value": "count",
+              "label": "A number of times"
+            },
+            {
+              "value": "forEach",
+              "label": "For each element"
+            },
+            {
+              "value": "while",
+              "label": "While a condition holds"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "loopCount",
+          "arg": "",
+          "position": 0,
+          "label": "Count",
+          "group": "Loop",
+          "kind": "integer",
+          "default": 1,
+          "min": 0,
+          "step": 1,
+          "exprKey": "loopCount",
+          "required": false,
+          "showIf": {
+            "field": "loopMode",
+            "in": [
+              "count"
+            ]
+          },
+          "help": "0 = forever."
+        },
+        {
+          "key": "forEachVariableName",
+          "arg": "in",
+          "position": null,
+          "label": "List",
+          "group": "Loop",
+          "kind": "listVar",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "loopMode",
+            "in": [
+              "forEach"
+            ]
+          },
+          "varKinds": [
+            "list"
+          ]
+        },
+        {
+          "key": "forEachValueVariableName",
+          "arg": "value",
+          "position": null,
+          "label": "Value variable",
+          "group": "Loop",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "loopMode",
+            "in": [
+              "forEach"
+            ]
+          },
+          "help": "Number/Boolean lists: the element. Other lists: the index.",
+          "varKinds": [
+            "number",
+            "boolean"
+          ]
+        },
+        {
+          "key": "forEachIndexVariableName",
+          "arg": "as",
+          "position": null,
+          "label": "Index variable",
+          "group": "Loop",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "loopMode",
+            "in": [
+              "count",
+              "forEach"
+            ]
+          },
+          "varKinds": [
+            "number"
+          ]
+        },
+        {
+          "key": "loopWhileCondition",
+          "arg": "while",
+          "position": null,
+          "label": "While",
+          "group": "Loop",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "loopMode",
+            "in": [
+              "while"
+            ]
+          }
+        },
+        {
+          "key": "loopSteps",
+          "arg": "",
+          "position": null,
+          "label": "Body",
+          "group": "Body",
+          "kind": "steps",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "LoopControl",
+      "category": "flow",
+      "label": "Break / Next",
+      "description": "Leave the enclosing loop, or skip to its next iteration",
+      "keyword": "break",
+      "aliases": [
+        "continue"
+      ],
+      "background": true,
+      "body": null,
+      "syntax": "break | continue",
+      "summary": "{loopControl}",
+      "fields": [
+        {
+          "key": "loopControl",
+          "arg": "",
+          "position": 0,
+          "label": "Action",
+          "group": "Loop",
+          "kind": "enum",
+          "default": "break",
+          "options": [
+            {
+              "value": "break",
+              "label": "Break loop"
+            },
+            {
+              "value": "continue",
+              "label": "Next iteration"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "Try",
+      "category": "flow",
+      "label": "Try",
+      "description": "Run steps; on a runtime error retry them or run the catch steps",
+      "keyword": "try",
+      "aliases": [],
+      "background": true,
+      "body": "tryCatch",
+      "syntax": "try [retry=…][, delay=…] … [catch [$msg][, code=$code][, only=(…)] …] end",
+      "summary": "retry {tryRetries} · {catchCodes}",
+      "fields": [
+        {
+          "key": "tryRetries",
+          "arg": "retry",
+          "position": null,
+          "label": "Retries",
+          "group": "Errors",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "tryRetryDelayMs",
+          "arg": "delay",
+          "position": null,
+          "label": "Retry delay",
+          "group": "Errors",
+          "kind": "integer",
+          "unit": "ms",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "catchCodes",
+          "arg": "only",
+          "position": null,
+          "label": "Catch only",
+          "group": "Errors",
+          "kind": "textList",
+          "default": null,
+          "options": [
+            {
+              "value": "waitTimeout",
+              "label": "Wait timed out"
+            },
+            {
+              "value": "visionTimeout",
+              "label": "Vision timed out"
+            },
+            {
+              "value": "visionFailed",
+              "label": "Vision failed"
+            },
+            {
+              "value": "httpFailed",
+              "label": "HTTP request failed"
+            },
+            {
+              "value": "httpTimeout",
+              "label": "HTTP request timed out"
+            },
+            {
+              "value": "receiveTimeout",
+              "label": "HTTP receive timed out"
+            },
+            {
+              "value": "pluginFailed",
+              "label": "Plugin step failed"
+            },
+            {
+              "value": "pluginTimeout",
+              "label": "Plugin step timed out"
+            },
+            {
+              "value": "pluginNotRunning",
+              "label": "Plugin not running"
+            },
+            {
+              "value": "promptTimeout",
+              "label": "Prompt timed out"
+            },
+            {
+              "value": "pointNotFound",
+              "label": "Point not found"
+            },
+            {
+              "value": "arcDegenerate",
+              "label": "Arc points are in a line"
+            },
+            {
+              "value": "indexOutOfRange",
+              "label": "List index out of range"
+            },
+            {
+              "value": "userError",
+              "label": "Raised error"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = every catchable error. A Raise Error code may be typed in."
+        },
+        {
+          "key": "errorVariableName",
+          "arg": "message",
+          "position": null,
+          "label": "Message variable",
+          "group": "Errors",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "varKinds": [
+            "string"
+          ]
+        },
+        {
+          "key": "errorCodeVariableName",
+          "arg": "code",
+          "position": null,
+          "label": "Code variable",
+          "group": "Errors",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "varKinds": [
+            "string"
+          ]
+        },
+        {
+          "key": "trySteps",
+          "arg": "",
+          "position": null,
+          "label": "Try",
+          "group": "Body",
+          "kind": "steps",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "catchSteps",
+          "arg": "",
+          "position": null,
+          "label": "Catch",
+          "group": "Body",
+          "kind": "steps",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "RaiseError",
+      "category": "flow",
+      "label": "Raise Error",
+      "description": "Fail with a message — caught by an enclosing Try, otherwise ends the program",
+      "keyword": "raise",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "raise \"<message>\"[, code=<identifier>]",
+      "summary": "{errorCode}: {errorMessage}",
+      "fields": [
+        {
+          "key": "errorMessage",
+          "arg": "",
+          "position": 0,
+          "label": "Message",
+          "group": "Error",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "errorCode",
+          "arg": "code",
+          "position": null,
+          "label": "Code",
+          "group": "Error",
+          "kind": "text",
+          "default": "userError",
+          "exprKey": null,
+          "required": false,
+          "help": "An identifier a Try can filter on."
+        }
+      ]
+    },
+    {
+      "type": "CallRoutine",
+      "category": "flow",
+      "label": "Call Routine",
+      "description": "Run a routine, then continue",
+      "keyword": "call",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "call <routine>[(param=…, …)][, out param=$var]",
+      "summary": "{routineId}",
+      "fields": [
+        {
+          "key": "routineId",
+          "arg": "",
+          "position": 0,
+          "label": "Routine",
+          "group": "Routine",
+          "kind": "routineRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "routineId",
+            "routineName"
+          ]
+        },
+        {
+          "key": "routineArgs",
+          "arg": "",
+          "position": null,
+          "label": "Arguments",
+          "group": "Parameters",
+          "kind": "exprMap",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "One expression per in / in-out parameter (a template for a text parameter), evaluated before the call."
+        },
+        {
+          "key": "routineOutputs",
+          "arg": "out",
+          "position": null,
+          "label": "Outputs",
+          "group": "Parameters",
+          "kind": "mappingOut",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Out / in-out parameters copied into your variables when the routine returns."
+        }
+      ]
+    },
+    {
+      "type": "Return",
+      "category": "flow",
+      "label": "Return",
+      "description": "Leave the routine (or end the program)",
+      "keyword": "return",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "return",
+      "summary": "",
+      "fields": []
+    },
+    {
+      "type": "EndProgram",
+      "category": "flow",
+      "label": "End Program",
+      "description": "Finish the program now, from anywhere",
+      "keyword": "exit",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "exit [\"<message>\"]",
+      "summary": "{statusMessage}",
+      "fields": [
+        {
+          "key": "statusMessage",
+          "arg": "",
+          "position": 0,
+          "label": "Message",
+          "group": "Program",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "category": "flow",
+      "label": "Label",
+      "description": "Mark a place Go To Label can jump to",
+      "keyword": "label",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "label <name>",
+      "summary": "{labelName}",
+      "fields": [
+        {
+          "key": "labelName",
+          "arg": "",
+          "position": 0,
+          "label": "Name",
+          "group": "Label",
+          "kind": "text",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "labelId",
+          "arg": "",
+          "position": null,
+          "label": "Id",
+          "group": "Label",
+          "kind": "text",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "hidden": true
+        }
+      ]
+    },
+    {
+      "type": "GoToLabel",
+      "category": "flow",
+      "label": "Go To Label",
+      "description": "Jump to a Label",
+      "keyword": "goto",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "goto <label>",
+      "summary": "{labelId}",
+      "fields": [
+        {
+          "key": "labelId",
+          "arg": "",
+          "position": 0,
+          "label": "Label",
+          "group": "Label",
+          "kind": "labelRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "labelId",
+            "labelName"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "PauseProgram",
+      "category": "flow",
+      "label": "Pause Program",
+      "description": "Pause — the operator continues or stops from the monitor",
+      "keyword": "pause",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "pause",
+      "summary": "",
+      "fields": []
+    },
+    {
+      "type": "Note",
+      "category": "flow",
+      "label": "Note",
+      "description": "A note or section header — not executed",
+      "keyword": "#",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "# text | ## Section",
+      "summary": "{comment}",
+      "fields": [
+        {
+          "key": "noteStyle",
+          "arg": "",
+          "position": null,
+          "label": "Style",
+          "group": "Note",
+          "kind": "enum",
+          "default": "note",
+          "options": [
+            {
+              "value": "note",
+              "label": "Note"
+            },
+            {
+              "value": "section",
+              "label": "Section header"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "comment",
+          "arg": "",
+          "position": 0,
+          "label": "Text",
+          "group": "Note",
+          "kind": "text",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "SetVariable",
+      "category": "variables",
+      "label": "Set Variable",
+      "description": "Assign a value or expression to a variable",
+      "keyword": "$",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "$<name> = <expression | \"template\">",
+      "summary": "${variableName} = {variableExpr}",
+      "fields": [
+        {
+          "key": "variableName",
+          "arg": "",
+          "position": 0,
+          "label": "Variable",
+          "group": "Variable",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "varKinds": [
+            "number",
+            "boolean",
+            "string"
+          ]
+        },
+        {
+          "key": "variableExpr",
+          "arg": "",
+          "position": 1,
+          "label": "Value",
+          "group": "Variable",
+          "kind": "expr",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "help": "An expression; a template for a text variable."
+        }
+      ]
+    },
+    {
+      "type": "ListOp",
+      "category": "variables",
+      "label": "List",
+      "description": "Append, insert, remove, set, sort or copy list elements",
+      "keyword": "$",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "$<list>.append(…) | .insert(i, …) | .removeAt(i) | .clear() | [i] = … | [i].field = … | .sort(by=…, desc) | .reverse() | .copyFrom($other)",
+      "summary": "${variableName}.{listAction}",
+      "fields": [
+        {
+          "key": "variableName",
+          "arg": "",
+          "position": 0,
+          "label": "List",
+          "group": "List",
+          "kind": "listVar",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "varKinds": [
+            "list"
+          ]
+        },
+        {
+          "key": "listAction",
+          "arg": "action",
+          "position": null,
+          "label": "Action",
+          "group": "List",
+          "kind": "enum",
+          "default": "append",
+          "options": [
+            {
+              "value": "append",
+              "label": "Append"
+            },
+            {
+              "value": "insert",
+              "label": "Insert"
+            },
+            {
+              "value": "removeAt",
+              "label": "Remove at"
+            },
+            {
+              "value": "clear",
+              "label": "Clear"
+            },
+            {
+              "value": "set",
+              "label": "Set element"
+            },
+            {
+              "value": "setField",
+              "label": "Set field"
+            },
+            {
+              "value": "sort",
+              "label": "Sort"
+            },
+            {
+              "value": "reverse",
+              "label": "Reverse"
+            },
+            {
+              "value": "copyFrom",
+              "label": "Copy from"
+            }
+          ],
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "listIndex",
+          "arg": "index",
+          "position": null,
+          "label": "Index",
+          "group": "List",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": "listIndex",
+          "required": false,
+          "showIf": {
+            "field": "listAction",
+            "in": [
+              "insert",
+              "removeAt",
+              "set",
+              "setField"
+            ]
+          }
+        },
+        {
+          "key": "listValueExpr",
+          "arg": "value",
+          "position": null,
+          "label": "Value",
+          "group": "List",
+          "kind": "expr",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "listAction",
+            "in": [
+              "append",
+              "insert",
+              "set"
+            ]
+          },
+          "help": "For Number and Boolean lists."
+        },
+        {
+          "key": "listFields",
+          "arg": "fields",
+          "position": null,
+          "label": "Fields",
+          "group": "List",
+          "kind": "exprMap",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "listAction",
+            "in": [
+              "append",
+              "insert",
+              "set",
+              "setField"
+            ]
+          },
+          "help": "For Point and Record lists. Append with no fields on a Points list appends the current position."
+        },
+        {
+          "key": "listSourceVariable",
+          "arg": "from",
+          "position": null,
+          "label": "Copy from",
+          "group": "List",
+          "kind": "listVar",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "listAction",
+            "in": [
+              "copyFrom"
+            ]
+          },
+          "varKinds": [
+            "list"
+          ]
+        },
+        {
+          "key": "listSortField",
+          "arg": "by",
+          "position": null,
+          "label": "Sort by field",
+          "group": "List",
+          "kind": "text",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "listAction",
+            "in": [
+              "sort"
+            ]
+          },
+          "help": "Empty = the element value."
+        },
+        {
+          "key": "listSortDescending",
+          "arg": "desc",
+          "position": null,
+          "label": "Descending",
+          "group": "List",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "listAction",
+            "in": [
+              "sort"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "type": "StopwatchControl",
+      "category": "variables",
+      "label": "Stopwatch",
+      "description": "Start, stop or reset a stopwatch variable",
+      "keyword": "stopwatch",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "stopwatch start|stop|reset $<name>",
+      "summary": "{stopwatchAction} ${stopwatchVariableName}",
+      "fields": [
+        {
+          "key": "stopwatchAction",
+          "arg": "",
+          "position": 0,
+          "label": "Action",
+          "group": "Stopwatch",
+          "kind": "enum",
+          "default": "Start",
+          "options": [
+            {
+              "value": "Start",
+              "label": "Start"
+            },
+            {
+              "value": "Stop",
+              "label": "Stop"
+            },
+            {
+              "value": "Reset",
+              "label": "Reset"
+            }
+          ],
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "stopwatchVariableName",
+          "arg": "",
+          "position": 1,
+          "label": "Stopwatch",
+          "group": "Stopwatch",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "varKinds": [
+            "stopwatch"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Wait",
+      "category": "variables",
+      "label": "Wait",
+      "description": "Wait for a time, or until a condition holds",
+      "keyword": "Wait",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "Wait <ms> | Wait until <condition>[, timeout=…][, timedOut=$v][, onTimeout=continue|error]",
+      "summary": "{waitMs}{waitCondition} · timeout {waitTimeoutMs}",
+      "fields": [
+        {
+          "key": "waitMode",
+          "arg": "mode",
+          "position": null,
+          "label": "Wait for",
+          "group": "Wait",
+          "kind": "enum",
+          "default": "duration",
+          "options": [
+            {
+              "value": "duration",
+              "label": "A duration"
+            },
+            {
+              "value": "condition",
+              "label": "A condition"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "waitMs",
+          "arg": "",
+          "position": 0,
+          "label": "Duration",
+          "group": "Wait",
+          "kind": "integer",
+          "unit": "ms",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": "waitMs",
+          "required": false,
+          "showIf": {
+            "field": "waitMode",
+            "in": [
+              "duration"
+            ]
+          }
+        },
+        {
+          "key": "waitCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Until",
+          "group": "Wait",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "waitMode",
+            "in": [
+              "condition"
+            ]
+          }
+        },
+        {
+          "key": "waitTimeoutMs",
+          "arg": "timeout",
+          "position": null,
+          "label": "Timeout",
+          "group": "Timeout",
+          "kind": "integer",
+          "unit": "ms",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "waitMode",
+            "in": [
+              "condition"
+            ]
+          },
+          "help": "Empty or 0 = wait forever."
+        },
+        {
+          "key": "waitTimeoutVariableName",
+          "arg": "timedOut",
+          "position": null,
+          "label": "Timed-out flag",
+          "group": "Timeout",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "waitMode",
+            "in": [
+              "condition"
+            ]
+          },
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        },
+        {
+          "key": "waitTimeoutAction",
+          "arg": "onTimeout",
+          "position": null,
+          "label": "On timeout",
+          "group": "Timeout",
+          "kind": "enum",
+          "default": "continue",
+          "options": [
+            {
+              "value": "continue",
+              "label": "Continue"
+            },
+            {
+              "value": "error",
+              "label": "Fail (catchable)"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "waitMode",
+            "in": [
+              "condition"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "type": "SetOutput",
+      "category": "io",
+      "label": "Set Output",
+      "description": "Turn a digital output on or off, toggle it or pulse it",
+      "keyword": "SetOutput",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "SetOutput <stb|relay|io> [<device>] <number> <on|off|toggle|(expr)>[, pulse=…][, blocking=on]",
+      "summary": "{outputCard} {outputNumber} → {outputValue}{outputAction}",
+      "fields": [
+        {
+          "key": "outputCard",
+          "arg": "",
+          "position": 0,
+          "label": "Card",
+          "group": "Output",
+          "kind": "enum",
+          "default": "stb",
+          "options": [
+            {
+              "value": "stb",
+              "label": "Driver board"
+            },
+            {
+              "value": "relay",
+              "label": "USB relay"
+            },
+            {
+              "value": "io",
+              "label": "IO device"
+            }
+          ],
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "outputDeviceId",
+          "arg": "",
+          "position": 1,
+          "label": "Device",
+          "group": "Output",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "outputCard",
+            "in": [
+              "io"
+            ]
+          }
+        },
+        {
+          "key": "outputNumber",
+          "arg": "",
+          "position": 2,
+          "label": "Output",
+          "group": "Output",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "outputAction",
+          "arg": "action",
+          "position": null,
+          "label": "Action",
+          "group": "Output",
+          "kind": "enum",
+          "default": "set",
+          "options": [
+            {
+              "value": "set",
+              "label": "Set"
+            },
+            {
+              "value": "toggle",
+              "label": "Toggle"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "outputValue",
+          "arg": "",
+          "position": 3,
+          "label": "On",
+          "group": "Output",
+          "kind": "bool",
+          "default": true,
+          "exprKey": "outputValue",
+          "required": false,
+          "showIf": {
+            "field": "outputAction",
+            "in": [
+              "set"
+            ]
+          },
+          "help": "An expression: non-zero = on."
+        },
+        {
+          "key": "pulseMs",
+          "arg": "pulse",
+          "position": null,
+          "label": "Pulse",
+          "group": "Pulse",
+          "kind": "integer",
+          "unit": "ms",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false,
+          "help": "Set for this long, then flip back. Empty = hold."
+        },
+        {
+          "key": "pulseBlocking",
+          "arg": "blocking",
+          "position": null,
+          "label": "Wait for pulse",
+          "group": "Pulse",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "Tare",
+      "category": "io",
+      "label": "Tare Load Cell",
+      "description": "Zero a load cell",
+      "keyword": "Tare",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "Tare device=…, pin=…",
+      "summary": "{loadCellDeviceId} pin {loadCellPin}",
+      "fields": [
+        {
+          "key": "loadCellDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Load cell",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "loadCellPin",
+          "arg": "pin",
+          "position": null,
+          "label": "Pin",
+          "group": "Load cell",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "ReadLoadCell",
+      "category": "io",
+      "label": "Read Load Cell",
+      "description": "Read a load cell into a variable",
+      "keyword": "ReadLoadCell",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "ReadLoadCell $<var>, device=…, pin=…[, unit=g]",
+      "summary": "${variableName} ← {loadCellDeviceId} pin {loadCellPin}",
+      "fields": [
+        {
+          "key": "variableName",
+          "arg": "",
+          "position": 0,
+          "label": "Variable",
+          "group": "Load cell",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "varKinds": [
+            "number"
+          ]
+        },
+        {
+          "key": "loadCellDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Load cell",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "loadCellPin",
+          "arg": "pin",
+          "position": null,
+          "label": "Pin",
+          "group": "Load cell",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "loadCellUnit",
+          "arg": "unit",
+          "position": null,
+          "label": "Unit",
+          "group": "Load cell",
+          "kind": "enum",
+          "default": "g",
+          "options": [
+            {
+              "value": "g",
+              "label": "g"
+            },
+            {
+              "value": "kg",
+              "label": "kg"
+            },
+            {
+              "value": "N",
+              "label": "N"
+            },
+            {
+              "value": "lb",
+              "label": "lb"
+            },
+            {
+              "value": "oz",
+              "label": "oz"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "StartRecording",
+      "category": "io",
+      "label": "Start Recording",
+      "description": "Record a load cell into a list variable",
+      "keyword": "StartRecording",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "StartRecording $<list>, device=…, pin=…",
+      "summary": "${recordVariableName}",
+      "fields": [
+        {
+          "key": "recordVariableName",
+          "arg": "",
+          "position": 0,
+          "label": "Into list",
+          "group": "Recording",
+          "kind": "listVar",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "varKinds": [
+            "list:Record"
+          ]
+        },
+        {
+          "key": "loadCellDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Load cell",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "loadCellPin",
+          "arg": "pin",
+          "position": null,
+          "label": "Pin",
+          "group": "Load cell",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "StopRecording",
+      "category": "io",
+      "label": "Stop Recording",
+      "description": "Stop a recording and store its samples",
+      "keyword": "StopRecording",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "StopRecording device=…, pin=…",
+      "summary": "{loadCellDeviceId} pin {loadCellPin}",
+      "fields": [
+        {
+          "key": "loadCellDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Load cell",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "loadCellPin",
+          "arg": "pin",
+          "position": null,
+          "label": "Pin",
+          "group": "Load cell",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "ExportData",
+      "category": "io",
+      "label": "Export Data",
+      "description": "Write variables to a CSV or JSON file",
+      "keyword": "ExportData",
+      "aliases": [],
+      "background": true,
+      "body": "mapping",
+      "syntax": "ExportData csv|json \"<path>\" … end",
+      "summary": "{exportFormat} → {exportPath}",
+      "fields": [
+        {
+          "key": "exportFormat",
+          "arg": "",
+          "position": 0,
+          "label": "Format",
+          "group": "Export",
+          "kind": "enum",
+          "default": "csv",
+          "options": [
+            {
+              "value": "csv",
+              "label": "CSV"
+            },
+            {
+              "value": "json",
+              "label": "JSON"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "exportPath",
+          "arg": "",
+          "position": 1,
+          "label": "Path",
+          "group": "Export",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "exportColumns",
+          "arg": "",
+          "position": null,
+          "label": "Columns",
+          "group": "Export",
+          "kind": "rows",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "AuxMove",
+      "category": "io",
+      "label": "Aux Move",
+      "description": "Move an aux axis by a distance or a number of steps",
+      "keyword": "AuxMove",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "AuxMove device=…, axis=…, distance=…|steps=…[, unit=mm|deg][, velocity=…][, absolute=on][, wait=off][, until=…]",
+      "summary": "axis {auxAxisIndex} · {auxDistance}{auxSteps}",
+      "fields": [
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxUnit",
+          "arg": "unit",
+          "position": null,
+          "label": "Unit",
+          "group": "Move",
+          "kind": "enum",
+          "default": null,
+          "options": [
+            {
+              "value": "mm",
+              "label": "mm"
+            },
+            {
+              "value": "deg",
+              "label": "deg"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = raw steps."
+        },
+        {
+          "key": "auxDistance",
+          "arg": "distance",
+          "position": null,
+          "label": "Distance",
+          "group": "Move",
+          "kind": "number",
+          "default": null,
+          "exprKey": "auxDistance",
+          "required": false,
+          "help": "In the unit above."
+        },
+        {
+          "key": "auxSteps",
+          "arg": "steps",
+          "position": null,
+          "label": "Steps",
+          "group": "Move",
+          "kind": "integer",
+          "default": null,
+          "exprKey": "auxSteps",
+          "required": false,
+          "help": "Used when no unit is set; the sign is the direction."
+        },
+        {
+          "key": "auxVelocity",
+          "arg": "velocity",
+          "position": null,
+          "label": "Velocity",
+          "group": "Move",
+          "kind": "number",
+          "default": null,
+          "min": 0,
+          "exprKey": "auxVelocity",
+          "required": false
+        },
+        {
+          "key": "auxAccel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Move",
+          "kind": "number",
+          "default": null,
+          "min": 0,
+          "exprKey": "auxAccel",
+          "required": false
+        },
+        {
+          "key": "auxDecel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Move",
+          "kind": "number",
+          "default": null,
+          "min": 0,
+          "exprKey": "auxDecel",
+          "required": false
+        },
+        {
+          "key": "auxAbsolute",
+          "arg": "absolute",
+          "position": null,
+          "label": "Absolute",
+          "group": "Move",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxWaitForDone",
+          "arg": "wait",
+          "position": null,
+          "label": "Wait until done",
+          "group": "Move",
+          "kind": "bool",
+          "default": true,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Stop condition",
+          "group": "Stop condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000."
+        },
+        {
+          "key": "moveStopMode",
+          "arg": "untilMode",
+          "position": null,
+          "label": "When true",
+          "group": "Stop condition",
+          "kind": "enum",
+          "default": "stop",
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "arg": "untilPos",
+          "position": null,
+          "label": "Position variable",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Receives the axis position (mm / deg, or steps).",
+          "varKinds": [
+            "number"
+          ]
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "arg": "untilFlag",
+          "position": null,
+          "label": "Fired flag",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "AuxContinuous",
+      "category": "io",
+      "label": "Aux Continuous Run",
+      "description": "Run an aux axis continuously until an Aux Stop",
+      "keyword": "AuxContinuous",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "AuxContinuous device=…, axis=…, velocity=…[, accel=…]",
+      "summary": "axis {auxAxisIndex} · {auxVelocity}",
+      "fields": [
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxUnit",
+          "arg": "unit",
+          "position": null,
+          "label": "Unit",
+          "group": "Move",
+          "kind": "enum",
+          "default": null,
+          "options": [
+            {
+              "value": "mm",
+              "label": "mm"
+            },
+            {
+              "value": "deg",
+              "label": "deg"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxVelocity",
+          "arg": "velocity",
+          "position": null,
+          "label": "Velocity",
+          "group": "Move",
+          "kind": "number",
+          "default": null,
+          "exprKey": "auxVelocity",
+          "required": false,
+          "help": "The sign is the direction."
+        },
+        {
+          "key": "auxAccel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Move",
+          "kind": "number",
+          "default": null,
+          "min": 0,
+          "exprKey": "auxAccel",
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "AuxStop",
+      "category": "io",
+      "label": "Aux Stop",
+      "description": "Stop aux axis motion — ramped or immediate",
+      "keyword": "AuxStop",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "AuxStop device=…, axis=…[, decel=…][, immediate=on]",
+      "summary": "axis {auxAxisIndex}",
+      "fields": [
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxDecel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Stop",
+          "kind": "number",
+          "default": null,
+          "min": 0,
+          "exprKey": "auxDecel",
+          "required": false
+        },
+        {
+          "key": "auxImmediate",
+          "arg": "immediate",
+          "position": null,
+          "label": "Immediate",
+          "group": "Stop",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "AuxEnable",
+      "category": "io",
+      "label": "Aux Motor Enable",
+      "description": "Enable or disable the motor drivers of an aux card",
+      "keyword": "AuxEnable",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "AuxEnable device=…, axis=…, on|off",
+      "summary": "{auxEnable}",
+      "fields": [
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxEnable",
+          "arg": "",
+          "position": 0,
+          "label": "Enabled",
+          "group": "Drivers",
+          "kind": "bool",
+          "default": true,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "GripperAction",
+      "category": "io",
+      "label": "Gripper",
+      "description": "Open, close or grip to a jaw gap",
+      "keyword": "GripperAction",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "GripperAction open|close|to <mm>[, device=…, axis=…][, velocity=…][, until=…]",
+      "summary": "{gripperAction} {gripTargetMm}",
+      "fields": [
+        {
+          "key": "gripperAction",
+          "arg": "",
+          "position": 0,
+          "label": "Action",
+          "group": "Gripper",
+          "kind": "enum",
+          "default": "Open",
+          "options": [
+            {
+              "value": "Open",
+              "label": "Open"
+            },
+            {
+              "value": "Close",
+              "label": "Close"
+            },
+            {
+              "value": "GripTo",
+              "label": "Grip to"
+            }
+          ],
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "gripTargetMm",
+          "arg": "to",
+          "position": null,
+          "label": "Jaw gap",
+          "group": "Gripper",
+          "kind": "number",
+          "unit": "mm",
+          "default": null,
+          "min": 0,
+          "exprKey": "gripTargetMm",
+          "required": false,
+          "showIf": {
+            "field": "gripperAction",
+            "in": [
+              "GripTo"
+            ]
+          }
+        },
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxVelocity",
+          "arg": "velocity",
+          "position": null,
+          "label": "Speed",
+          "group": "Gripper",
+          "kind": "number",
+          "unit": "mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "auxVelocity",
+          "required": false
+        },
+        {
+          "key": "auxAccel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Gripper",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "auxAccel",
+          "required": false
+        },
+        {
+          "key": "moveStopCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Stop condition",
+          "group": "Stop condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000."
+        },
+        {
+          "key": "moveStopMode",
+          "arg": "untilMode",
+          "position": null,
+          "label": "When true",
+          "group": "Stop condition",
+          "kind": "enum",
+          "default": "stop",
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "arg": "untilPos",
+          "position": null,
+          "label": "Position variable",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Receives the axis position (mm / deg, or steps).",
+          "varKinds": [
+            "number"
+          ]
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "arg": "untilFlag",
+          "position": null,
+          "label": "Fired flag",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ConveyorAction",
+      "category": "io",
+      "label": "Conveyor",
+      "description": "Run a conveyor forward or reverse, or stop it",
+      "keyword": "ConveyorAction",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "ConveyorAction forward|reverse|stop[, device=…, axis=…]",
+      "summary": "{conveyorAction}",
+      "fields": [
+        {
+          "key": "conveyorAction",
+          "arg": "",
+          "position": 0,
+          "label": "Action",
+          "group": "Conveyor",
+          "kind": "enum",
+          "default": "RunForward",
+          "options": [
+            {
+              "value": "RunForward",
+              "label": "Forward"
+            },
+            {
+              "value": "RunReverse",
+              "label": "Reverse"
+            },
+            {
+              "value": "Stop",
+              "label": "Stop"
+            }
+          ],
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "RotaryIndex",
+      "category": "io",
+      "label": "Rotary Index",
+      "description": "Index a rotary axis a number of positions",
+      "keyword": "RotaryIndex",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "RotaryIndex +1|-1[, count=…][, device=…, axis=…]",
+      "summary": "{rotaryDirection} × {rotaryCount}",
+      "fields": [
+        {
+          "key": "rotaryDirection",
+          "arg": "",
+          "position": 0,
+          "label": "Direction",
+          "group": "Rotary",
+          "kind": "integer",
+          "default": 1,
+          "options": [
+            {
+              "value": 1,
+              "label": "+1"
+            },
+            {
+              "value": -1,
+              "label": "-1"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "rotaryCount",
+          "arg": "count",
+          "position": null,
+          "label": "Count",
+          "group": "Rotary",
+          "kind": "integer",
+          "default": 1,
+          "min": 1,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "RunVision",
+      "category": "vision",
+      "label": "Run Vision",
+      "description": "Run a vision program and write its results into variables",
+      "keyword": "RunVision",
+      "aliases": [],
+      "background": true,
+      "body": "mapping",
+      "syntax": "RunVision <program>[, frame=pixel|normalized|robot][, pass=$v] … end",
+      "summary": "{visionProgramId}",
+      "fields": [
+        {
+          "key": "visionProgramId",
+          "arg": "",
+          "position": 0,
+          "label": "Vision program",
+          "group": "Vision",
+          "kind": "visionRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "visionProgramId",
+            "visionProgramName"
+          ]
+        },
+        {
+          "key": "outputFrame",
+          "arg": "frame",
+          "position": null,
+          "label": "Coordinates",
+          "group": "Vision",
+          "kind": "enum",
+          "default": "pixel",
+          "options": [
+            {
+              "value": "pixel",
+              "label": "Pixels"
+            },
+            {
+              "value": "normalized",
+              "label": "Normalized 0–1"
+            },
+            {
+              "value": "robot",
+              "label": "Robot (mm)"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "passVariable",
+          "arg": "pass",
+          "position": null,
+          "label": "Pass variable",
+          "group": "Vision",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        },
+        {
+          "key": "toolOutputs",
+          "arg": "",
+          "position": null,
+          "label": "Tool outputs",
+          "group": "Outputs",
+          "kind": "mappingOut",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Rows of tool · value → variable."
+        }
+      ]
+    },
+    {
+      "type": "CaptureImage",
+      "category": "vision",
+      "label": "Capture Image",
+      "description": "Store the current camera frame in an image variable",
+      "keyword": "CaptureImage",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "CaptureImage $<image>[, camera=…]",
+      "summary": "${captureImageVariableName}",
+      "fields": [
+        {
+          "key": "captureImageVariableName",
+          "arg": "",
+          "position": 0,
+          "label": "Image variable",
+          "group": "Image",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "varKinds": [
+            "image"
+          ]
+        },
+        {
+          "key": "captureImageCameraId",
+          "arg": "camera",
+          "position": null,
+          "label": "Camera",
+          "group": "Image",
+          "kind": "cameraRef",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "SaveImage",
+      "category": "vision",
+      "label": "Save Image",
+      "description": "Save a camera snapshot to a file",
+      "keyword": "SaveImage",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "SaveImage \"<path>\"[, camera=…]",
+      "summary": "{saveImagePath}",
+      "fields": [
+        {
+          "key": "saveImagePath",
+          "arg": "",
+          "position": 0,
+          "label": "Path",
+          "group": "Image",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "saveImageCameraId",
+          "arg": "camera",
+          "position": null,
+          "label": "Camera",
+          "group": "Image",
+          "kind": "cameraRef",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "StartBackground",
+      "category": "background",
+      "label": "Start Background",
+      "description": "Start a background program in parallel",
+      "keyword": "StartBackground",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "StartBackground <program>",
+      "summary": "{backgroundProgramId}",
+      "fields": [
+        {
+          "key": "backgroundProgramId",
+          "arg": "",
+          "position": 0,
+          "label": "Background program",
+          "group": "Program",
+          "kind": "programRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "backgroundProgramId",
+            "backgroundProgramName"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "StopBackground",
+      "category": "background",
+      "label": "Stop Background",
+      "description": "Stop a background program",
+      "keyword": "StopBackground",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "StopBackground <program>",
+      "summary": "{backgroundProgramId}",
+      "fields": [
+        {
+          "key": "backgroundProgramId",
+          "arg": "",
+          "position": 0,
+          "label": "Background program",
+          "group": "Program",
+          "kind": "programRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "backgroundProgramId",
+            "backgroundProgramName"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "WaitForBackground",
+      "category": "background",
+      "label": "Wait for Background",
+      "description": "Wait until a background program finishes",
+      "keyword": "WaitForBackground",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "WaitForBackground <program>",
+      "summary": "{backgroundProgramId}",
+      "fields": [
+        {
+          "key": "backgroundProgramId",
+          "arg": "",
+          "position": 0,
+          "label": "Background program",
+          "group": "Program",
+          "kind": "programRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "backgroundProgramId",
+            "backgroundProgramName"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "HttpRequest",
+      "category": "comms",
+      "label": "HTTP Request",
+      "description": "POST JSON to a server and read values from the reply",
+      "keyword": "HttpRequest",
+      "aliases": [],
+      "background": true,
+      "body": "mapping",
+      "syntax": "HttpRequest \"<url>\"[, wait=on][, timeout=…] send … receive … end",
+      "summary": "{jsonUrl}",
+      "fields": [
+        {
+          "key": "jsonUrl",
+          "arg": "",
+          "position": 0,
+          "label": "URL",
+          "group": "Request",
+          "kind": "text",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "jsonWaitForResponse",
+          "arg": "wait",
+          "position": null,
+          "label": "Wait for the reply",
+          "group": "Request",
+          "kind": "bool",
+          "default": true,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "jsonTimeoutMs",
+          "arg": "timeout",
+          "position": null,
+          "label": "Timeout",
+          "group": "Request",
+          "kind": "integer",
+          "unit": "ms",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "jsonOutbound",
+          "arg": "send",
+          "position": null,
+          "label": "Send",
+          "group": "Body",
+          "kind": "rows",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "jsonInbound",
+          "arg": "receive",
+          "position": null,
+          "label": "Receive",
+          "group": "Body",
+          "kind": "mappingOut",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "HttpReceive",
+      "category": "comms",
+      "label": "HTTP Receive",
+      "description": "Wait for an HTTP POST to a named webhook",
+      "keyword": "HttpReceive",
+      "aliases": [],
+      "background": true,
+      "body": "mapping",
+      "syntax": "HttpReceive \"<name>\"[, timeout=…] receive … end",
+      "summary": "{httpReceiveName}",
+      "fields": [
+        {
+          "key": "httpReceiveName",
+          "arg": "",
+          "position": 0,
+          "label": "Name",
+          "group": "Webhook",
+          "kind": "text",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "help": "Other machines POST to /webhook/<name>."
+        },
+        {
+          "key": "httpReceiveTimeoutMs",
+          "arg": "timeout",
+          "position": null,
+          "label": "Timeout",
+          "group": "Webhook",
+          "kind": "integer",
+          "unit": "ms",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "httpReceiveInbound",
+          "arg": "receive",
+          "position": null,
+          "label": "Receive",
+          "group": "Body",
+          "kind": "mappingOut",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "StatusUpdate",
+      "category": "comms",
+      "label": "Status Update",
+      "description": "Publish a message, warning or error to the monitor",
+      "keyword": "status",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "status [info|warning|error] \"<message>\"",
+      "summary": "{statusMessage}{statusWarning}{statusError}",
+      "fields": [
+        {
+          "key": "statusSeverity",
+          "arg": "",
+          "position": null,
+          "label": "Severity",
+          "group": "Status",
+          "kind": "enum",
+          "default": "Info",
+          "options": [
+            {
+              "value": "Info",
+              "label": "Info"
+            },
+            {
+              "value": "Warning",
+              "label": "Warning"
+            },
+            {
+              "value": "Error",
+              "label": "Error"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "statusMessage",
+          "arg": "",
+          "position": 0,
+          "label": "Message",
+          "group": "Status",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "statusWarning",
+          "arg": "warning",
+          "position": null,
+          "label": "Warning",
+          "group": "Status",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "statusError",
+          "arg": "error",
+          "position": null,
+          "label": "Error",
+          "group": "Status",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "Prompt",
+      "category": "comms",
+      "label": "Prompt",
+      "description": "Ask the operator: show a message with buttons and an optional input",
+      "keyword": "prompt",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "prompt \"<message>\"[, title=…][, buttons=(…)][, input=number|text][, result=$v][, value=$v][, timeout=…]",
+      "summary": "{promptMessage}",
+      "fields": [
+        {
+          "key": "promptMessage",
+          "arg": "",
+          "position": 0,
+          "label": "Message",
+          "group": "Prompt",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "promptTitle",
+          "arg": "title",
+          "position": null,
+          "label": "Title",
+          "group": "Prompt",
+          "kind": "template",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "promptButtons",
+          "arg": "buttons",
+          "position": null,
+          "label": "Buttons",
+          "group": "Prompt",
+          "kind": "textList",
+          "default": [
+            "OK"
+          ],
+          "min": 1,
+          "max": 4,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "promptResultVariableName",
+          "arg": "result",
+          "position": null,
+          "label": "Button variable",
+          "group": "Prompt",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "A number variable gets the button index (from 0); a text variable gets its label.",
+          "varKinds": [
+            "number",
+            "string"
+          ]
+        },
+        {
+          "key": "promptInput",
+          "arg": "input",
+          "position": null,
+          "label": "Input",
+          "group": "Input",
+          "kind": "enum",
+          "default": "none",
+          "options": [
+            {
+              "value": "none",
+              "label": "None"
+            },
+            {
+              "value": "number",
+              "label": "Number"
+            },
+            {
+              "value": "text",
+              "label": "Text"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "promptDefault",
+          "arg": "default",
+          "position": null,
+          "label": "Default",
+          "group": "Input",
+          "kind": "expr",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "promptInput",
+            "in": [
+              "number",
+              "text"
+            ]
+          }
+        },
+        {
+          "key": "promptMin",
+          "arg": "min",
+          "position": null,
+          "label": "Minimum",
+          "group": "Input",
+          "kind": "number",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "promptInput",
+            "in": [
+              "number"
+            ]
+          }
+        },
+        {
+          "key": "promptMax",
+          "arg": "max",
+          "position": null,
+          "label": "Maximum",
+          "group": "Input",
+          "kind": "number",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "promptInput",
+            "in": [
+              "number"
+            ]
+          }
+        },
+        {
+          "key": "promptInputVariableName",
+          "arg": "value",
+          "position": null,
+          "label": "Input variable",
+          "group": "Input",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "promptInput",
+            "in": [
+              "number",
+              "text"
+            ]
+          },
+          "varKinds": [
+            "number",
+            "string"
+          ]
+        },
+        {
+          "key": "promptTimeoutMs",
+          "arg": "timeout",
+          "position": null,
+          "label": "Timeout",
+          "group": "Timeout",
+          "kind": "integer",
+          "unit": "ms",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false,
+          "help": "0 = wait forever."
+        },
+        {
+          "key": "promptTimeoutButton",
+          "arg": "onTimeout",
+          "position": null,
+          "label": "On timeout press",
+          "group": "Timeout",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "max": 3,
+          "step": 1,
+          "exprKey": null,
+          "required": false,
+          "help": "Button index chosen on timeout. Empty = fail (catchable)."
+        }
+      ]
+    },
+    {
+      "type": "Plugin",
+      "category": "plugins",
+      "label": "Plugin",
+      "description": "A step provided by an installed plugin",
+      "keyword": "plugin",
+      "aliases": [],
+      "background": true,
+      "body": "mapping",
+      "syntax": "plugin <id>.<step>[, timeout=…] <param> = … <output> -> $v end",
+      "summary": "{pluginId}",
+      "fields": [
+        {
+          "key": "pluginId",
+          "arg": "",
+          "position": 0,
+          "label": "Plugin step",
+          "group": "Plugin",
+          "kind": "pluginRef",
+          "default": null,
+          "exprKey": null,
+          "required": true,
+          "props": [
+            "pluginId",
+            "pluginStepId"
+          ]
+        },
+        {
+          "key": "pluginParams",
+          "arg": "",
+          "position": null,
+          "label": "Parameters",
+          "group": "Parameters",
+          "kind": "exprMap",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Typed by the plugin manifest."
+        },
+        {
+          "key": "pluginOutputs",
+          "arg": "",
+          "position": null,
+          "label": "Outputs",
+          "group": "Outputs",
+          "kind": "mappingOut",
+          "default": null,
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "pluginTimeoutMs",
+          "arg": "timeout",
+          "position": null,
+          "label": "Timeout",
+          "group": "Plugin",
+          "kind": "integer",
+          "unit": "ms",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = the manifest default; 0 = none."
+        }
+      ]
+    }
+  ],
+  "commonFields": [
+    "id",
+    "name",
+    "comment",
+    "type",
+    "enabled",
+    "expressions",
+    "unknownStepType"
+  ],
+  "legacyFields": [
+    "varPointName",
+    "varPointIndex",
+    "jsonImageOutbound",
+    "cncProgramSteps"
+  ]
+}

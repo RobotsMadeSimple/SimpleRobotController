@@ -1,0 +1,36 @@
+{
+  "title": "SimpleRobot Programming Manual",
+  "subtitle": "Blocks and Simple Robot Script — concepts, instruction reference, functions and error codes",
+  "languageVersion": 1,
+  "reference": "reference.json",
+  "parts": [
+    { "id": "part-concepts", "title": "Part I — Concepts", "chapters": ["intro", "structure", "data", "expressions", "points", "motion", "io", "flow", "routines", "errors", "running", "background", "vision", "comms", "plugins"] },
+    { "id": "part-reference", "title": "Part II — Reference", "chapters": ["instructions", "functions", "error-codes"] },
+    { "id": "part-appendices", "title": "Appendices", "chapters": ["grammar", "keywords", "quick-reference"] }
+  ],
+  "chapters": [
+    { "id": "intro", "number": "1", "title": "Introduction", "file": "chapters/01-introduction.md" },
+    { "id": "structure", "number": "2", "title": "Program Structure", "file": "chapters/02-program-structure.md" },
+    { "id": "data", "number": "3", "title": "Data and Variables", "file": "chapters/03-data-and-variables.md" },
+    { "id": "expressions", "number": "4", "title": "Expressions and Conditions", "file": "chapters/04-expressions.md" },
+    { "id": "points", "number": "5", "title": "Points, Frames and Tools", "file": "chapters/05-points-frames-tools.md" },
+    { "id": "motion", "number": "6", "title": "Motion", "file": "chapters/06-motion.md" },
+    { "id": "io", "number": "7", "title": "I/O, Waits and Aux Axes", "file": "chapters/07-io-and-timing.md" },
+    { "id": "flow", "number": "8", "title": "Flow Control", "file": "chapters/08-flow-control.md" },
+    { "id": "routines", "number": "9", "title": "Routines and Parameters", "file": "chapters/09-routines.md" },
+    { "id": "errors", "number": "10", "title": "Error Handling", "file": "chapters/10-error-handling.md" },
+    { "id": "running", "number": "11", "title": "Running and Debugging", "file": "chapters/11-running-and-debugging.md" },
+    { "id": "background", "number": "12", "title": "Background Programs", "file": "chapters/12-background-programs.md" },
+    { "id": "vision", "number": "13", "title": "Vision", "file": "chapters/13-vision.md" },
+    { "id": "comms", "number": "14", "title": "Operator Prompts and Communication", "file": "chapters/14-communication-and-prompts.md" },
+    { "id": "plugins", "number": "15", "title": "Plugins", "file": "chapters/15-plugins.md" },
+    { "id": "instructions", "number": "16", "title": "Instruction Reference", "file": "chapters/16-instructions.md", "generated": "steps" },
+    { "id": "functions", "number": "17", "title": "Functions and Properties Reference", "file": "chapters/17-functions.md", "generated": "functions" },
+    { "id": "error-codes", "number": "18", "title": "Error and Problem Codes", "file": "chapters/18-error-codes.md", "generated": "errorCodes" },
+    { "id": "grammar", "number": "A", "title": "Simple Robot Script Grammar", "file": "chapters/A-grammar.md" },
+    { "id": "keywords", "number": "B", "title": "Keyword List", "file": "chapters/B-keywords.md", "generated": "keywords" },
+    { "id": "quick-reference", "number": "C", "title": "Quick Reference Cards", "file": "chapters/C-quick-reference.md" }
+  ],
+  "figures": [],
+  "screens": []
+}
