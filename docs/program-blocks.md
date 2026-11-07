@@ -658,9 +658,9 @@ A Stop while the step is outstanding cancels it (`step.cancel`, reason
 New blocks from the program-editor order (design: [program-language.md](program-language.md)
 §4). The step types, fields and enum strings are fixed (see the catalog and the
 goldens); each section is filled in by the package that implements the block
-(the letter in brackets), with small, section-scoped edits. Until then a run that
-reaches one of these blocks — except Note — ends with "… not implemented on
-this controller yet".
+(the letter in brackets), with small, section-scoped edits. A run that reaches a
+block whose package has not landed yet ends with "… not implemented on this
+controller yet".
 
 ### Note — note or section header (A)
 
@@ -670,23 +670,138 @@ collapse the steps up to the next section).
 
 ### LoopControl — break / next iteration (B)
 
+`type: "LoopControl"`, `loopControl: "break"` (default) | `"continue"`. **Break** leaves the
+nearest enclosing loop; the step after the loop runs next. **Next iteration** ends this pass:
+a count loop counts it, a for-each moves to the next element, a while loop re-checks its
+condition. Branches and Try bodies between the step and the loop are simply left. It never
+crosses a routine boundary: a Break in a routine called from a loop is an error at run time
+and `loopControlOutsideLoop` (error) in the validator.
+
 ### Return (B)
+
+`type: "Return"`. In a routine: leave it now; its out / inOut parameters are copied back (see
+CallRoutine — parameters). In a main or background program: the program finishes `Complete`.
 
 ### EndProgram (B)
 
+`type: "EndProgram"`, optional `statusMessage` (a template). Finishes the program `Complete`
+from any depth (inside loops, routines, Try), with the message as the final status text. A
+background program ends only itself.
+
 ### RaiseError (B)
+
+`type: "RaiseError"`, `errorMessage` (template, required), `errorCode` (identifier, default
+`userError`). Fails with that code and message: an enclosing Try that catches the code takes
+over, otherwise the program ends `Error` with the message. A code of your own is always
+catchable; raising a fatal catalog code (e.g. `motionFault`) is a validator warning, as no Try
+can catch it.
 
 ### Switch (B)
 
+`type: "Switch"`, `switchExpr` (expression, required), `switchCases: [{id, values: [expr…],
+steps}]`, `switchDefault` (steps). `switchExpr` is evaluated once; the first case with a value
+equal to it (`==` within 1e-9) runs, otherwise the default; no fall-through. Numbers only —
+test text with `If $s.contains(…)`. Validator: `duplicateCaseValue` (warning) when two cases
+share a literal value, `missingField` for a case with no value, `emptyBranch` when no case and
+no default has steps.
+
 ### Try / Catch (B)
+
+`type: "Try"`, `trySteps`, `catchSteps`, `tryRetries` (default 0), `tryRetryDelayMs` (default
+0), `catchCodes` (empty = every catchable code), `errorVariableName` / `errorCodeVariableName`
+(text variables; created if not declared).
+
+When a step inside `trySteps` fails with a **catchable** code — at any depth, inside loops,
+branches and called routines:
+
+1. everything inside the Try is abandoned (a routine that did not finish copies no outputs);
+2. while retries are left, the body runs again from the top after `tryRetryDelayMs`;
+3. then the error message and code go into the two variables and `catchSteps` run; an empty
+   catch ignores the error. The program carries on after the Try either way.
+
+A code not in `catchCodes` goes on to the next enclosing Try. A failure inside `catchSteps`
+also goes outward. Each catch is logged (`[Caught <code>] <message> — retry 1 of 2`).
+
+**Catchable codes:** `waitTimeout`, `visionTimeout`, `visionFailed`, `httpFailed`,
+`httpTimeout`, `receiveTimeout`, `pluginFailed`, `pluginTimeout`, `pluginNotRunning`,
+`promptTimeout`, `pointNotFound`, `arcDegenerate`, `indexOutOfRange`, `userError` and any
+RaiseError code of your own. **Fatal, never caught:** motion faults and joint limits, driver
+disconnects, e-stop, a user Stop, unknown variables, expression syntax errors and writes to
+computed variables — these are authoring or hardware problems a Try must not hide. What the
+existing steps fail with:
+
+| Step | Catchable failure |
+|---|---|
+| Wait (condition, `waitTimeoutAction: "error"`) | `waitTimeout` |
+| RunVision | `visionTimeout` (no result in time), `visionFailed` (processor lost, output frame not available) |
+| CaptureImage / SaveImage | `visionFailed` (no camera frame) |
+| HttpRequest (waits for the reply) | `httpFailed` (network error, non-2xx status), `httpTimeout`. An empty or non-JSON reply is not a failure; fire-and-continue requests never fail. |
+| HttpReceive | `receiveTimeout` |
+| Plugin step, plugin functions in expressions | `pluginFailed`, `pluginTimeout`, `pluginNotRunning` |
+| MoveL / MoveJ / JumpL / JumpJ with a `pointNameExpr` target | `pointNotFound` (the template names no saved point, or the points list is empty) |
+
+A program that ends `Error` reports `errorCode` in its status (when the failure has one), and
+its `currentStepId` is the step that failed.
+
+Validator: `emptyBranch` (no try steps), negative retries or delay, catch codes that are not
+identifiers (error) or are fatal (warning), and `paramOutputType` when an error variable is
+declared as something other than text.
 
 ### Wait — on timeout (B)
 
+A condition Wait with a timeout takes `waitTimeoutAction`: `"continue"` (default — carry on;
+the timed-out flag says what happened) or `"error"` — fail with `waitTimeout` ("Wait …: timed
+out after N ms waiting for <condition>"), which a Try can catch. The timed-out flag is written
+either way. A condition that holds on the tick the timeout falls due counts as met.
+
 ### CallRoutine — parameters (B)
+
+A routine's variables become parameters with `paramMode`: `"in"`, `"out"` or `"inOut"`. The
+call gives `routineArgs: {param: expr}` and `routineOutputs: [{key: param, variableName}]`.
+
+- Each `in` / `inOut` argument is evaluated in the **caller's** scope before the routine's
+  variables are initialised (so `n = $n + 1` reads the caller's `$n`). A text parameter takes a
+  template, a boolean one stores 0 / 1, a list parameter takes a list variable (`$pts`, copied).
+  A parameter with no argument keeps its declared value (`paramMissing`, warning).
+- When the routine ends — its last step, or a Return — each mapped `out` / `inOut` parameter is
+  copied into the caller's variable (an undeclared target is created with the parameter's
+  kind). An `in` parameter is never copied back.
+- Parameters live in the shared variable scope (as routine variables always have), so name them
+  distinctly from the caller's variables.
+- A routine is a boundary: GoToLabel and Break / Next inside it never reach the caller's labels
+  or loops (validator: `unknownLabel`, `loopControlOutsideLoop`).
+
+Validator: `unknownParam` (an argument or output naming no parameter, or an output from an `in`
+parameter; an argument to an `out` parameter is a warning), `paramMissing`, `paramOutputType`
+(an output into a variable of a kind that cannot hold it), and the argument expressions and
+templates themselves.
 
 ### SetOutput — toggle and expression value (B)
 
+`outputAction: "set"` (default) | `"toggle"`. Toggle flips the output's current state (as
+`$stb.out2`, `$relay.3` or the IO device pin reads it). Set takes `expressions.outputValue` when
+present (non-zero = on), otherwise the literal `outputValue`. A pulse always reverts to the
+opposite of the state the step set, so a toggle pulse flips and flips back.
+
 ### Debugging — run from step, breakpoints, step mode (B)
+
+`ExecuteBuiltProgram { name, startAtStepId?, breakpoints?: [stepId], stepMode?: bool }`:
+
+- **Breakpoints** pause the program *before* the step (status `Stopped`, `pauseReason:
+  "breakpoint"`, `pausedAtStepId`). Continue (`StartProgram` on the paused program) runs on; a
+  breakpoint in a loop pauses on every pass.
+- **Step mode** pauses before every step (`pauseReason: "step"`). `StepBuiltProgram {}` runs the
+  paused step and pauses before the next one; on a running program it pauses before its next
+  step. Continue leaves step mode. Notes and disabled steps never pause, and a multi-tick step
+  (Wait, Jump legs, vision) is never paused half-way.
+- **`SetBreakpoints { stepIds }`** replaces the running program's breakpoints → `{ count }`.
+- **Run from step** builds the frame stack down to the step: enclosing loops start at their
+  first pass (count index 0, for-each element 0, a while condition not checked), an If / Switch
+  branch, Try body or catch is entered without evaluating anything, and the steps before it do
+  not run (variables start at their declared values). A step inside a routine, a disabled step
+  or a CNC block is refused (`ok: false`, "Cannot run from this step: …").
+
+Background programs ignore all of this. A plain start clears the debug state.
 
 ### SavePosition (C)
 

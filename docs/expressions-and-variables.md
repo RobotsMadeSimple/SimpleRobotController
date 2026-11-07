@@ -8,7 +8,7 @@ existing is renamed or reshaped.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `enabled` | bool, optional | `false` = executor skips the step (still counted for progress, logged as `[Skipped — disabled] …`). Absent/`true` = runs. |
+| `enabled` | bool, optional | `false` = the executor skips the step and its whole body (it still counts once for progress, logged as `[Skipped — disabled] …`; a disabled Note just advances). The validator reports one `disabledStep` warning and checks nothing inside it; the debugger never pauses on it. Absent/`true` = runs. |
 | `comment` | string, optional | Free text shown under the step in the editor. Never executed. |
 
 ## 2. Expression language

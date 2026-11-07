@@ -21,5 +21,6 @@ is clear to move (relative moves of up to 40 mm in X and 20 mm in Z, plus the gr
 | Suite | Covers |
 |---|---|
 | `stopcond.mjs` | Stop / record on condition: MoveL stop, record and never-fires, MoveJ, JumpL stop (legs skipped) and record, no-blend on a watched MoveL, bad-expression error, AuxMove stop and record, Gripper close stopped halfway. |
+| `flow.mjs` | Program flow and debugging (no motion): Try/catch/retry, Raise Error with errorCode + failing step, Wait onTimeout=error, Switch, break/continue, routine in/out/inOut params + Return, SetOutput toggle/expression, breakpoints, step mode, StepBuiltProgram, SetBreakpoints, run from a step in a loop, refused start step. |
 
 `harness.mjs` holds the shared pieces (`Ctrl`, `runProgram`, variable and step helpers) for new suites.
