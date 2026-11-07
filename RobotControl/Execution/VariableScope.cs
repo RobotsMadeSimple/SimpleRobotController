@@ -729,14 +729,13 @@ namespace Controller.RobotControl.Execution
         internal static readonly Regex BareWord      = new(@"(?<![$.\w])[A-Za-z_]\w*");
 
         /// <summary>
-        /// A word inside {…} that is not a forgotten $: a literal (true/false), a word-spelled
+        /// A word inside {…} that is not a forgotten $: a literal (true/false/on/off), a word-spelled
         /// operator (and/or/not), or a function name followed by "(" — "{round($x, 2)}".
         /// </summary>
         internal static bool IsAllowedBareWord(string body, Match w)
         {
             var word = w.Value;
-            if (word.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-                word.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+            if (ExpressionEvaluator.IsBoolWord(word) ||
                 word.Equals("and", StringComparison.OrdinalIgnoreCase) ||
                 word.Equals("or", StringComparison.OrdinalIgnoreCase) ||
                 word.Equals("not", StringComparison.OrdinalIgnoreCase))

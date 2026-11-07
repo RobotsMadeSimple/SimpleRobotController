@@ -16,7 +16,7 @@ existing is renamed or reshaped.
 Expressions are numeric (doubles). Booleans are 1/0. Existing syntax stays valid.
 
 ```
-Literals      3.14  -5  true  false
+Literals      3.14  -5  true  false  on  off       (on/true = 1, off/false = 0)
 Variables     $name                 program, global, persistent variables
 IO            $stb.in1 $stb.out2 $relay.3 $io.<nano>.<pin>
 Properties    $robot.x  $program.runCount  $time.hour     (read-only, section 3)
@@ -97,7 +97,8 @@ evaluating to a fallback; the validator (section 5) reports them before a run.
 `out position`) checks syntax only. `ExpressionParseException.Code` is
 `expressionSyntax`, `unknownFunction` or `badArity`. An empty expression is valid
 and evaluates to 0; a bare word without `$` is valid and evaluates to 0 (legacy —
-the validator warns).
+the validator warns). `true`/`on` and `false`/`off` are literals, not bare words; a
+variable named `on` is `$on`.
 
 ## 3. Properties (read-only system variables)
 
@@ -144,7 +145,8 @@ content before overwriting when the content differs (section 6).
 `unknownPoint unknownTool unknownLocal unknownRoutine unknownVisionProgram
 unknownGrid unknownStack unknownLabel duplicateLabel unknownVariable
 unknownProperty expressionSyntax emptyLoop emptyBranch missingField
-routineRecursion disabledStep(warning) unreachableStep(warning)
+routineRecursion disabledStep(warning) unreachableStep(warning: after an enabled GoTo, or a
+`repeat forever` with no Break of its own — a Break in a nested loop only ends that loop)
 unusedVariable(warning)`.
 
 Also emitted: `unknownFunction` and `badArity` (the parse-error codes of section 2),

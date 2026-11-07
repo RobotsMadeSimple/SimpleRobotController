@@ -143,7 +143,7 @@ namespace Controller.RobotControl
     /// Evaluates numeric expressions that may reference program variables, IO and properties.
     ///
     /// Supported syntax:
-    ///   Literals     : 3.14  -5  100  1e3  true  false
+    ///   Literals     : 3.14  -5  100  1e3  true  false  on  off
     ///   Variables    : $varName
     ///   IO           : $stb.in1  $relay.2  $io.Board.pin    (dotted names, longest match wins)
     ///   Properties   : $robot.x  $program.runCount  $time.hour (read-only; see <see cref="IPropertySource"/>)
@@ -532,6 +532,19 @@ namespace Controller.RobotControl
             public override void Collect(List<ExprRef> refs) =>
                 refs.Add(new ExprRef(ExprRefKind.BareWord, _word, [_word], Pos));
         }
+
+        /// <summary>true / on — a boolean literal worth 1 (case-insensitive).</summary>
+        internal static bool IsTrueWord(string s) =>
+            s.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            s.Equals("on",   StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>false / off — a boolean literal worth 0 (case-insensitive).</summary>
+        internal static bool IsFalseWord(string s) =>
+            s.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+            s.Equals("off",   StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>A boolean literal word: true/false/on/off.</summary>
+        internal static bool IsBoolWord(string s) => IsTrueWord(s) || IsFalseWord(s);
 
         private static bool IsCountWord(string s) =>
             s.Equals("length", StringComparison.OrdinalIgnoreCase) ||
@@ -938,7 +951,7 @@ namespace Controller.RobotControl
                     continue;
                 }
 
-                // Bare word — a field name after a dot, a function name, true/false, or one
+                // Bare word — a field name after a dot, a function name, true/false/on/off, or one
                 // of the word-spelled logic operators. After a dot it is always a field name:
                 // record fields are named by whatever produced the record, so "$r[0].not"
                 // has to keep working.
@@ -1206,8 +1219,9 @@ namespace Controller.RobotControl
                         // (scale.tare()). Anything else keeps its old meaning.
                         if (Cur.Type == TokType.Dot && TryDottedCallName(tok, out var dotted))
                             return ParseDottedCall(dotted, tok.Pos);
-                        if (tok.Value.Equals("true",  StringComparison.OrdinalIgnoreCase)) return new NumNode(1, tok.Pos);
-                        if (tok.Value.Equals("false", StringComparison.OrdinalIgnoreCase)) return new NumNode(0, tok.Pos);
+                        // Boolean literals: true/false and the SRS value words on/off.
+                        if (IsTrueWord(tok.Value))  return new NumNode(1, tok.Pos);
+                        if (IsFalseWord(tok.Value)) return new NumNode(0, tok.Pos);
                         // Legacy: a bare word is 0. The validator flags it.
                         return new WordNode(tok.Value, tok.Pos);
                     }

@@ -43,8 +43,21 @@ public class ExpressionEvaluatorTests
     [InlineData("5 / 0", 0)]             // div-by-zero -> 0 (intentional)
     [InlineData("true", 1)]
     [InlineData("FALSE", 0)]
+    [InlineData("on", 1)]                // SRS value words are boolean literals too
+    [InlineData("OFF", 0)]
+    [InlineData("on and not off", 1)]
+    [InlineData("on + on", 2)]
     public void Arithmetic(string expr, double expected)
         => Assert.Equal(expected, Eval(expr), 9);
+
+    // A variable named on/off is $on/$off — the sigil keeps it apart from the literal.
+    [Fact]
+    public void AVariableNamedOnIsNotTheLiteral()
+    {
+        Assert.Equal(7, Eval("$on", Vars(("on", 7))), 9);
+        Assert.Equal(5, Eval("$off + on * 0", Vars(("off", 5))), 9);
+        Assert.DoesNotContain(ExpressionEvaluator.References("on or off"), r => r.Kind == ExprRefKind.BareWord);
+    }
 
     // -- Scalar variables --------------------------------------------------------
 

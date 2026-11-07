@@ -17,7 +17,7 @@ Expressions are evaluated when the step runs, so they always use the current val
 | Element | Examples |
 |---|---|
 | Numbers | `3.14` `-5` `1e3` |
-| Booleans | `true` `false` (1 and 0) |
+| Booleans | `true` `false`, or `on` `off` (1 and 0) |
 | Variables | `$count`, `$pts[$i].x`, `$vals[0]`, `$list.length` |
 | IO | `$stb.in1` `$stb.out2` `$relay.3` `$io.Arduino_Nano.Input_1` |
 | Properties | `$robot.z` `$program.runCount` `$time.hour` |
@@ -33,8 +33,8 @@ Expressions are evaluated when the step runs, so they always use the current val
 The full list of functions and properties is in [Functions and Properties](#functions).
 
 > **Caution** Variables need the `$`. A bare word such as `count` is not a lookup — it evaluates to
-> **0**, and the validator warns about it. This also applies to `on` and `off` inside an expression:
-> write `true` and `false` instead.
+> **0**, and the validator warns about it. `true`, `false`, `on` and `off` are not bare words: they are
+> the values 1 and 0.
 
 ## Precedence
 

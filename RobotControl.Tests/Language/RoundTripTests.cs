@@ -95,6 +95,17 @@ public class RoundTripTests
     }
 
     [Fact]
+    public void OnAndOffAssignmentsRoundTripAsTyped()
+    {
+        const string text = "#!srs 1\nvar ok: bool = off\n\n$ok = on\n$ok = off\n$ok = $ok and not off\n";
+        var parsed = SrsLanguage.Parse(text, null, Names());
+        Assert.True(parsed.Ok, string.Join("\n", parsed.Problems.Select(p => $"{p.Line}:{p.Col} {p.Message}")));
+        Assert.Equal(["on", "off", "$ok and not off"], parsed.Program!.Steps.Select(s => s.VariableExpr));
+        Assert.Equal(text, AssertRoundTrip(parsed.Program!));
+        Assert.Equal(1, ExpressionEvaluator.Evaluate(parsed.Program!.Steps[0].VariableExpr!, new Dictionary<string, double>()));
+    }
+
+    [Fact]
     public void AnEmptyProgramRoundTrips()
     {
         var text = AssertRoundTrip(new BuiltProgram { Id = "p", Name = "Empty" });

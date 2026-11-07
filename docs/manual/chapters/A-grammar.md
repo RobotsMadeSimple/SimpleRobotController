@@ -12,7 +12,7 @@ expression language of [Expressions and Conditions](#expressions).
 | Version | The first line `#!srs 1` (optional when parsing). |
 | Strings | `"…"` with the escapes `\"` `\\` `\n` `\t` `\r`; any other backslash is kept (`"C:\data"` works). Template braces `{$x}` are kept and filled in at run time. |
 | Numbers | `3`, `-2.5`, `1e3`. Fields in milliseconds also take `500ms` and `1.5s`. |
-| Booleans | `on` `off` `true` `false` (as values of step arguments and declarations). |
+| Booleans | `on` `off` `true` `false` (in step arguments, declarations and expressions). |
 | Names | Bare when an identifier (`Pick1`), else quoted (`"Pick 1"`) or in underscore form (`Pick_1`). |
 | Variables | `$name`, with `[…]` indexes and `.field` accessors. |
 | Positional values | Right after the keyword, separated by spaces: a name, string, number, `on`/`off`, a `$var`, or an expression **in parentheses**. |
@@ -86,7 +86,7 @@ add         = mul { ( "+" | "-" ) mul } ;
 mul         = unary { ( "*" | "/" | "%" ) unary } ;
 unary       = ( "-" | "not" | "!" ) unary | pow ;      (* "not" as an operand binds like "-" *)
 pow         = atom [ "^" unary ] ;
-atom        = NUMBER | "true" | "false" | VARREF | call | "(" expr ")" ;
+atom        = NUMBER | "true" | "false" | "on" | "off" | VARREF | call | "(" expr ")" ;
 call        = IDENT { "." IDENT } "(" [ expr { "," expr } ] ")" ;
 ```
 

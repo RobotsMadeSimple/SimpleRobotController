@@ -36,8 +36,8 @@ param in height = 20              # routine parameters: in | out | inout
 | List | `list number \| bool \| point \| record` | a list of elements | See below. |
 
 > **Note** Expressions work with numbers. Booleans are stored as 1 / 0, so a comparison can be
-> assigned straight to a boolean: `$ok = $grams > 100`. In an expression write `true` / `false`;
-> the words `on` / `off` are for declarations and step options.
+> assigned straight to a boolean: `$ok = $grams > 100`. `on` / `true` are 1 and `off` / `false` are 0
+> everywhere — in declarations, step options and expressions alike: `$ok = on`.
 
 ## Modifiers
 

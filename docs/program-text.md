@@ -48,7 +48,7 @@ Contents: [Rules](#rules) · [Program layout](#program-layout) · [Declarations]
 | Version | The first line `#!srs 1`. The formatter writes it; the parser accepts text without it. |
 | Strings | `"…"` with the escapes `\"` `\\` `\n` `\t` `\r` (any other backslash is kept as written, so `"C:\data"` works). Template braces `{$x}` are kept as written and filled in at run time. |
 | Numbers | `3`, `-2.5`, `1e3`. Fields in milliseconds also take `500ms` and `1.5s`. |
-| Booleans | `on` `off` `true` `false`. |
+| Booleans | `on` `off` `true` `false` — the same 1 / 0 everywhere, inside expressions too (`$done = on`). |
 | Names | A point, tool, routine, device … whose name is a plain identifier is written bare (`Pick1`); anything else in quotes (`"Pick 1"`) or in its underscore form (`Pick_1`) — see [Names and ids](#names-and-ids). |
 | Variables | `$name` — in expressions and wherever a variable is written to (`result=$v`, `for $v in …`). |
 | Positional values | Right after the keyword, separated by spaces: a name, a string, a number, `on`/`off`, a `$var` (with `[…]` / `.field`), or an expression **in parentheses**: `SetSpeedL ($base * 2)`. |
@@ -208,7 +208,7 @@ else
   …
 end
 
-repeat 3 as $i               # count loop; "repeat forever" = run until stopped
+repeat 3 as $i               # count loop; "repeat forever" = run until stopped or a break of its own
   …
 end
 while $stb.in1 == 0

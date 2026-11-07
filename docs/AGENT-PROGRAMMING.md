@@ -138,7 +138,7 @@ The short list. Each is expanded below.
 | Comment | `#` to end of line (outside strings). |
 | Strings | `"…"`; escapes `\"` `\\` `\n` `\t` `\r`; other backslashes kept (`"C:\data"`). `{$x}` / `{expr}` braces are kept and filled in at run time. |
 | Numbers | `3`, `-2.5`, `1e3`; millisecond fields also take `500ms`, `1.5s`. |
-| Booleans | `on` `off` `true` `false`. |
+| Booleans | `on` `off` `true` `false` — 1 / 0 everywhere, inside expressions too (`$done = on`). |
 | Names | Points, tools, routines, devices, …: bare if an identifier (`Pick1`), else quoted (`"Pick 1"`) or underscore form (`Pick_1`). |
 | Variables | `$name` everywhere a variable is read or written (`result=$v`, `for $v in …`). |
 | Positional values | After the keyword, separated by spaces (or commas): name, string, number, `on`/`off`, `$var` (with `[…]`/`.field`), or `(expression)`. |
@@ -261,7 +261,7 @@ end
 repeat 3 as $i                                 # count loop; $i = 0,1,2
   …
 end
-repeat forever                                 # until stopped / break / exit
+repeat forever                                 # until stopped / break / exit (steps after it are unreachable without a break of its own)
   …
 end
 while $stb.in1 == 0
@@ -391,7 +391,7 @@ unknown "MoveWithForce"                        # a step type this controller doe
 Numeric (doubles); booleans are 1/0; any non-zero is true.
 
 ```
-Literals      3.14  -5  1e3  true  false
+Literals      3.14  -5  1e3  true  false  on  off   (on = true = 1, off = false = 0)
 Variables     $name                            (program, global, persistent, routine params, loop vars)
 IO            $stb.in1..in4  $stb.out1..out4  $relay.<n>  $io.<device>.<pin>   ($io.Arduino_Nano.Load_Cell)
 Properties    $robot.*  $program.*  $time.*  $aux.*  $camera.*  $<plugin>.<prop>   (read-only)
