@@ -218,7 +218,12 @@ namespace Controller.RobotControl.Vision.Tools
             if (names.Count > 0)
                 reader.Options.PossibleFormats = names.Select(n => Enum.TryParse<BarcodeFormat>(n, out var f) ? (BarcodeFormat?)f : null)
                                                       .Where(f => f != null).Select(f => f!.Value).ToList();
-            var results = reader.DecodeMultiple(source) ?? Array.Empty<ZXing.Result>();
+            var results = reader.DecodeMultiple(source);
+            // ZXing's QR-only multi reader ignores TryInverted, so a light-on-dark code would
+            // never be read with formats ["QR_CODE"]: try the inverted image ourselves.
+            if ((results == null || results.Length == 0) && source.InversionSupported)
+                results = reader.DecodeMultiple(source.invert());
+            results ??= Array.Empty<ZXing.Result>();
             foreach (var r in results)
             {
                 if (r?.Text == null) continue;

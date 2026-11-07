@@ -330,16 +330,35 @@ namespace Controller.RobotControl.Vision
         /// <summary>
         /// Fills a polygon given in region coordinates (pixel i spans [i, i + 1)) onto a mask whose
         /// (0, 0) is <paramref name="offset"/>: a pixel is in when its centre is, so neighbouring
-        /// grid cells do not both claim the pixels on their shared edge.
+        /// grid cells do not both claim the pixels on their shared edge. Scan-converted here at
+        /// the pixel centres, half-open (a centre on a left or top edge is in, on a right or
+        /// bottom edge out): OpenCV's FillPoly rounds vertices to whole pixels and adds the
+        /// outline, which claims up to a pixel more and depends on where the mask starts.
         /// </summary>
         public static void FillPolygon(Mat mask, IReadOnlyList<Point2d> pts, Point offset)
         {
-            if (pts.Count < 3) return;
-            const double k = 1 << FillShift;
-            // Pull the outline in by a hair so a cell edge lying exactly on a row of pixel
-            // centres leaves them to one side only.
-            var poly = pts.Select(p => new Point((int)Math.Round((p.X - 0.5 - offset.X) * k - 1), (int)Math.Round((p.Y - 0.5 - offset.Y) * k - 1))).ToArray();
-            Cv2.FillPoly(mask, new[] { poly }, Scalar.White, LineTypes.Link8, FillShift);
+            int n = pts.Count, rows = mask.Rows, cols = mask.Cols;
+            if (n < 3) return;
+            var xs = new List<double>(4);
+            for (int j = 0; j < rows; j++)
+            {
+                double yc = offset.Y + j + 0.5;
+                xs.Clear();
+                for (int i = 0, k = n - 1; i < n; k = i++)
+                {
+                    var a = pts[k]; var b = pts[i];
+                    if ((a.Y <= yc) == (b.Y <= yc)) continue;   // the edge does not cross this row (half-open in y)
+                    xs.Add(a.X + (yc - a.Y) * (b.X - a.X) / (b.Y - a.Y));
+                }
+                xs.Sort();
+                for (int s = 0; s + 1 < xs.Count; s += 2)
+                {
+                    // Pixels whose centre offset.X + i + 0.5 lies in [xs[s], xs[s + 1]).
+                    int i0 = Math.Max(0, (int)Math.Ceiling(xs[s] - 0.5 - offset.X));
+                    int i1 = Math.Min(cols - 1, (int)Math.Ceiling(xs[s + 1] - 0.5 - offset.X) - 1);
+                    if (i1 >= i0) Cv2.Line(mask, new Point(i0, j), new Point(i1, j), Scalar.White, 1, LineTypes.Link8);
+                }
+            }
         }
     }
 }
