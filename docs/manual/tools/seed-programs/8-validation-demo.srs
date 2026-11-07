@@ -1,0 +1,7 @@
+#!srs 1
+@program {"name": "Validation Demo", "description": "A program with mistakes, to show the problem list"}
+var count = 0
+
+MoveL Pik1
+$count = $cuont + 1
+Wait until $stb.in1, timeout=2s

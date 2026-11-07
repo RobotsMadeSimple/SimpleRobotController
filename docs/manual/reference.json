@@ -1133,7 +1133,7 @@
         }
       ],
       "notes": [
-        "Three legs: lift straight up to `z=`, travel over the target at that height, lower onto the target. `zStart=` / `zEnd=` set the lift and lower heights separately.",
+        "Three legs: lift straight up to the height `z=`, travel over the target, lower onto the target. The heights are absolute Z values, not offsets. `zStart=` / `zEnd=` set the lift and lower heights separately (the traverse runs from one to the other); `z=` is required unless both are given.",
         "Blending applies to the traverse leg.",
         "With a stop condition the jump takes the stepped (non-blended) path and the watch spans all three legs; in stop mode the remaining legs are skipped.",
         "The target is resolved from the first of: a grid cell, a stack slot, a `$list[i]` element or template (`pointNameExpr`), a saved point. With no target the move starts from the current position, so `offset=` makes it relative.",
@@ -6595,7 +6595,7 @@
         }
       ],
       "example": {
-        "srs": "var ok: bool = off\nvar edgeAngle = 0\nvar cells: list record\nRunVision Detect_Parts, frame=robot, pass=$ok\n  Top_edge.angle -> $edgeAngle\n  Slots.cells -> $cells\nend",
+        "srs": "var ok: bool = off\nvar edgeAngle = 0\nvar cells: list record\nRunVision Detect_Parts, frame=normalized, pass=$ok\n  Top_edge.angle -> $edgeAngle\n  Slots.cells -> $cells\nend",
         "screen": "screens/ref-RunVision.png"
       },
       "seeAlso": [

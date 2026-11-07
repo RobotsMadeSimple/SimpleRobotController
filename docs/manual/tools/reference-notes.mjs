@@ -60,7 +60,7 @@ MoveJ Pick1, speed=50, accel=100, decel=100`,
   JumpL: {
     chapter: "motion",
     notes: [
-      "Three legs: lift straight up to `z=`, travel over the target at that height, lower onto the target. `zStart=` / `zEnd=` set the lift and lower heights separately.",
+      "Three legs: lift straight up to the height `z=`, travel over the target, lower onto the target. The heights are absolute Z values, not offsets. `zStart=` / `zEnd=` set the lift and lower heights separately (the traverse runs from one to the other); `z=` is required unless both are given.",
       "Blending applies to the traverse leg.",
       "With a stop condition the jump takes the stepped (non-blended) path and the watch spans all three legs; in stop mode the remaining legs are skipped.",
       ...TARGET_NOTES.slice(0, 3), TARGET_NOTES[3],
@@ -568,7 +568,7 @@ ConveyorAction stop, device=Aux_Stepper, axis=2`,
     example: `var ok: bool = off
 var edgeAngle = 0
 var cells: list record
-RunVision Detect_Parts, frame=robot, pass=$ok
+RunVision Detect_Parts, frame=normalized, pass=$ok
   Top_edge.angle -> $edgeAngle
   Slots.cells -> $cells
 end`,

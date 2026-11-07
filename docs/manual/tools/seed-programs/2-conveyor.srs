@@ -1,0 +1,10 @@
+#!srs 1
+@program {"name": "Conveyor Watch", "isBackground": true, "description": "Pulse the conveyor when the sensor is clear"}
+global var conveyorRuns = 0
+
+repeat forever
+  Wait until $stb.in1 == 0, timeout=10s
+  SetOutput stb 2 on, pulse=500ms, blocking=on
+  $conveyorRuns = $conveyorRuns + 1
+  Wait 1s
+end
