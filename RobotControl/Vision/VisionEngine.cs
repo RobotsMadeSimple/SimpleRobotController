@@ -93,12 +93,14 @@ namespace Controller.RobotControl.Vision
             foreach (var sid in impl.Sources(tool))
                 if (NotRunBecause(sid, "source", earlier, result) is { } why) { tr.Status = ToolStatus.NotRun; tr.Message = why; return; }
 
+            // A shared region: the area (and fixture) of the tool it comes from.
+            var owner = impl.UsesRegion ? RegionOwner(tool, earlier) : tool;
             var transform = FixtureTransform.Identity;
-            if (!string.IsNullOrEmpty(tool.FixtureId))
+            if (!string.IsNullOrEmpty(owner.FixtureId))
             {
-                if (NotRunBecause(tool.FixtureId, "fixture", earlier, result) is { } why) { tr.Status = ToolStatus.NotRun; tr.Message = why; return; }
-                var fixtureTool = earlier[tool.FixtureId];
-                var fr = result.Tool(tool.FixtureId)!;
+                if (NotRunBecause(owner.FixtureId, "fixture", earlier, result) is { } why) { tr.Status = ToolStatus.NotRun; tr.Message = why; return; }
+                var fixtureTool = earlier[owner.FixtureId];
+                var fr = result.Tool(owner.FixtureId)!;
                 if (fr.Pose == null) { tr.Status = ToolStatus.NotRun; tr.Message = $"fixture '{Label(fixtureTool)}' has no pose"; return; }
                 // A fixture without a reference yet (taught this very frame) stays where drawn.
                 var reference = fixtureTool.Reference ?? fr.Pose;
@@ -108,7 +110,7 @@ namespace Controller.RobotControl.Vision
             }
 
             var region = impl.UsesRegion
-                ? PixelRegion.FromNormalized(tool.Region, layers.Width, layers.Height).Transform(transform)
+                ? PixelRegion.FromNormalized(owner.Region, layers.Width, layers.Height).Transform(transform)
                 : PixelRegion.Whole(layers.Width, layers.Height);
             if (impl.UsesRegion) tr.Region = Geo.ToPx(region.Outline());
 
@@ -133,6 +135,25 @@ namespace Controller.RobotControl.Vision
         }
 
         private static string Label(VisionTool t) => string.IsNullOrEmpty(t.Name) ? t.Id : t.Name;
+
+        /// <summary>
+        /// The tool whose region and fixture <paramref name="tool"/> uses: itself, or the end of its
+        /// <c>regionFrom</c> chain. Each link must be an earlier tool (enabled or not — only its
+        /// region is borrowed).
+        /// </summary>
+        internal static VisionTool RegionOwner(VisionTool tool, IReadOnlyDictionary<string, VisionTool> earlier)
+        {
+            var cur = tool;
+            var seen = new HashSet<string> { tool.Id };
+            while (!string.IsNullOrEmpty(cur.RegionFrom))
+            {
+                if (!earlier.TryGetValue(cur.RegionFrom, out var src))
+                    throw new InvalidOperationException($"region source '{cur.RegionFrom}' is not an earlier tool in this program");
+                if (!seen.Add(src.Id)) throw new InvalidOperationException($"region source '{Label(src)}' leads back to itself");
+                cur = src;
+            }
+            return cur;
+        }
 
         /// <summary>
         /// Every limit satisfied: each keyed value must exist and be in range — except a gridded
@@ -171,15 +192,23 @@ namespace Controller.RobotControl.Vision
             string summary = "";
             Execute(program, src, runtime, toolId, (layers, result) =>
             {
-                var transform = FixtureTransform.Identity;
-                if (!string.IsNullOrEmpty(tool.FixtureId))
+                var earlier = new Dictionary<string, VisionTool>();
+                foreach (var t in program.Tools ?? [])
                 {
-                    var fr = result.Tool(tool.FixtureId);
-                    var ft = program.Tool(tool.FixtureId);
-                    if (fr?.Pose == null || ft == null) throw new InvalidOperationException($"fixture '{tool.FixtureId}' not found on this image");
+                    if (t == null || string.IsNullOrEmpty(t.Id)) continue;
+                    if (t.Id == toolId) break;
+                    earlier.TryAdd(t.Id, t);
+                }
+                var owner = RegionOwner(tool, earlier);
+                var transform = FixtureTransform.Identity;
+                if (!string.IsNullOrEmpty(owner.FixtureId))
+                {
+                    var fr = result.Tool(owner.FixtureId);
+                    var ft = program.Tool(owner.FixtureId);
+                    if (fr?.Pose == null || ft == null) throw new InvalidOperationException($"fixture '{owner.FixtureId}' not found on this image");
                     transform = FixtureTransform.Between(ft.Reference ?? fr.Pose, fr.Pose) ?? FixtureTransform.Identity;
                 }
-                var region = PixelRegion.FromNormalized(tool.Region, layers.Width, layers.Height).Transform(transform);
+                var region = PixelRegion.FromNormalized(owner.Region, layers.Width, layers.Height).Transform(transform);
                 if (!layers.Exists(tool.Input)) throw new InvalidOperationException($"input layer '{tool.Input}' does not exist");
                 var gray = layers.Gray(tool.Input);
                 if (tool.Type == "patternMatch")

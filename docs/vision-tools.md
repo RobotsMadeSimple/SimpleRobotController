@@ -77,6 +77,7 @@ Common header on every tool:
   "input": "camera",             // "camera" or a layer id
   "fixtureId": null,             // id of an earlier tool that produces a pose, or null
   "region": Region,              // omitted for tools that need none (makeFixture, distance, angle)
+  "regionFrom": null,            // id of an earlier tool whose region (and fixture) this one uses, or null
   "grid": null,                  // { rows, cols, inset (0..0.45) } for cell-capable tools
   "limits": { "percent": { "min": 20, "max": null } },   // judgement on any numeric value key
   "includeInPass": true,
@@ -87,6 +88,20 @@ Common header on every tool:
 
 `Region` = `{ "shape": "rect" | "circle" | "polygon" | "quad", "x","y","width","height","rotation" | "cx","cy","radius" | "points": [{x,y}] }`
 (`quad` = exactly 4 points TL, TR, BR, BL).
+
+A `quad` region with no fixture is a **fixed skewed area**: it stays where it was drawn, and a grid on
+it follows the perspective (each cell is the image of a unit-square cell under the quad's homography).
+Use it for a flat target seen at an angle whose position does not change, setting its four corners by
+hand on the image.
+
+### Shared regions
+
+`regionFrom` names an earlier tool (enabled or not) whose region this tool uses instead of its own —
+and whose fixture, since a fixtured region is stored in that fixture's reference space. Chains resolve
+to the first tool without `regionFrom`. The tool's own `region` and `fixtureId` are ignored while it is
+set (keep a copy in `region` for controllers that predate it). The `grid` stays the tool's own, so
+several tools can measure the same area with different cell insets. A `regionFrom` that is not an
+earlier tool, or loops, is a tool error. In the app the area is drawn on either tool and moves for all.
 
 ### Fixtures
 

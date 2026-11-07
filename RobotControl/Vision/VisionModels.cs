@@ -143,6 +143,11 @@ namespace Controller.RobotControl.Vision
         [JsonPropertyName("input")]         public string  Input         { get; set; } = CameraInput;
         [JsonPropertyName("fixtureId")]     public string? FixtureId     { get; set; }
         [JsonPropertyName("region")]        public VisionRegion? Region  { get; set; }
+        /// <summary>
+        /// Id of an earlier tool whose region (and fixture) this tool uses instead of its own, or
+        /// null. Several tools can then share one area that is drawn once. The grid stays per tool.
+        /// </summary>
+        [JsonPropertyName("regionFrom")]    public string? RegionFrom    { get; set; }
         [JsonPropertyName("grid")]          public VisionGrid?   Grid    { get; set; }
         [JsonPropertyName("limits")]        public Dictionary<string, VisionLimit>? Limits { get; set; }
         [JsonPropertyName("includeInPass")] public bool    IncludeInPass { get; set; } = true;
