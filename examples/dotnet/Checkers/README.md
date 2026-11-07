@@ -87,30 +87,30 @@ middle of each square: on the real photos black pieces score 7+ and empty dark s
 under 1.5, at 1280 px. White pieces have texture too, which is why `bothMeans` defaults to
 white.
 
-The grid follows the board through a **fixture**: four **findLine** tools find the board's
-outer top, right and left edges (white table → black frame) and the bottom edge of the
-squares (the board's own bottom edge is often cut off), a **makeFixture** (`fourLines`)
-intersects them into the board's four corners, and both piece tools are drawn on the
-squares relative to it — so a bumped camera, or the board pushed or turned, moves the
-8 × 8 grid with full perspective. If an edge can't be found (a hand over it), the piece
-tools report *not run* that frame rather than read squares from a guessed position.
+By default the 8 × 8 grid is **fixed**: one skewed (four-corner) area on the squares that
+stays where you put it — no edge finding. *Black pieces* shares *White pieces*' area
+(`regionFrom`), so the four corners are set once. To set them: **Vision editor → White pieces
+(or Black pieces) → Area → Draw**, drag each corner onto the corner of the playing squares
+(the `1,1` corner is row 1, column 1; a magnifier shows the spot under your finger), then
+**Save**. Do it again whenever the camera or the board moves.
 
 The program lives in `program/checkers-vision.json` (built only from the generic tools —
 nothing in the controller knows about checkers); `program/checkers-vision.mjs` saves it
-to a controller:
+to a controller (`CTRL=host:port node checkers-vision.mjs save [cameraId]`):
 
 | Tool | Type | Settings |
 |---|---|---|
-| Board top / right / left edge | findLine on the `Gray` layer | outer edge, light → dark from outside, 16 probes, pick first, ignore 4 |
-| Squares bottom edge | findLine on the `Gray` layer | dark → light from the frame inwards, pick strongest |
-| Board | makeFixture `fourLines` | sources top, right, bottom, left |
-| White pieces | pixelCount (colour) on the squares, fixture *Board* | 8 × 8, inset 15 %, cream (232, 230, 200) ± 20 %, `percent` ≥ 30 |
-| Black pieces | intensity `stdDev` on the `Fine detail` layer (backgroundRemove 17 px), fixture *Board* | 8 × 8, inset 35 %, `stdDev` ≥ 4 |
+| White pieces | pixelCount (colour), skewed area on the squares, no fixture | 8 × 8, inset 15 %, cream (232, 230, 200) ± 20 %, `percent` ≥ 30 |
+| Black pieces | intensity `stdDev` on the `Fine detail` layer (backgroundRemove 17 px), same area as *White pieces* | 8 × 8, inset 35 %, `stdDev` ≥ 4 |
 
-The edge regions and the squares region are drawn on the default camera view. When the
-camera has moved a lot, redraw the four edge regions over the board's edges and the
-squares region over the squares, then press **Set reference** on *Board* (or clear its
-reference: it is captured again on the next good frame).
+**Tracked version** (`save --tracked`, `program/checkers-vision-tracked.json`, same id and
+outputs): the grid follows the board through a **fixture** — four **findLine** tools find
+the board's outer top, right and left edges (white table → black frame) and the bottom edge
+of the squares, a **makeFixture** (`fourLines`) intersects them into the board's four
+corners, and both piece tools are drawn relative to it, so a bumped camera or a pushed board
+moves the grid with full perspective. If an edge can't be found (a hand over it), the piece
+tools report *not run* that frame. When the camera has moved a lot, redraw the four edge
+regions and the squares region, then press **Set reference** on *Board*.
 
 The ready-made program **"Checkers Game (camera)"** does all of this: the robot plays
 black on a taught 8x8 grid named *Checkers Board* (row r, col c = the board square),

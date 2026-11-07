@@ -1,0 +1,137 @@
+{
+  "id": "checkers-vision",
+  "name": "Checkers Board (camera)",
+  "cameraId": "",
+  "description": "Angled view of the checkers board: one fixed skewed 8x8 grid, its four corners set by hand on the squares; white pieces by colour, black pieces by their ring texture, per square.",
+  "lastUpdatedUnixMs": 0,
+  "layers": [
+    {
+      "id": "gray",
+      "name": "Gray",
+      "input": "camera",
+      "filters": [
+        {
+          "id": "g1",
+          "type": "channel",
+          "enabled": true,
+          "channel": "gray"
+        }
+      ]
+    },
+    {
+      "id": "detail",
+      "name": "Fine detail",
+      "input": "gray",
+      "filters": [
+        {
+          "id": "d1",
+          "type": "backgroundRemove",
+          "enabled": true,
+          "size": 17
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "id": "white",
+      "name": "White pieces",
+      "type": "pixelCount",
+      "enabled": true,
+      "input": "camera",
+      "fixtureId": null,
+      "region": {
+        "shape": "quad",
+        "points": [
+          {
+            "x": 0.36531,
+            "y": 0.40278
+          },
+          {
+            "x": 0.65547,
+            "y": 0.40056
+          },
+          {
+            "x": 0.94,
+            "y": 0.85917
+          },
+          {
+            "x": 0.11602,
+            "y": 0.85611
+          }
+        ]
+      },
+      "regionFrom": null,
+      "grid": {
+        "rows": 8,
+        "cols": 8,
+        "inset": 0.15
+      },
+      "limits": {
+        "percent": {
+          "min": 30,
+          "max": null
+        }
+      },
+      "includeInPass": false,
+      "reference": null,
+      "params": {
+        "mode": "color",
+        "colors": [
+          {
+            "r": 232,
+            "g": 230,
+            "b": 200,
+            "tolerance": 20
+          }
+        ]
+      }
+    },
+    {
+      "id": "black",
+      "name": "Black pieces",
+      "type": "intensity",
+      "enabled": true,
+      "input": "detail",
+      "fixtureId": null,
+      "region": {
+        "shape": "quad",
+        "points": [
+          {
+            "x": 0.36531,
+            "y": 0.40278
+          },
+          {
+            "x": 0.65547,
+            "y": 0.40056
+          },
+          {
+            "x": 0.94,
+            "y": 0.85917
+          },
+          {
+            "x": 0.11602,
+            "y": 0.85611
+          }
+        ]
+      },
+      "regionFrom": "white",
+      "grid": {
+        "rows": 8,
+        "cols": 8,
+        "inset": 0.35
+      },
+      "limits": {
+        "stdDev": {
+          "min": 4,
+          "max": null
+        }
+      },
+      "includeInPass": false,
+      "reference": null,
+      "params": {
+        "statistic": "stdDev"
+      }
+    }
+  ]
+}

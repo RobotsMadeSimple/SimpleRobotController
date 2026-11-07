@@ -23,6 +23,7 @@
     <None Include="Golden\*.golden.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Fixtures\*.jpg" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\examples\dotnet\Checkers\program\checkers-vision.json" Link="Fixtures\checkers-vision.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\examples\dotnet\Checkers\program\checkers-vision-tracked.json" Link="Fixtures\checkers-vision-tracked.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

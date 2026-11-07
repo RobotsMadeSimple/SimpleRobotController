@@ -6,10 +6,11 @@ using Xunit.Abstractions;
 namespace RobotControl.Tests;
 
 /// <summary>
-/// The checkers example's vision program (examples/dotnet/Checkers/program/checkers-vision.json,
-/// built from generic tools: four findLine edges → a fourLines perspective fixture → per-square
-/// pixelCount for white pieces and intensity stdDev on a background-removed layer for black
-/// pieces) on two real photos of a board taken from the side (Fixtures/checkers-real-*.jpg,
+/// The checkers example's vision programs on two real photos. Both are built from generic tools:
+/// per-square pixelCount for white pieces and intensity stdDev on a background-removed layer for
+/// black pieces, each an 8x8 grid. "Fixed" (checkers-vision.json, the default) is one skewed grid
+/// set by hand, shared by both tools (regionFrom); "tracked" (checkers-vision-tracked.json) moves
+/// the grid with four findLine edges → a fourLines perspective fixture. The photos are of a board taken from the side (Fixtures/checkers-real-*.jpg,
 /// 1280×720): black pieces on black squares, cream pieces, the board's near corner cut off in
 /// photo 1. Pieces labelled by hand; squares are (row, col) with row 0 the far side.
 /// </summary>
@@ -35,9 +36,19 @@ public class VisionCheckersRealPhotoTests
 
     private static Mat Load(Photo p) => Cv2.ImRead(Path.Combine(AppContext.BaseDirectory, "Fixtures", p.File));
 
-    /// <summary>The example program as shipped (its regions are drawn on photo 2).</summary>
-    internal static VisionProgram CheckersProgram() =>
-        JsonSerializer.Deserialize<VisionProgram>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "checkers-vision.json")))!;
+    private static VisionProgram LoadProgram(string file) =>
+        JsonSerializer.Deserialize<VisionProgram>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", file)))!;
+
+    /// <summary>The tracked (fixture) example program as shipped (its regions are drawn on photo 2).</summary>
+    internal static VisionProgram CheckersProgram() => LoadProgram("checkers-vision-tracked.json");
+
+    /// <summary>The fixed-grid example program as shipped (its corners are set on photo 2).</summary>
+    internal static VisionProgram FixedProgram() => LoadProgram("checkers-vision.json");
+
+    private static VisionRegion QuadPx(Point2f[] corners) => new()
+    {
+        Shape = "quad", Points = corners.Select(p => new VisionPoint(p.X / 1280.0, p.Y / 720.0)).ToList(),
+    };
 
     /// <summary>
     /// A findLine region drawn along an edge from A to B (clockwise round the board, so the
@@ -90,6 +101,48 @@ public class VisionCheckersRealPhotoTests
     }
 
     private static float Dist(Point2f a, PxPoint b) => (float)Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+
+    // ── Fixed grid (the default) ────────────────────────────────────────────────
+
+    [Fact]
+    public void Fixed_grid_program_reads_every_piece_on_its_own_photo()
+    {
+        var prog = FixedProgram();
+        Assert.DoesNotContain(prog.Tools, t => t.Type is "findLine" or "makeFixture" || t.FixtureId != null);
+        Assert.Equal("white", prog.Tool("black")!.RegionFrom);
+        using var img = Load(Two);
+        var r = VisionProcessor.RunProgramOnce(prog, img, out var annotated);
+        Dump("fixed-photo2", prog, r, annotated);
+
+        Assert.Empty(r.Errors);
+        Assert.All(r.Tools, t => Assert.Equal(ToolStatus.Ok, t.Status));
+        Assert.Equal(64, r.Tool("white")!.Cells.Count);
+        Assert.Equal(64, r.Tool("black")!.Cells.Count);
+        var (white, black, _) = Read(r);
+        Assert.Equal(Two.White.OrderBy(x => x), white.OrderBy(x => x));
+        Assert.Equal(Two.Black.OrderBy(x => x), black.OrderBy(x => x));
+    }
+
+    [Fact]
+    public void Fixed_grid_set_by_hand_on_a_moved_camera_reads_every_piece()
+    {
+        // The camera moved to photo 1's view: only White pieces' four corners are set again (on
+        // the squares, as by hand in the app). Black pieces shares that area, so it moves too.
+        var prog = FixedProgram();
+        prog.Tool("white")!.Region = QuadPx(One.Squares);
+        prog.Tool("black")!.Region = null;   // proves the shared area is used, not a stale copy
+        using var img = Load(One);
+        var r = VisionProcessor.RunProgramOnce(prog, img, out var annotated);
+        Dump("fixed-photo1", prog, r, annotated);
+
+        Assert.Empty(r.Errors);
+        Assert.Equal(r.Tool("white")!.Region.Select(p => (p.X, p.Y)), r.Tool("black")!.Region.Select(p => (p.X, p.Y)));
+        var (white, black, _) = Read(r);
+        Assert.Equal(One.White.OrderBy(x => x), white.OrderBy(x => x));
+        Assert.Equal(One.Black.OrderBy(x => x), black.OrderBy(x => x));
+    }
+
+    // ── Tracked (fixture) ───────────────────────────────────────────────────────
 
     [Fact]
     public void Shipped_program_reads_every_piece_on_its_own_photo()
