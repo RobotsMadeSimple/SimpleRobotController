@@ -25,6 +25,7 @@ public class BackgroundProgramCommandsTests : IDisposable
         _background  = new BackgroundProgramManager(robot, programs, robot.pointRepo, robot.toolRepo,
             robot.localRepo, robot.builtProgramRepo, robot.gridRepo, robot.stackRepo);
         new BuiltProgramCommands(robot, programs, null, _background).Register(_dispatcher);
+        new SystemCommands(robot, programs, _background).Register(_dispatcher);
 
         robot.builtProgramRepo.Save(new BuiltProgram
         {
@@ -39,7 +40,7 @@ public class BackgroundProgramCommandsTests : IDisposable
         try { Directory.Delete(_dir, true); } catch { /* best effort */ }
     }
 
-    private void Send(string command, object parameters)
+    private JsonElement Send(string command, object parameters)
     {
         Assert.True(_dispatcher.TryGet(command, out var handler));
         var msg = new CommandMessage
@@ -47,7 +48,7 @@ public class BackgroundProgramCommandsTests : IDisposable
             Type = "Command", Id = "t", Command = command,
             Params = JsonSerializer.SerializeToElement(parameters),
         };
-        handler(msg).GetAwaiter().GetResult();
+        return JsonSerializer.SerializeToElement(handler(msg).GetAwaiter().GetResult());
     }
 
     [Fact]
@@ -76,5 +77,15 @@ public class BackgroundProgramCommandsTests : IDisposable
         Send("StartBackgroundProgram", new { programId = "bg-1" });
         Send("StopBackgroundProgram", new { programId = "nope" });
         Assert.True(_background.IsRunning("bg-1"));
+    }
+
+    [Fact]
+    public void StatusCarriesTheRunningProgramsId()
+    {
+        Send("StartBackgroundProgram", new { programId = "bg-1" });
+        var bg = Send("GetStatus", new { }).GetProperty("backgroundPrograms");
+        Assert.Equal(1, bg.GetArrayLength());
+        Assert.Equal("bg-1", bg[0].GetProperty("id").GetString());
+        Assert.Equal("Watcher", bg[0].GetProperty("name").GetString());
     }
 }

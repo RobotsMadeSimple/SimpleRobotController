@@ -174,7 +174,7 @@ internal sealed class SystemCommands
 
             // Background programs currently running
             backgroundPrograms = _background.GetStatuses()
-                .Select(s => new { name = s.Name, currentStep = s.CurrentStep })
+                .Select(s => new { id = s.Id, name = s.Name, currentStep = s.CurrentStep })
                 .ToList(),
 
             // Built program repository
