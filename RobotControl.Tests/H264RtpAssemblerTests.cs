@@ -289,10 +289,50 @@ public sealed class H264RtpAssemblerTests
         r.Send(PFrame());
         int first = r.Nacks.Count(s => s == seqs[1]);
         Assert.Equal(1, first);
-        r.Advance(r.A.NackRetryMs);
-        r.Advance(r.A.NackRetryMs);
-        r.Advance(r.A.NackRetryMs);
+        for (int i = 0; i < r.A.MaxNacksPerPacket + 2; i++) r.Advance(r.A.RetryAfterMs);
         Assert.Equal(r.A.MaxNacksPerPacket, r.Nacks.Count(s => s == seqs[1]));
+    }
+
+    [Fact]
+    public void AResendThatTakesARoundTripStillCompletesTheFrame()
+    {
+        // Over Wi-Fi a resend comes back a round trip plus the phone's pacer queue later — 150 ms
+        // (the old give-up) was too short; anything inside GiveUpAfterMs must still count.
+        var r = new Rig();
+        r.Send(KeyFrame());
+        var pkts = PFrame();
+        var seqs = r.Send(pkts, 1);
+        r.Send(PFrame());
+        r.Advance(200);
+        Assert.Single(r.Frames);
+        Assert.Empty(r.Breaks);
+        r.Push(seqs[1], r.Ts - 12000, false, pkts[1]);   // the resend
+        Assert.Equal(3, r.Frames.Count);
+        Assert.Empty(r.Breaks);
+        Assert.Equal(1, r.A.PacketsRecovered);
+        Assert.Equal(1, r.A.PacketsMissing);
+    }
+
+    [Fact]
+    public void SlowResendsStretchTheWaitAndTheRetryGap()
+    {
+        var r = new Rig();
+        r.Send(KeyFrame());
+        Assert.Equal(r.A.NackWaitMs, r.A.GiveUpAfterMs);   // nothing measured yet: the floor
+        Assert.Equal(r.A.NackRetryMs, r.A.RetryAfterMs);
+        for (int i = 0; i < 20; i++)
+        {
+            var pkts = PFrame();
+            var seqs = r.Send(pkts, 1);
+            r.Send(PFrame());
+            r.Now += 150;                                     // each resend takes 150 ms (one NACK each)
+            r.Push(seqs[1], r.Ts - 12000, false, pkts[1]);
+        }
+        Assert.InRange(r.A.ResendRttMs, 120, 151);
+        Assert.True(r.A.GiveUpAfterMs > r.A.NackWaitMs);
+        Assert.True(r.A.GiveUpAfterMs <= r.A.MaxNackWaitMs);
+        Assert.True(r.A.RetryAfterMs > r.A.NackRetryMs);
+        Assert.Empty(r.Breaks);
     }
 
     [Fact]

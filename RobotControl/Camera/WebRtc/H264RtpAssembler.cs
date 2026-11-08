@@ -14,8 +14,9 @@ namespace Controller.RobotControl.Camera.WebRtc
     /// "frozen" picture — while the stream still counts frames as arriving. This assembler tracks
     /// RTP sequence numbers instead:</para>
     /// <list type="bullet">
-    /// <item>a missing packet is NACKed (the phone retransmits from its history) and waited for for up
-    /// to <see cref="NackWaitMs"/>;</item>
+    /// <item>a missing packet is NACKed (the phone retransmits it from its history), re-NACKed after
+    /// about one measured resend round trip, and waited for for <see cref="GiveUpAfterMs"/> (at least
+    /// <see cref="NackWaitMs"/>, longer when resends are measured to take longer);</item>
     /// <item>if it never comes, the frame is dropped and so is everything after it until a
     /// <i>complete</i> key frame (SPS + IDR) arrives — the decoder holds the last clean picture
     /// instead of showing damage — and <see cref="KeyFrameNeeded"/> is raised so the receiver asks
@@ -29,12 +30,23 @@ namespace Controller.RobotControl.Camera.WebRtc
         /// <summary>One access unit ready for the decoder.</summary>
         public readonly record struct Frame(byte[] AnnexB, bool IsKey, uint Timestamp);
 
-        /// <summary>How long a missing packet is waited for (retransmission) before it counts as lost.</summary>
-        public int NackWaitMs { get; init; } = 150;
-        /// <summary>Re-NACK a still-missing packet after this long.</summary>
-        public int NackRetryMs { get; init; } = 40;
+        /// <summary>The shortest time a missing packet is waited for (retransmission) before it counts as lost.
+        /// Over Wi-Fi a resend takes a round trip plus the phone's pacer queue, so 150 ms (the old value)
+        /// gave up on resends that were still on their way.</summary>
+        public int NackWaitMs { get; init; } = 250;
+        /// <summary>The longest wait, however slow resends are measured to be (frames behind a hole wait too).</summary>
+        public int MaxNackWaitMs { get; init; } = 800;
+        /// <summary>Re-NACK a still-missing packet after at least this long (or ~1.5 measured resend round trips).</summary>
+        public int NackRetryMs { get; init; } = 50;
         /// <summary>NACK a missing packet at most this many times.</summary>
-        public int MaxNacksPerPacket { get; init; } = 3;
+        public int MaxNacksPerPacket { get; init; } = 5;
+
+        /// <summary>Smoothed time from a NACK to its resend arriving (ms; 0 until measured).</summary>
+        public double ResendRttMs { get; private set; }
+        /// <summary>When a still-missing packet is NACKed again.</summary>
+        public int RetryAfterMs => (int)Math.Max(NackRetryMs, Math.Min(300, ResendRttMs * 1.5));
+        /// <summary>How long a missing packet is waited for before the frame counts as lost.</summary>
+        public int GiveUpAfterMs => (int)Math.Clamp(ResendRttMs * 4 + 50, NackWaitMs, Math.Max(NackWaitMs, MaxNackWaitMs));
         /// <summary>A jump in sequence numbers larger than this is a stream reset, not loss.</summary>
         public int MaxGap { get; init; } = 1000;
         /// <summary>Never buffer more packets than this (a hole that pins the buffer is given up).</summary>
@@ -42,6 +54,8 @@ namespace Controller.RobotControl.Camera.WebRtc
 
         // ── Stats (monotonic counters; read by the receiver for the once-a-second report) ──
         public long PacketsReceived   { get; private set; }
+        public long PacketsMissing    { get; private set; }   // holes seen (before any resend)
+        public long BytesReceived     { get; private set; }   // payload bytes, resends included
         public long PacketsLost       { get; private set; }   // gave up on (never arrived in time)
         public long PacketsRecovered  { get; private set; }   // were missing, then arrived (retransmission / reorder)
         public long NacksSent         { get; private set; }   // packets NACKed (counting retries)
@@ -78,6 +92,7 @@ namespace Controller.RobotControl.Camera.WebRtc
                          List<Frame> frames, List<ushort> nacks)
         {
             PacketsReceived++;
+            BytesReceived += payload.Length;
             long ext;
             if (!_started)
             {
@@ -96,13 +111,25 @@ namespace Controller.RobotControl.Camera.WebRtc
                 else if (ext > _highest)
                 {
                     for (long m = _highest + 1; m < ext; m++)
+                    {
                         _miss[m] = new Miss { SinceMs = nowMs };
+                        PacketsMissing++;
+                    }
                     _highest = ext;
                 }
             }
 
             if (ext < _next || _buf.ContainsKey(ext)) { Drain(nowMs, frames); CollectNacks(nowMs, nacks); return; }   // late or duplicate
-            if (_miss.Remove(ext)) PacketsRecovered++;
+            if (_miss.Remove(ext, out var was))
+            {
+                PacketsRecovered++;
+                // A resend answering a single NACK times the round trip (after a retry it's ambiguous).
+                if (was.Nacks == 1)
+                {
+                    double sample = Math.Max(1, nowMs - was.LastNackMs);
+                    ResendRttMs = ResendRttMs <= 0 ? sample : ResendRttMs * 0.875 + sample * 0.125;
+                }
+            }
             _buf[ext] = new Pkt { Ts = timestamp, Marker = marker, Payload = paddingOnly ? Array.Empty<byte>() : payload };
 
             Drain(nowMs, frames);
@@ -139,7 +166,7 @@ namespace Controller.RobotControl.Camera.WebRtc
         }
 
         private bool MissingTooLong(long seq, long nowMs) =>
-            !_miss.TryGetValue(seq, out var m) || nowMs - m.SinceMs >= NackWaitMs;
+            !_miss.TryGetValue(seq, out var m) || nowMs - m.SinceMs >= GiveUpAfterMs;
 
         private void GiveUp(long seq)
         {
@@ -355,7 +382,7 @@ namespace Controller.RobotControl.Camera.WebRtc
             {
                 if (seq < _next) { (stale ??= new()).Add(seq); continue; }
                 if (m.Nacks >= MaxNacksPerPacket) continue;
-                if (m.Nacks > 0 && nowMs - m.LastNackMs < NackRetryMs) continue;
+                if (m.Nacks > 0 && nowMs - m.LastNackMs < RetryAfterMs) continue;
                 m.Nacks++;
                 m.LastNackMs = nowMs;
                 NacksSent++;

@@ -25,7 +25,12 @@ namespace Controller.RobotControl.Camera.WebRtc
     /// doesn't come, the broken frame and everything after it are held back until a complete key
     /// frame, which is requested at once with RTCP PLI (and again, backing off, until it comes). The
     /// picture freezes on the last clean frame for a moment instead of smearing. A periodic PLI is a
-    /// slow safety refresh only.</para>
+    /// slow safety refresh only. Resends usually arrive after 64+ newer packets, which SIPSorcery's
+    /// SRTP replay window would drop — <see cref="SrtpLateResend"/> lets them through.</para>
+    ///
+    /// <para><b>Bitrate.</b> <see cref="BitrateGovernor"/> turns what arrives (loss that resends
+    /// couldn't fix, decoder overflow, the arriving rate) into a cap the phone applies to its encoder,
+    /// so the stream settles below what the link can carry. The cap rides on the stats message.</para>
     ///
     /// <para><b>Threading.</b> SIPSorcery's single RTP receive thread hands packets to the assembler
     /// (<see cref="OnRtp"/>), which must never block — a blocked receive thread overflows the UDP
@@ -76,6 +81,11 @@ namespace Controller.RobotControl.Camera.WebRtc
         // Once-a-second stats.
         private long _statsAtMs;
         private Snapshot _prevStats;
+
+        // Late resends through the SRTP replay window, and the bitrate cap (timer thread).
+        private SrtpLateResend? _lateResend;
+        private bool _lateResendUnsupported;
+        private readonly BitrateGovernor _governor = new();
 
         // 90 (not 75): the decoded H.264 is re-encoded to JPEG for snapshot + vision/calibration,
         // so this is the round-trip quality ceiling — 75 stacked visible artifacts on top of H.264.
@@ -175,8 +185,9 @@ namespace Controller.RobotControl.Camera.WebRtc
             _running = false;
             EndReason = reason;
             var s = TakeSnapshot();
-            Console.WriteLine($"[WebRTC] {_tag} stream stopped: {reason} (packets={s.Packets}, lost={s.Lost}, recovered={s.Recovered}, " +
-                              $"frames={s.FramesOut + s.Dropped}, dropped={s.Dropped}, decoded={FrameCount}, keyRequests={s.Plis})");
+            Console.WriteLine($"[WebRTC] {_tag} stream stopped: {reason} (packets={s.Packets}, missing={s.Missing}, resent={s.Recovered}, lost={s.Lost}, " +
+                              $"late resends let through SRTP={_lateResend?.Rescued ?? 0}, frames={s.FramesOut + s.Dropped}, dropped={s.Dropped}, " +
+                              $"decoded={FrameCount}, keyRequests={s.Plis}, bitrate cap={(_governor.CapKbps is int k ? $"{k} kbps" : "none")})");
             try { _watchdogTimer?.Dispose(); } catch { }
             try { _rtcpTimer?.Dispose(); } catch { }
             try { _queueSignal.Set(); } catch { }
@@ -404,6 +415,7 @@ namespace Controller.RobotControl.Camera.WebRtc
         private void RtcpTickCore()
         {
             long now = Environment.TickCount64;
+            if (_lateResend == null && !_lateResendUnsupported) InstallLateResend();
             List<ushort>? nacks = null;
             bool awaiting, wasBroken = _brokenSinceMs != 0;
             lock (_asmLock)
@@ -434,6 +446,19 @@ namespace Controller.RobotControl.Camera.WebRtc
             if (now - _statsAtMs >= StatsEveryMs) EmitStats(now, awaiting);
         }
 
+        /// <summary>Wraps the video stream's SRTP unprotect once DTLS has set it up (see <see cref="SrtpLateResend"/>).</summary>
+        private void InstallLateResend()
+        {
+            var vs = _pc.VideoStream;
+            if (vs == null) return;
+            _lateResend = SrtpLateResend.TryInstall(vs, out var unsupported);
+            if (unsupported)
+            {
+                _lateResendUnsupported = true;
+                Console.WriteLine($"[WebRTC] {_tag} could not widen the SRTP replay window (SIPSorcery changed?) - late resends will be dropped");
+            }
+        }
+
         /// <summary>Ask the phone to emit a key frame now (RTCP PLI), once the remote video SSRC is known.</summary>
         private bool RequestKeyFrame()
         {
@@ -452,14 +477,16 @@ namespace Controller.RobotControl.Camera.WebRtc
         }
 
         private readonly record struct Snapshot(long Packets, long Lost, long Recovered, long Nacks, long FramesOut,
-                                                long Dropped, long Decoded, long Plis, long KeyFrames, long Overflows);
+                                                long Dropped, long Decoded, long Plis, long KeyFrames, long Overflows,
+                                                long Missing, long Bytes, double ResendRttMs);
 
         private Snapshot TakeSnapshot()
         {
             lock (_asmLock)
                 return new Snapshot(_asm.PacketsReceived, _asm.PacketsLost, _asm.PacketsRecovered, _asm.NacksSent,
                                     _asm.FramesOut, _asm.FramesDropped, Interlocked.Read(ref _frames),
-                                    Interlocked.Read(ref _plisSent), _asm.KeyFramesOut, Interlocked.Read(ref _decoderOverflows));
+                                    Interlocked.Read(ref _plisSent), _asm.KeyFramesOut, Interlocked.Read(ref _decoderOverflows),
+                                    _asm.PacketsMissing, _asm.BytesReceived, _asm.ResendRttMs);
         }
 
         private void EmitStats(long now, bool awaiting)
@@ -470,29 +497,43 @@ namespace Controller.RobotControl.Camera.WebRtc
             _prevStats = cur;
             _statsAtMs = now;
             long lastPic = Interlocked.Read(ref _lastDecodedMs);
+            double rxKbps = (cur.Bytes - prev.Bytes) * 8 / 1000.0 / secs;
+            int? capBefore = _governor.CapKbps;
+            if (_governor.Update(now, rxKbps, cur.Packets - prev.Packets, cur.Missing - prev.Missing,
+                                 cur.Lost - prev.Lost, cur.Overflows - prev.Overflows))
+                Console.WriteLine($"[WebRTC] {_tag} bitrate cap {(capBefore is int b ? $"{b}" : "none")} -> {(_governor.CapKbps is int c ? $"{c} kbps" : "none")} " +
+                                  $"(arriving {rxKbps:F0} kbps, missing {cur.Missing - prev.Missing}/{cur.Packets - prev.Packets + cur.Missing - prev.Missing}, unrecovered {cur.Lost - prev.Lost})");
             var json = StatsJson(
                 receivedFps: (cur.FramesOut + cur.Dropped - prev.FramesOut - prev.Dropped) / secs,
                 decodedFps:  (cur.Decoded - prev.Decoded) / secs,
                 droppedTotal: cur.Dropped, lostTotal: cur.Lost, recoveredTotal: cur.Recovered,
                 keyRequests: cur.Plis, keyFrames: cur.KeyFrames, awaitingKeyFrame: awaiting,
                 msSincePicture: lastPic == 0 ? -1 : now - lastPic,
-                reason: awaiting ? _brokenReason : null);
+                reason: awaiting ? _brokenReason : null,
+                rxKbps: rxKbps, capKbps: _governor.CapKbps, capLowered: _governor.Decreases,
+                resendRttMs: cur.ResendRttMs);
             try { OnStats?.Invoke(json); } catch { }
 
             // A log line every 10 s while things go wrong, so the console tells the story.
             if ((cur.Lost > prev.Lost || cur.Dropped > prev.Dropped) && now - _lastLossLogMs >= 10_000)
             {
                 _lastLossLogMs = now;
-                Console.WriteLine($"[WebRTC] {_tag} loss: packets lost={cur.Lost} recovered={cur.Recovered} nacked={cur.Nacks}, " +
-                                  $"frames dropped={cur.Dropped} decoded={cur.Decoded}, key requests={cur.Plis} key frames={cur.KeyFrames}, decoder overflows={cur.Overflows}");
+                Console.WriteLine($"[WebRTC] {_tag} loss: packets missing={cur.Missing} resent={cur.Recovered} lost={cur.Lost} nacked={cur.Nacks} " +
+                                  $"(late resends let through SRTP: {_lateResend?.Rescued ?? 0}, resend rtt {cur.ResendRttMs:F0} ms), " +
+                                  $"frames dropped={cur.Dropped} decoded={cur.Decoded}, key requests={cur.Plis} key frames={cur.KeyFrames}, " +
+                                  $"decoder overflows={cur.Overflows}, bitrate cap={(_governor.CapKbps is int k ? $"{k} kbps" : "none")}");
             }
         }
         private long _lastLossLogMs;
 
         /// <summary>The receive-side stats the phone shows: <c>{type:"stats", rxFps, decodedFps, dropped,
-        /// lost, recovered, keyRequests, keyFrames, waitingForKeyFrame, msSincePicture, reason?}</c>.</summary>
+        /// lost, recovered, keyRequests, keyFrames, waitingForKeyFrame, msSincePicture, reason?, rxKbps,
+        /// capKbps?, capLowered, resendRttMs}</c>. <c>recovered</c> = packets that were missing and then
+        /// arrived (resends). <c>capKbps</c> (absent = no cap) is the bitrate the phone should stay under;
+        /// <c>capLowered</c> counts how often it was lowered.</summary>
         internal static string StatsJson(double receivedFps, double decodedFps, long droppedTotal, long lostTotal, long recoveredTotal,
-                                         long keyRequests, long keyFrames, bool awaitingKeyFrame, long msSincePicture, string? reason)
+                                         long keyRequests, long keyFrames, bool awaitingKeyFrame, long msSincePicture, string? reason,
+                                         double rxKbps = 0, int? capKbps = null, int capLowered = 0, double resendRttMs = 0)
         {
             var sb = new StringBuilder(200);
             sb.Append("{\"type\":\"stats\"");
@@ -506,6 +547,10 @@ namespace Controller.RobotControl.Camera.WebRtc
             sb.Append(",\"waitingForKeyFrame\":").Append(awaitingKeyFrame ? "true" : "false");
             sb.Append(",\"msSincePicture\":").Append(msSincePicture);
             if (reason != null) sb.Append(",\"reason\":").Append(JsonSerializer.Serialize(reason));
+            sb.Append(",\"rxKbps\":").Append(Math.Round(rxKbps).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (capKbps is int cap) sb.Append(",\"capKbps\":").Append(cap);
+            sb.Append(",\"capLowered\":").Append(capLowered);
+            sb.Append(",\"resendRttMs\":").Append(Math.Round(resendRttMs).ToString(System.Globalization.CultureInfo.InvariantCulture));
             sb.Append('}');
             return sb.ToString();
         }

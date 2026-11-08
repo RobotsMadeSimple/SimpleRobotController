@@ -161,6 +161,21 @@ public sealed class WebRtcReceiverTests
         Assert.Equal(12, r.GetProperty("dropped").GetInt64());
         Assert.True(r.GetProperty("waitingForKeyFrame").GetBoolean());
         Assert.Equal("a video packet was lost", r.GetProperty("reason").GetString());
+        Assert.False(r.TryGetProperty("capKbps", out _));   // no cap: the phone keeps its own setting
+    }
+
+    [Fact]
+    public void StatsJsonCarriesTheBitrateCap()
+    {
+        var json = WebRtcCameraReceiver.StatsJson(15, 15, 0, 0, 40, 1, 1, false, 30, null,
+                                                  rxKbps: 6012.4, capKbps: 6000, capLowered: 2, resendRttMs: 57.6);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var r = doc.RootElement;
+        Assert.Equal(6000, r.GetProperty("capKbps").GetInt32());
+        Assert.Equal(2, r.GetProperty("capLowered").GetInt32());
+        Assert.Equal(6012, r.GetProperty("rxKbps").GetDouble());
+        Assert.Equal(58, r.GetProperty("resendRttMs").GetDouble());
+        Assert.Equal(40, r.GetProperty("recovered").GetInt64());
     }
 
     [Fact]
