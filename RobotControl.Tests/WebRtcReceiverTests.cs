@@ -92,6 +92,78 @@ public sealed class WebRtcReceiverTests
     }
 
     [Fact]
+    public void WatchdogNamesLostPacketsWhenWaitingForAKeyFrame()
+    {
+        long lastPic = T0 + 10_000;
+        var now = lastPic + WebRtcCameraReceiver.StallMs + 1;
+        var r = WebRtcCameraReceiver.StallReason(now, T0, now - 50, lastPic, awaitingKeyFrame: true);
+        Assert.Contains("no clean picture", r);
+        Assert.Contains("key frame", r);
+    }
+
+    // ── Key-frame requests (PLI) ────────────────────────────────────────────
+
+    [Fact]
+    public void PliGoesOutAtOnceThenBacksOffWhileWaiting()
+    {
+        Assert.True(WebRtcCameraReceiver.PliDue(T0, 0, awaitingKeyFrame: true, attempt: 0, videoFlowing: true));
+        Assert.False(WebRtcCameraReceiver.PliDue(T0 + 200, T0, true, 0, true));
+        Assert.True(WebRtcCameraReceiver.PliDue(T0 + WebRtcCameraReceiver.PliRetryBaseMs, T0, true, 0, true));
+        Assert.False(WebRtcCameraReceiver.PliDue(T0 + 400, T0, true, 1, true));      // 2nd retry waits 500
+        Assert.True(WebRtcCameraReceiver.PliDue(T0 + 500, T0, true, 1, true));
+        Assert.True(WebRtcCameraReceiver.PliDue(T0 + WebRtcCameraReceiver.PliRetryMaxMs, T0, true, 30, true));   // capped
+        Assert.False(WebRtcCameraReceiver.PliDue(T0 + WebRtcCameraReceiver.PliRetryMaxMs - 1, T0, true, 30, true));
+    }
+
+    [Fact]
+    public void HealthyStreamOnlyGetsTheSlowSafetyRefresh()
+    {
+        Assert.False(WebRtcCameraReceiver.PliDue(T0 + 1000, T0, awaitingKeyFrame: false, attempt: 0, videoFlowing: true));
+        Assert.True(WebRtcCameraReceiver.PliDue(T0 + WebRtcCameraReceiver.KeyframeRefreshMs, T0, false, 0, true));
+        Assert.False(WebRtcCameraReceiver.PliDue(T0 + 60_000, T0, true, 0, videoFlowing: false));   // nobody to ask
+    }
+
+    // ── Answer SDP: tell the phone we NACK and PLI ──────────────────────────
+
+    [Fact]
+    public void AnswerGetsNackAndPliFeedbackForH264()
+    {
+        var sdp = string.Join("\r\n",
+            "v=0", "o=- 1 1 IN IP4 127.0.0.1", "s=-", "t=0 0",
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111", "a=rtpmap:111 opus/48000/2",
+            "m=video 9 UDP/TLS/RTP/SAVPF 102", "c=IN IP4 0.0.0.0", "a=rtpmap:102 H264/90000",
+            "a=fmtp:102 packetization-mode=1", "a=recvonly", "");
+        var outp = WebRtcCameraReceiver.WithVideoFeedback(sdp);
+        Assert.Contains("a=rtpmap:102 H264/90000\r\na=rtcp-fb:102 nack\r\na=rtcp-fb:102 nack pli\r\n", outp);
+        Assert.DoesNotContain("rtcp-fb:111", outp);
+        // Idempotent: nothing is added twice.
+        Assert.Equal(outp, WebRtcCameraReceiver.WithVideoFeedback(outp));
+    }
+
+    [Fact]
+    public void AnswerKeepsFeedbackThatIsAlreadyThere()
+    {
+        var sdp = "m=video 9 RTP/AVP 102\na=rtpmap:102 H264/90000\na=rtcp-fb:102 nack pli\n";
+        var outp = WebRtcCameraReceiver.WithVideoFeedback(sdp);
+        Assert.Single(outp.Split('\n'), l => l == "a=rtcp-fb:102 nack pli");
+        Assert.Contains("a=rtcp-fb:102 nack\n", outp);
+    }
+
+    [Fact]
+    public void StatsJsonIsParseableAndHonest()
+    {
+        var json = WebRtcCameraReceiver.StatsJson(15.04, 0, 12, 3, 40, 5, 2, true, 2500, "a video packet was lost");
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var r = doc.RootElement;
+        Assert.Equal("stats", r.GetProperty("type").GetString());
+        Assert.Equal(15.0, r.GetProperty("rxFps").GetDouble());
+        Assert.Equal(0, r.GetProperty("decodedFps").GetDouble());
+        Assert.Equal(12, r.GetProperty("dropped").GetInt64());
+        Assert.True(r.GetProperty("waitingForKeyFrame").GetBoolean());
+        Assert.Equal("a video packet was lost", r.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public void CloseReasonFitsTheWebSocketLimit()
     {
         var r = Controller.RobotControl.Hosting.HttpEndpoints.CloseReason(new string('x', 500));

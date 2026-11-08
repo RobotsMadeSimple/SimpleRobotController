@@ -327,7 +327,8 @@ namespace Controller.RobotControl.Hosting
         /// this socket and feeds decoded JPEGs into the "phone" camera via
         /// <see cref="Camera.WebRtc.WebRtcCameraReceiver"/>. JSON text frames both ways —
         /// phone sends <c>{type:"offer",sdp}</c> / <c>{type:"ice",candidate:{…}}</c>; the controller
-        /// replies <c>{type:"answer",sdp}</c> / <c>{type:"ice",candidate:{…}}</c>. 404 for an unknown
+        /// replies <c>{type:"answer",sdp}</c> / <c>{type:"ice",candidate:{…}}</c>, and once a second
+        /// <c>{type:"stats",…}</c> (see <see cref="Camera.WebRtc.WebRtcCameraReceiver.OnStats"/>). 404 for an unknown
         /// or non-"phone" camera (a push transport must never clobber a real capture device).
         /// </summary>
         private static async Task WebRtcSignalingAsync(HttpContext context, Camera.CameraDevice? cam)
@@ -360,6 +361,9 @@ namespace Controller.RobotControl.Hosting
             using var receiver = new Camera.WebRtc.WebRtcCameraReceiver(cam, config);
             // cand is already a JSON object string from RTCIceCandidate.toJSON().
             receiver.OnLocalIceCandidate += cand => _ = Send($"{{\"type\":\"ice\",\"candidate\":{cand}}}");
+            // Once a second, the receive side's honest numbers (decoded fps, dropped frames, lost packets,
+            // key-frame requests) so the phone can show them next to what it sends.
+            receiver.OnStats += json => _ = Send(json);
 
             // When the stream stops on its own (no video, decoder ended, peer failed), close this socket
             // with the reason: the phone treats the close as "reconnect", instead of the peer connection
