@@ -66,6 +66,30 @@ namespace Controller.RobotControl.Camera
         private byte[]?         _latestFrame;
         private byte[]?         _latestPreview;   // optional lighter JPEG for live /ws preview
         private readonly object _frameLock = new();
+        private long            _frameSeq;        // bumped per stored frame
+        private long            _lastFrameMs;     // Environment.TickCount64 of the last stored frame (0 = none)
+
+        /// <summary>How many frames this camera has stored since it was created (any source).</summary>
+        public long FrameSeq => Interlocked.Read(ref _frameSeq);
+
+        /// <summary>Milliseconds since the last stored frame, or -1 before the first one. Lets a live
+        /// viewer tell "the camera stopped" from "my socket died".</summary>
+        public long FrameAgeMs
+        {
+            get
+            {
+                long last = Interlocked.Read(ref _lastFrameMs);
+                return last == 0 ? -1 : Environment.TickCount64 - last;
+            }
+        }
+
+        /// <summary>Stores a new frame (and optional preview) and stamps it.</summary>
+        private void StoreFrame(byte[] jpeg, byte[]? preview = null)
+        {
+            lock (_frameLock) { _latestFrame = jpeg; _latestPreview = preview; }
+            Interlocked.Increment(ref _frameSeq);
+            Interlocked.Exchange(ref _lastFrameMs, Environment.TickCount64);
+        }
 
         // Phone push source: the wall-clock tick of the last pushed frame. A phone camera is
         // "connected" while frames keep arriving; it goes stale after PhoneStaleMs with none.
@@ -224,7 +248,7 @@ namespace Controller.RobotControl.Camera
         /// </summary>
         public void PushFrame(byte[] jpeg, int width, int height, byte[]? preview = null)
         {
-            lock (_frameLock) { _latestFrame = jpeg; _latestPreview = preview; }
+            StoreFrame(jpeg, preview);
             if (width  > 0) StreamWidth  = width;
             if (height > 0) StreamHeight = height;
             _lastPushMs = Environment.TickCount64;
@@ -551,12 +575,12 @@ namespace Controller.RobotControl.Camera
                             if (now - lastPublishMs < intervalMs) continue;   // decoded, not published
                             lastPublishMs = now;
                             Cv2.ImEncode(".jpg", frame, out var nbuf, JpegParams);
-                            lock (_frameLock) _latestFrame = nbuf;
+                            StoreFrame(nbuf);
                             continue;   // no sleep: the next Read blocks until a frame arrives
                         }
 
                         Cv2.ImEncode(".jpg", frame, out var buf, JpegParams);
-                        lock (_frameLock) _latestFrame = buf;
+                        StoreFrame(buf);
 
                         // Probe only after a good frame, so the driver has settled after the open.
                         if (ShouldRun(generation)) ServiceProbes(cap);
@@ -652,7 +676,7 @@ namespace Controller.RobotControl.Camera
                         if (now - lastPublishMs < intervalMs) continue;
                         lastPublishMs = now;
                         var jpeg = pic.ToJpeg(JpegParams);
-                        lock (_frameLock) _latestFrame = jpeg;
+                        StoreFrame(jpeg);
                     }
 
                     failure = Volatile.Read(ref gotPicture) == 0

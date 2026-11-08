@@ -56,8 +56,14 @@ namespace Controller.RobotControl.Hosting
             // Poll fast and send only when a new frame actually arrives (the camera stores a fresh
             // byte[] per frame, so reference-equality detects it). This lets the preview track the
             // true stream rate up to ~60fps instead of the old fixed ~20fps, without resending dupes.
+            // The camera is looked up again every second (see LiveFrameStream), so a removed and
+            // re-added camera is picked up; ?meta=1 adds status messages so a viewer can tell a
+            // stopped camera from a dead socket.
             app.MapGet("/camera/{id}/ws", (string id, HttpContext context) =>
-                StreamFramesAsync(context, robot.CameraManager.GetCamera(id) is { } cam ? cam.GetLatestPreviewFrame : null, 15));
+                StreamFramesAsync(context, $"/camera/{id}/ws",
+                    robot.CameraManager.GetCamera(id) != null,
+                    () => robot.CameraManager.GetCamera(id) is { } cam
+                        ? new FrameFeed(cam.GetLatestPreviewFrame, () => cam.FrameAgeMs, cam) : null, 15));
 
             // Single JPEG snapshot — lightweight still image for thumbnails / testing.
             app.MapGet("/camera/{id}/snapshot", (string id, HttpContext context) =>
@@ -144,8 +150,12 @@ namespace Controller.RobotControl.Hosting
         private static void MapVision(WebApplication app, RobotController robot)
         {
             // Stream of annotated frames for a running vision program.
+            // Re-resolved every second, so stopping and starting the program keeps the socket useful.
             app.MapGet("/vision/{id}/ws", (string id, HttpContext context) =>
-                StreamFramesAsync(context, robot.VisionManager.GetProcessor(id) is { } proc ? proc.GetLatestAnnotated : null));
+                StreamFramesAsync(context, $"/vision/{id}/ws",
+                    robot.VisionManager.GetProcessor(id) != null,
+                    () => robot.VisionManager.GetProcessor(id) is { } proc
+                        ? new FrameFeed(proc.GetLatestAnnotated, null, proc) : null));
 
             // Raw (unannotated) snapshot for the vision editor zone-drawing canvas.
             app.MapGet("/vision/{id}/snapshot", (string id, HttpContext context) =>
@@ -568,36 +578,24 @@ namespace Controller.RobotControl.Hosting
         }
 
         /// <summary>
-        /// Upgrades to a WebSocket and pushes the latest frame as a base64 data URI at
-        /// roughly 20 fps until the client disconnects. A null <paramref name="frame"/>
-        /// means the owning device/program does not exist (404).
+        /// Upgrades to a WebSocket and pushes each new frame as a base64 data URI until the client
+        /// disconnects (<see cref="LiveFrameStream"/>: polls every <paramref name="pollMs"/>, skips
+        /// repeats, re-resolves the source, status messages with <c>?meta=1</c>). 404 when the owning
+        /// device/program does not exist at connect time (<paramref name="exists"/> false).
         /// </summary>
-        private static async Task StreamFramesAsync(HttpContext context, Func<byte[]?>? frame, int pollMs = 50)
+        private static async Task StreamFramesAsync(HttpContext context, string label, bool exists,
+                                                    Func<FrameFeed?> resolve, int pollMs = 50)
         {
             if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 426; return; }
-            if (frame == null) { context.Response.StatusCode = 404; return; }
+            if (!exists) { context.Response.StatusCode = 404; return; }
 
+            bool meta = context.Request.Query["meta"].ToString() is "1" or "true";
+            // A viewer that reconnects on its own says why (?reconnect=<reason>), so the console shows each recovery.
+            var why = context.Request.Query["reconnect"].ToString();
+            if (why.Length > 0)
+                Console.WriteLine($"[Camera] {label}: viewer reconnected ({new string(why.Where(c => !char.IsControl(c)).Take(80).ToArray())})");
             using var ws = await context.WebSockets.AcceptWebSocketAsync();
-            var ct = context.RequestAborted;
-            byte[]? last = null;
-            try
-            {
-                while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
-                {
-                    var jpeg = frame();
-                    // Skip resending the same frame reference — a fast poll then tracks the real
-                    // stream rate (up to ~1000/pollMs fps) without flooding the socket with dupes.
-                    if (jpeg != null && !ReferenceEquals(jpeg, last))
-                    {
-                        last = jpeg;
-                        var buf = System.Text.Encoding.ASCII.GetBytes("data:image/jpeg;base64," + Convert.ToBase64String(jpeg));
-                        await ws.SendAsync(buf, WebSocketMessageType.Text, true, ct);
-                    }
-                    await Task.Delay(pollMs, ct);
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception) { /* client went away mid-send */ }
+            await LiveFrameStream.RunAsync(ws, resolve, label, meta, pollMs, context.RequestAborted);
         }
     }
 }
