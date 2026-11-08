@@ -142,8 +142,12 @@ internal sealed class BuiltProgramCommands
     private void StopBackgroundProgram(CommandMessage msg)
     {
         var p     = CommandJson.LoadParams<ProgramActionParams>(msg);
-        var built = _robot.builtProgramRepo.Get(p.ProgramName);
-        if (built != null) _background.Stop(built.Id);
+        // Id first (rename-proof), then name — the same lookup as Start. A bare id with no
+        // saved program (deleted while running) still stops the run it names.
+        var built = (!string.IsNullOrEmpty(p.ProgramId) ? _robot.builtProgramRepo.GetById(p.ProgramId) : null)
+                    ?? _robot.builtProgramRepo.Get(p.ProgramName);
+        var id    = built?.Id ?? (string.IsNullOrEmpty(p.ProgramId) ? null : p.ProgramId);
+        if (id != null) _background.Stop(id);
     }
 
     private bool IsForeground(string name) =>
