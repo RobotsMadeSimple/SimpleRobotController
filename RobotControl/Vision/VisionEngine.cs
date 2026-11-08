@@ -183,8 +183,11 @@ namespace Controller.RobotControl.Vision
         /// Teaches a patternMatch / contourMatch tool from <paramref name="src"/>: earlier tools
         /// run first so a fixtured region is where the fixture puts it, then the template is cut
         /// from the tool's region on its input layer and stored in params.template.
+        /// <paramref name="area"/> (normalized, in the frame as it is — no fixture) teaches from
+        /// that area instead, e.g. a rotated rectangle drawn round the part: the pattern is cut
+        /// deskewed to the rectangle's axes and its angle becomes the pattern's 0°.
         /// </summary>
-        public static string Teach(VisionProgram program, string toolId, Mat src, VisionRuntime runtime)
+        public static string Teach(VisionProgram program, string toolId, Mat src, VisionRuntime runtime, VisionRegion? area = null)
         {
             var tool = program.Tool(toolId) ?? throw new InvalidOperationException($"no tool '{toolId}' in this program");
             if (tool.Type is not ("patternMatch" or "contourMatch"))
@@ -201,19 +204,21 @@ namespace Controller.RobotControl.Vision
                 }
                 var owner = RegionOwner(tool, earlier);
                 var transform = FixtureTransform.Identity;
-                if (!string.IsNullOrEmpty(owner.FixtureId))
+                if (area == null && !string.IsNullOrEmpty(owner.FixtureId))
                 {
                     var fr = result.Tool(owner.FixtureId);
                     var ft = program.Tool(owner.FixtureId);
                     if (fr?.Pose == null || ft == null) throw new InvalidOperationException($"fixture '{owner.FixtureId}' not found on this image");
                     transform = FixtureTransform.Between(ft.Reference ?? fr.Pose, fr.Pose) ?? FixtureTransform.Identity;
                 }
-                var region = PixelRegion.FromNormalized(owner.Region, layers.Width, layers.Height).Transform(transform);
+                var region = area != null
+                    ? PixelRegion.FromNormalized(area, layers.Width, layers.Height)
+                    : PixelRegion.FromNormalized(owner.Region, layers.Width, layers.Height).Transform(transform);
                 if (!layers.Exists(tool.Input)) throw new InvalidOperationException($"input layer '{tool.Input}' does not exist");
                 var gray = layers.Gray(tool.Input);
                 if (tool.Type == "patternMatch")
                 {
-                    var t = PatternMatchTool.Teach(gray, region);
+                    var t = PatternMatchTool.Teach(gray, region, area);
                     tool.SetParam("template", t);
                     summary = $"pattern {t.Width}×{t.Height} px";
                 }

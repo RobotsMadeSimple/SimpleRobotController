@@ -544,19 +544,21 @@ public class PatternMatchToolTests
     }
 
     [Theory]
-    [InlineData(20, 20)]
-    [InlineData(-15, -15)]
-    [InlineData(25, 25)]
-    [InlineData(12, 10)]     // between search angles: the nearest step
-    public void Finds_the_patch_turned_within_the_angle_range(double deg, double found)
+    [InlineData(20)]
+    [InlineData(-15)]
+    [InlineData(25)]
+    [InlineData(12)]     // between search angles: refined past the step
+    [InlineData(-7.5)]
+    public void Finds_the_patch_turned_within_the_angle_range(double deg)
     {
         var prog = Taught(new { minScore = 0.5, angleRange = 30, angleStep = 5 });
         using var img = Scene(230, 160, deg);
         var r = Run(prog, img).Tool("p")!;
         Assert.True(r.Ok, r.Message);
-        Assert.Equal(found, r.Pose!.Angle);
-        Near(r.Pose.X, r.Pose.Y, (230, 160), 1.5);
-        Assert.Equal(found, D(r.Items[0]["angle"]));
+        Assert.InRange(r.Pose!.Angle, deg - 0.3, deg + 0.3);
+        Near(r.Pose.X, r.Pose.Y, (230, 160), 1.0);
+        Assert.Equal(r.Pose.Angle, D(r.Items[0]["angle"]), 2);
+        Assert.True(Num(r, "score") > 0.9, $"score {Num(r, "score")}");
     }
 
     [Fact]
@@ -671,7 +673,7 @@ public class PatternMatchToolTests
         var p = r1.Tool("p")!;
         Assert.True(p.Ok, p.Message);
         Near(p.Pose!.X, p.Pose.Y, Moved(200, 170), 1.5);
-        Assert.Equal(MoveDeg, p.Pose.Angle);
+        Assert.InRange(p.Pose.Angle, MoveDeg - 0.3, MoveDeg + 0.3);
     }
 
     [Fact]
@@ -692,6 +694,183 @@ public class PatternMatchToolTests
         Near(r.Pose!.X, r.Pose.Y, (260, 190), 0.8);
         prog.Tools[0].Input = "camera";
         Assert.Equal(ToolStatus.Fail, Run(prog, img).Tool("p")!.Status);
+    }
+
+    // ── Teaching from a rotated area: the pattern's own rotation ─────────────────
+
+    private const double TaughtDeg = 30;
+
+    /// <summary>
+    /// Taught with a rotated rectangle drawn round the pattern lying at TaughtDeg — the tool's own
+    /// region is the whole image (null), as in the app's teach flow.
+    /// </summary>
+    private static VisionProgram TaughtTurned(object? p = null)
+    {
+        using var teach = Scene(150, 140, TaughtDeg);
+        var prog = Program(Tool("p", "patternMatch", null, p ?? new { minScore = 0.6, angleRange = 180, angleStep = 5 }));
+        using (var rt = new VisionRuntime())
+            Assert.Equal("pattern 60×60 px", VisionEngine.Teach(prog, "p", teach, rt, Centered(150, 140, 60, 60, TaughtDeg)));
+        return prog;
+    }
+
+    [Fact]
+    public void A_rotated_teach_area_is_cut_deskewed_and_its_angle_is_kept()
+    {
+        var t = TaughtTurned().Tools[0].P.Obj<PatternMatchTool.Template>("template")!;
+        Assert.Equal(TaughtDeg, t.Angle, 3);
+        Assert.Equal(60, t.Width);
+        Assert.Equal(60, t.Height);
+        Assert.NotNull(t.Region);
+        Assert.Equal(TaughtDeg, t.Region!.Rotation);
+        // The cut patch is the pattern upright: it correlates with the unturned original.
+        using var patch = Cv2.ImDecode(Convert.FromBase64String(t.Png), ImreadModes.Grayscale);
+        using var upright = Pattern();
+        using var gray = new Mat();
+        Cv2.CvtColor(upright, gray, ColorConversionCodes.BGR2GRAY);
+        using var inner = new Mat(gray, new Rect(6, 6, 48, 48));
+        using var res = new Mat();
+        Cv2.MatchTemplate(patch, inner, res, TemplateMatchModes.CCoeffNormed);
+        Cv2.MinMaxLoc(res, out _, out double best, out _, out Point at);
+        Assert.True(best > 0.9, $"deskewed patch vs upright pattern {best}");
+        Assert.InRange(at.X, 5, 7);
+        Assert.InRange(at.Y, 5, 7);
+        // Outlines of the "F" and its dot, in patch pixels.
+        Assert.NotNull(t.Contours);
+        Assert.InRange(t.Contours!.Count, 1, 24);
+        Assert.All(t.Contours.SelectMany(c => c), q => { Assert.InRange(q.X, 0, 60); Assert.InRange(q.Y, 0, 60); });
+    }
+
+    [Theory]
+    [InlineData(30, 0)]       // as taught
+    [InlineData(75, 45)]
+    [InlineData(-60, -90)]
+    [InlineData(120, 90)]
+    [InlineData(200, 170)]
+    [InlineData(-150, 180)]   // upside down
+    [InlineData(47.5, 17.5)]  // between search steps
+    public void Angles_are_relative_to_the_taught_orientation(double sceneDeg, double expected)
+    {
+        var prog = TaughtTurned();
+        using var img = Scene(260, 170, sceneDeg);
+        var r = Run(prog, img).Tool("p")!;
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal(1, Num(r, "count"));
+        double err = Math.Abs(Geo.Wrap180(r.Pose!.Angle - expected));
+        Assert.True(err < 0.4, $"angle {r.Pose.Angle}, expected {expected}");
+        Assert.Equal(r.Pose.Angle, Num(r, "angle"), 2);
+        Near(r.Pose.X, r.Pose.Y, (260, 170), 1.0);
+        Assert.True(Num(r, "score") > 0.9, $"score {Num(r, "score")}");
+    }
+
+    [Fact]
+    public void Teaching_from_a_rotated_tool_region_also_takes_its_angle()
+    {
+        using var teach = Scene(150, 140, -40);
+        var prog = Program(Tool("p", "patternMatch", Centered(150, 140, 60, 60, -40), new { minScore = 0.6, angleRange = 60, angleStep = 5 }));
+        using (var rt = new VisionRuntime()) VisionEngine.Teach(prog, "p", teach, rt);
+        var t = prog.Tools[0].P.Obj<PatternMatchTool.Template>("template")!;
+        Assert.Equal(-40, t.Angle, 3);
+        Assert.Null(t.Region);
+        prog.Tools[0].Region = null;
+        using var img = Scene(250, 160, -40);
+        var r = Run(prog, img).Tool("p")!;
+        Assert.True(r.Ok, r.Message);
+        Assert.InRange(r.Pose!.Angle, -0.4, 0.4);
+    }
+
+    [Theory]
+    [InlineData(30)]
+    [InlineData(115)]
+    [InlineData(-80)]
+    public void The_pattern_outlines_are_drawn_where_each_match_was_found(double sceneDeg)
+    {
+        var prog = TaughtTurned(new { minScore = 0.6, angleRange = 180, angleStep = 5, maxCount = 2 });
+        using var img = Canvas(60);
+        Place(img, 110, 100, sceneDeg);
+        Place(img, 290, 200, sceneDeg + 50);
+        var r = Run(prog, img).Tool("p")!;
+        Assert.Equal(2, Num(r, "count"));
+        var t = prog.Tools[0].P.Obj<PatternMatchTool.Template>("template")!;
+        Assert.Equal(2 * t.Contours!.Count, r.Contours.Count);
+        // Every outline point lies on an edge of the scene (within ~2 px).
+        using var gray = new Mat();
+        Cv2.CvtColor(img, gray, ColorConversionCodes.BGR2GRAY);
+        using var edges = new Mat();
+        Cv2.Canny(gray, edges, 40, 100);
+        using var inv = new Mat();
+        Cv2.BitwiseNot(edges, inv);
+        using var dist = new Mat();
+        Cv2.DistanceTransform(inv, dist, DistanceTypes.L2, DistanceTransformMasks.Mask3);
+        var pts = r.Contours.SelectMany(c => c).ToList();
+        int near = pts.Count(q => dist.At<float>((int)Math.Round(q.Y), (int)Math.Round(q.X)) <= 2.5f);
+        Assert.True(near >= pts.Count * 0.9, $"{near}/{pts.Count} outline points on an edge");
+        // One set of outlines per match, round its position.
+        int per = t.Contours.Count;
+        for (int m = 0; m < 2; m++)
+        {
+            var mine = r.Contours.Skip(m * per).Take(per).SelectMany(c => c).ToList();
+            double mx = mine.Average(q => q.X), my = mine.Average(q => q.Y);
+            Assert.True(Math.Abs(mx - D(r.Items[m]["x"])) < 20 && Math.Abs(my - D(r.Items[m]["y"])) < 20);
+        }
+    }
+
+    [Fact]
+    public void Placed_outlines_follow_the_pose()
+    {
+        var t = new PatternMatchTool.Template
+        {
+            OriginX = 10, OriginY = 5,
+            Contours = new() { new() { new VisionPoint(20, 5), new VisionPoint(10, 15) } },
+        };
+        var c = PatternMatchTool.Placed(t, 100, 50, 90).Single();
+        Assert.Equal(100, c[0].X, 6); Assert.Equal(60, c[0].Y, 6);     // +10 along x turns to +10 along y (clockwise)
+        Assert.Equal(90, c[1].X, 6);  Assert.Equal(50, c[1].Y, 6);
+    }
+
+    [Fact]
+    public void A_flat_patch_has_no_outlines()
+    {
+        using var flat = new Mat(40, 40, MatType.CV_8UC1, Scalar.All(90));
+        Assert.Empty(PatternMatchTool.Outlines(flat));
+    }
+
+    [Fact]
+    public void The_teach_preview_is_an_enlarged_png()
+    {
+        var t = TaughtTurned().Tools[0].P.Obj<PatternMatchTool.Template>("template")!;
+        using var patch = Cv2.ImDecode(Convert.FromBase64String(t.Png), ImreadModes.Grayscale);
+        using var png = Cv2.ImDecode(PatternMatchTool.PreviewPng(t, patch), ImreadModes.Color);
+        Assert.Equal(360, png.Width);     // 60 px × 6
+        Assert.Equal(3, png.Channels());
+    }
+
+    [Fact]
+    public void A_full_turn_search_stays_quick()
+    {
+        var prog = TaughtTurned();
+        using var img = Scene(260, 170, 133);
+        Run(prog, img);   // warm up
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = Run(prog, img).Tool("p")!;
+        Assert.True(r.Ok, r.Message);
+        Assert.True(sw.ElapsedMilliseconds < 1500, $"{sw.ElapsedMilliseconds} ms for a full turn on {W}x{H}");
+    }
+
+    [Fact]
+    public void A_shape_match_draws_each_matched_outline()
+    {
+        using var img = Canvas(30);
+        Cv2.Circle(img, new Point(100, 150), 30, Scalar.All(220), -1);
+        Cv2.Circle(img, new Point(300, 150), 20, Scalar.All(220), -1);
+        var tool = Tool("m", "contourMatch", null, new
+        {
+            polarity = "light", minScore = 0.8,
+            template = new { width = 2, height = 2, points = Enumerable.Range(0, 32).Select(i => new { x = 0.5 + 0.5 * Math.Cos(i * Math.PI / 16), y = 0.5 + 0.5 * Math.Sin(i * Math.PI / 16) }) },
+        });
+        var r = RunOne(img, tool);
+        Assert.Equal(2, Num(r, "count"));
+        Assert.Equal(2, r.Contours.Count);
+        Assert.All(r.Contours, c => Assert.True(c.Count >= 8));
     }
 }
 

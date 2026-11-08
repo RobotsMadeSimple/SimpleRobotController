@@ -139,13 +139,18 @@ internal sealed class VisionCommands
 
     /// <summary>
     /// Teaches a patternMatch / contourMatch tool: its template is cut from a frame (the given
-    /// <c>image</c>, else the program's latest camera frame) inside the tool's region, after
-    /// the earlier tools have run so a fixtured region is where its fixture puts it.
+    /// <c>image</c>, else the program's latest camera frame) inside the tool's region — or inside
+    /// <c>region</c> when given (a rotated rectangle teaches the pattern's rotation) — after the
+    /// earlier tools have run so a fixtured region is where its fixture puts it. With
+    /// <c>preview</c> the program is left as it is (nothing saved) and only the template and a
+    /// preview PNG come back, for the app to show before it keeps the template.
     /// </summary>
     private object? TeachVisionTool(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<TeachVisionToolParams>(msg);
-        var program = _robot.VisionRepo.Get(p.ProgramId) ?? throw new InvalidOperationException($"No vision program with id '{p.ProgramId}'");
+        var stored = _robot.VisionRepo.Get(p.ProgramId) ?? throw new InvalidOperationException($"No vision program with id '{p.ProgramId}'");
+        // A preview teaches a throwaway copy: the stored program is shared and must not change.
+        var program = p.Preview ? JsonSerializer.Deserialize<VisionProgram>(JsonSerializer.Serialize(stored))! : stored;
         Mat src;
         if (!string.IsNullOrWhiteSpace(p.Image)) src = DecodeImage(p.Image, "TeachVisionTool");
         else
@@ -157,10 +162,25 @@ internal sealed class VisionCommands
         string summary;
         using (src)
         using (var runtime = new VisionRuntime())
-            summary = VisionEngine.Teach(program, p.ToolId, src, runtime);
-        _robot.VisionRepo.Save(program);
-        _robot.VisionManager.OnProgramSaved(program);
-        return new { programId = program.Id, toolId = p.ToolId, taught = summary, lastUpdatedUnixMs = program.LastUpdatedUnixMs };
+            summary = VisionEngine.Teach(program, p.ToolId, src, runtime, p.Region);
+        var tool = program.Tool(p.ToolId)!;
+        var template = tool.Params != null && tool.Params.TryGetValue("template", out var te) ? te.GetRawText() : null;
+        string? preview = null;
+        if (tool.Type == "patternMatch" && tool.P.Obj<PatternMatchTool.Template>("template") is { } pt)
+        {
+            using var patch = Cv2.ImDecode(Convert.FromBase64String(pt.Png), ImreadModes.Grayscale);
+            if (!patch.Empty()) preview = Convert.ToBase64String(PatternMatchTool.PreviewPng(pt, patch));
+        }
+        if (!p.Preview)
+        {
+            _robot.VisionRepo.Save(program);
+            _robot.VisionManager.OnProgramSaved(program);
+        }
+        return new
+        {
+            programId = program.Id, toolId = p.ToolId, taught = summary, lastUpdatedUnixMs = stored.LastUpdatedUnixMs,
+            template, preview, saved = !p.Preview,
+        };
     }
 
     private static Mat DecodeImage(string? image, string command)

@@ -48,4 +48,11 @@ public class TeachVisionToolParams
     [JsonPropertyName("toolId")]    public string  ToolId    { get; set; } = "";
     /// <summary>Optional base64 PNG/JPEG to teach from; default the program's latest camera frame.</summary>
     [JsonPropertyName("image")]     public string? Image     { get; set; }
+    /// <summary>
+    /// Optional area to teach from instead of the tool's region, normalized to the image as it is
+    /// (no fixture) — e.g. a rotated rectangle: the pattern is cut deskewed and its angle is 0°.
+    /// </summary>
+    [JsonPropertyName("region")]    public Vision.VisionRegion? Region { get; set; }
+    /// <summary>True: return the template (and a preview PNG) without changing or saving the program.</summary>
+    [JsonPropertyName("preview")]   public bool    Preview   { get; set; }
 }

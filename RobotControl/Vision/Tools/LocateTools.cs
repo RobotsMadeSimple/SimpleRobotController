@@ -331,7 +331,7 @@ namespace Controller.RobotControl.Vision.Tools
             double minScore = p.Num("minScore", 0.7), minArea = p.Num("minArea", 50);
             int maxCount = p.Int("maxCount", 10);
 
-            var found = new List<(double X, double Y, double Angle, double Score)>();
+            var found = new List<(double X, double Y, double Angle, double Score, Point[] Outline)>();
             var (bin, box) = ToolMath.Binarize(c);
             using (bin)
             {
@@ -348,12 +348,15 @@ namespace Controller.RobotControl.Vision.Tools
                         double ang = ToolMath.Orientation(m) - tplAngle;
                         while (ang > 90) ang -= 180;
                         while (ang <= -90) ang += 180;
-                        found.Add((m.M10 / m.M00 + box.X, m.M01 / m.M00 + box.Y, ang, score));
+                        found.Add((m.M10 / m.M00 + box.X, m.M01 / m.M00 + box.Y, ang, score, Cv2.ApproxPolyDP(ct, 1.0, true)));
                     }
                 }
             }
             found = found.OrderByDescending(f => f.Score).Take(Math.Max(1, maxCount)).ToList();
-            MatchOutput.Write(c, found, "no shape matches the taught contour");
+            MatchOutput.Write(c, found.Select(f => (f.X, f.Y, f.Angle, f.Score)).ToList(), "no shape matches the taught contour");
+            // Each matched outline where it was found, for the overlay.
+            foreach (var f in found.Take(20))
+                c.Out.Contours.Add(f.Outline.Select(q => new PxPoint(q.X + box.X, q.Y + box.Y)).ToList());
         }
     }
 
@@ -380,13 +383,22 @@ namespace Controller.RobotControl.Vision.Tools
 
     /// <summary>
     /// A taught gray patch searched for over the region's bounding box with normalized
-    /// cross-correlation (TM_CCOEFF_NORMED). For a rotated search the image is turned instead
-    /// of the template, once per angle in −angleRange…+angleRange (angleStep), so no corner of
-    /// the template is ever blank. Reported x/y is where the template's origin lands.
+    /// cross-correlation (TM_CCOEFF_NORMED). The image is turned instead of the template, once
+    /// per angle in −angleRange…+angleRange (angleStep) about the taught angle, so no corner of
+    /// the template is ever blank (angleRange 180 = every angle). A turned search runs coarse on
+    /// a shrunk image, then each candidate is refined at full size in position and angle, to a
+    /// fraction of a degree. Reported x/y is where the template's origin (the centre of the
+    /// taught area) lands; angle is relative to the taught orientation (0 = as taught). Each
+    /// match's taught outlines are placed in <c>contours</c> for the overlay.
     /// </summary>
     internal sealed class PatternMatchTool : IVisionTool
     {
         public bool MakesPose => true;
+
+        /// <summary>Matches whose outlines are drawn (the overlay is capped; items are not).</summary>
+        private const int MaxDrawn = 20;
+        /// <summary>The coarse search shrinks the image while the template's short side stays at least this long (px).</summary>
+        private const int CoarseMinSide = 24;
 
         public sealed class Template
         {
@@ -395,7 +407,16 @@ namespace Controller.RobotControl.Vision.Tools
             [System.Text.Json.Serialization.JsonPropertyName("originY")] public double OriginY { get; set; }
             [System.Text.Json.Serialization.JsonPropertyName("width")]   public int    Width   { get; set; }
             [System.Text.Json.Serialization.JsonPropertyName("height")]  public int    Height  { get; set; }
+            /// <summary>The taught area's angle in the teach image (deg, clockwise on screen); an output angle of 0 means this orientation.</summary>
+            [System.Text.Json.Serialization.JsonPropertyName("angle")]   public double Angle   { get; set; }
+            /// <summary>Closed outlines found in the patch, in its pixels (x right, y down from its top-left).</summary>
+            [System.Text.Json.Serialization.JsonPropertyName("contours")] public List<List<VisionPoint>>? Contours { get; set; }
+            /// <summary>The area it was taught from, normalized to the teach frame; null when taught from the tool's region.</summary>
+            [System.Text.Json.Serialization.JsonPropertyName("region")]  public VisionRegion? Region { get; set; }
         }
+
+        /// <summary>A match: the template origin's position (crop pixels), its absolute angle in the image, and its score.</summary>
+        private readonly record struct Hit(double X, double Y, double Angle, double Score);
 
         public void Run(ToolContext c)
         {
@@ -406,78 +427,212 @@ namespace Controller.RobotControl.Vision.Tools
             var tpl = t == null || string.IsNullOrEmpty(t.Png) ? null : c.Runtime.Template(c.Tool.Id, t.Png);
             if (t == null || tpl == null) { c.Fail("no pattern taught (Teach the tool on a sample)"); return; }
 
-            double minScore = p.Num("minScore", 0.7), range = Math.Abs(p.Num("angleRange", 0)), stepA = Math.Max(0.5, Math.Abs(p.Num("angleStep", 5)));
+            double minScore = p.Num("minScore", 0.7);
+            double range = Math.Min(180, Math.Abs(p.Num("angleRange", 0)));
+            double stepA = Math.Clamp(Math.Abs(p.Num("angleStep", 5)), 0.5, 90);
             int maxCount = Math.Max(1, p.Int("maxCount", 1));
             var box = c.Region.Bounds(c.W, c.H);
             if (box.Width < tpl.Width || box.Height < tpl.Height) { c.Fail("search region is smaller than the pattern"); return; }
 
             using var crop = new Mat(c.Gray, box);
-            var cands = new List<(double X, double Y, double Angle, double Score)>();
-            var angles = new List<double> { 0 };
-            for (double a = stepA; a <= range + 1e-9; a += stepA) { angles.Add(a); angles.Add(-a); }
-            foreach (var a in angles)
-                Search(crop, tpl, t, a, minScore, maxCount, box, cands);
+            double sep = Math.Min(tpl.Width, tpl.Height) * 0.5;
+            var origin = new Point2d(t.OriginX, t.OriginY);
+            List<Hit> hits;
+            if (range < 1e-9)
+                hits = Peaks(crop, tpl, origin, t.Angle, 1, minScore, maxCount * 3);
+            else
+            {
+                // Coarse: every search angle on a shrunk copy, with a looser score (shrinking and
+                // the angle step both cost score); then each distinct candidate refined at full size.
+                double k = CoarseScale(tpl);
+                Mat sCrop = crop, sTpl = tpl;
+                try
+                {
+                    if (k < 1)
+                    {
+                        sCrop = new Mat(); sTpl = new Mat();
+                        Cv2.Resize(crop, sCrop, new Size(), k, k, InterpolationFlags.Area);
+                        Cv2.Resize(tpl, sTpl, new Size(), k, k, InterpolationFlags.Area);
+                    }
+                    double loose = minScore * (k < 1 ? 0.7 : 0.85);
+                    var sOrigin = new Point2d((origin.X + 0.5) * k - 0.5, (origin.Y + 0.5) * k - 0.5);
+                    var cands = new List<Hit>();
+                    foreach (var off in Offsets(range, stepA))
+                        cands.AddRange(Peaks(sCrop, sTpl, sOrigin, t.Angle + off, k, loose, maxCount * 2));
+                    int margin = k < 1 ? (int)Math.Ceiling(1.5 / k) + 2 : 3;
+                    hits = Distinct(cands, sep, maxCount * 3 + 2)
+                        .Select(h => Refine(crop, tpl, origin, h, stepA, margin))
+                        .Where(h => h.Score >= minScore)
+                        .ToList();
+                }
+                finally
+                {
+                    if (!ReferenceEquals(sCrop, crop)) sCrop.Dispose();
+                    if (!ReferenceEquals(sTpl, tpl)) sTpl.Dispose();
+                }
+            }
 
             // Best first; one result per object (the same object found at neighbouring angles).
-            double sep = Math.Min(tpl.Width, tpl.Height) * 0.5;
-            var kept = new List<(double X, double Y, double Angle, double Score)>();
-            foreach (var cd in cands.OrderByDescending(x => x.Score))
-            {
-                if (!c.Region.Contains(cd.X, cd.Y)) continue;
-                if (kept.Any(k => Math.Abs(k.X - cd.X) < sep && Math.Abs(k.Y - cd.Y) < sep)) continue;
-                kept.Add(cd);
-                if (kept.Count >= maxCount) break;
-            }
-            MatchOutput.Write(c, kept, "pattern not found");
+            var kept = Distinct(hits.Where(h => c.Region.Contains(h.X + box.X, h.Y + box.Y)), sep, maxCount)
+                .Select(h => h with { X = h.X + box.X, Y = h.Y + box.Y })
+                .ToList();
+            MatchOutput.Write(c, kept.Select(h => (h.X, h.Y, Geo.Wrap180(h.Angle - t.Angle), h.Score)).ToList(), "pattern not found");
+            foreach (var h in kept.Take(MaxDrawn))
+                c.Out.Contours.AddRange(Placed(t, h.X, h.Y, h.Angle));
         }
 
-        private static void Search(Mat crop, Mat tpl, Template t, double angle, double minScore, int maxCount, Rect box,
-                                   List<(double, double, double, double)> into)
+        /// <summary>The template's outlines moved so its origin sits on (x, y) and turned to <paramref name="angle"/> (absolute, deg).</summary>
+        public static IEnumerable<List<PxPoint>> Placed(Template t, double x, double y, double angle)
         {
-            Mat img = crop;
-            double[,]? back = null;
-            Mat? rotated = null;
+            if (t.Contours == null) yield break;
+            double a = angle * Math.PI / 180, cos = Math.Cos(a), sin = Math.Sin(a);
+            foreach (var ct in t.Contours)
+                if (ct.Count >= 2)
+                    yield return ct.Select(q =>
+                    {
+                        double dx = q.X - t.OriginX, dy = q.Y - t.OriginY;
+                        return new PxPoint(x + dx * cos - dy * sin, y + dx * sin + dy * cos);
+                    }).ToList();
+        }
+
+        /// <summary>Search angles about the taught one: 0, ±step, ±2·step… up to ±range; a range of 180 covers the full turn evenly.</summary>
+        private static List<double> Offsets(double range, double step)
+        {
+            var list = new List<double>();
+            if (range >= 180 - 1e-9)
+            {
+                int n = Math.Max(1, (int)Math.Round(360 / step));
+                for (int i = 0; i < n; i++) list.Add(Geo.Wrap180(i * 360.0 / n));
+                return list;
+            }
+            list.Add(0);
+            for (double a = step; a <= range + 1e-9; a += step) { list.Add(a); list.Add(-a); }
+            return list;
+        }
+
+        /// <summary>How far the coarse search shrinks the image: halved while the template's short side stays ≥ CoarseMinSide, at most to a quarter.</summary>
+        private static double CoarseScale(Mat tpl)
+        {
+            double k = 1, side = Math.Min(tpl.Width, tpl.Height);
+            while (k > 0.25 && side * k * 0.5 >= CoarseMinSide) k *= 0.5;
+            return k;
+        }
+
+        /// <summary>Best-first, dropping any hit within <paramref name="sep"/> of a better one; at most <paramref name="max"/>.</summary>
+        private static List<Hit> Distinct(IEnumerable<Hit> hits, double sep, int max)
+        {
+            var kept = new List<Hit>();
+            foreach (var h in hits.OrderByDescending(x => x.Score))
+            {
+                if (kept.Any(k => Math.Abs(k.X - h.X) < sep && Math.Abs(k.Y - h.Y) < sep)) continue;
+                kept.Add(h);
+                if (kept.Count >= max) break;
+            }
+            return kept;
+        }
+
+        /// <summary>
+        /// The 2×3 map from a window's pixels to <paramref name="img"/>'s: window point
+        /// <paramref name="at"/> lands on image point <paramref name="on"/>, turned by
+        /// <paramref name="angle"/> (deg, clockwise on screen) — so an object turned by +angle
+        /// in the image stands upright in the window.
+        /// </summary>
+        private static double[] WindowMap(Point2d on, Point2d at, double angle)
+        {
+            double a = angle * Math.PI / 180, cos = Math.Cos(a), sin = Math.Sin(a);
+            return new[] { cos, -sin, on.X - (cos * at.X - sin * at.Y), sin, cos, on.Y - (sin * at.X + cos * at.Y) };
+        }
+
+        private static Point2d Apply(double[] m, double x, double y) => new(m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5]);
+
+        private static Mat Warp(Mat img, double[] m, int w, int h, BorderTypes border)
+        {
+            using var mat = new Mat(2, 3, MatType.CV_64FC1);
+            for (int i = 0; i < 6; i++) mat.Set(i / 3, i % 3, m[i]);
+            var win = new Mat();
+            Cv2.WarpAffine(img, win, mat, new Size(w, h), InterpolationFlags.Linear | InterpolationFlags.WarpInverseMap, border, Scalar.Black);
+            return win;
+        }
+
+        /// <summary>
+        /// Up to <paramref name="n"/> peaks ≥ <paramref name="minScore"/> over the whole of
+        /// <paramref name="img"/> turned by <paramref name="angle"/>; positions are scaled back by
+        /// 1/<paramref name="k"/> to full-size crop pixels.
+        /// </summary>
+        private static List<Hit> Peaks(Mat img, Mat tpl, Point2d origin, double angle, double k, double minScore, int n)
+        {
+            var hits = new List<Hit>();
+            Mat? turned = null;
+            double[] m;
+            if (Math.Abs(angle) < 1e-9) m = new double[] { 1, 0, 0, 0, 1, 0 };
+            else
+            {
+                // A canvas big enough to keep all of the image at any angle, centred on its centre.
+                int diag = (int)Math.Ceiling(Math.Sqrt(img.Width * img.Width + img.Height * img.Height));
+                m = WindowMap(new Point2d(img.Width / 2.0, img.Height / 2.0), new Point2d(diag / 2.0, diag / 2.0), angle);
+                turned = Warp(img, m, diag, diag, BorderTypes.Constant);
+            }
             try
             {
-                if (Math.Abs(angle) > 1e-9)
-                {
-                    // Turn the image by −angle (an object at +angle comes upright) on a canvas big
-                    // enough to keep all of it; GetRotationMatrix2D's positive angle is
-                    // counter-clockwise on screen, i.e. −angle in this file's convention.
-                    int diag = (int)Math.Ceiling(Math.Sqrt(crop.Width * crop.Width + crop.Height * crop.Height));
-                    using var m = Cv2.GetRotationMatrix2D(new Point2f(crop.Width / 2f, crop.Height / 2f), angle, 1);
-                    m.Set(0, 2, m.At<double>(0, 2) + (diag - crop.Width) / 2.0);
-                    m.Set(1, 2, m.At<double>(1, 2) + (diag - crop.Height) / 2.0);
-                    rotated = new Mat();
-                    Cv2.WarpAffine(crop, rotated, m, new Size(diag, diag), InterpolationFlags.Linear, BorderTypes.Constant, Scalar.Black);
-                    using var inv = new Mat();
-                    Cv2.InvertAffineTransform(m, inv);
-                    back = new double[2, 3];
-                    for (int r = 0; r < 2; r++) for (int col = 0; col < 3; col++) back[r, col] = inv.At<double>(r, col);
-                    img = rotated;
-                }
-                if (img.Width < tpl.Width || img.Height < tpl.Height) return;
+                var src = turned ?? img;
+                if (src.Width < tpl.Width || src.Height < tpl.Height) return hits;
                 using var res = new Mat();
-                Cv2.MatchTemplate(img, tpl, res, TemplateMatchModes.CCoeffNormed);
-                for (int n = 0; n < maxCount * 3; n++)
+                Cv2.MatchTemplate(src, tpl, res, TemplateMatchModes.CCoeffNormed);
+                for (int i = 0; i < n; i++)
                 {
                     Cv2.MinMaxLoc(res, out _, out double max, out _, out Point loc);
                     if (max < minScore || double.IsNaN(max)) break;
-                    // Sub-pixel peak.
-                    double ox = loc.X + SubPixel(res, loc, true), oy = loc.Y + SubPixel(res, loc, false);
-                    double px = ox + t.OriginX, py = oy + t.OriginY;
-                    if (back != null)
-                    {
-                        double bx = back[0, 0] * px + back[0, 1] * py + back[0, 2];
-                        double by = back[1, 0] * px + back[1, 1] * py + back[1, 2];
-                        px = bx; py = by;
-                    }
-                    into.Add((px + box.X, py + box.Y, angle, max));
+                    var q = Apply(m, loc.X + SubPixel(res, loc, true) + origin.X, loc.Y + SubPixel(res, loc, false) + origin.Y);
+                    hits.Add(new Hit((q.X + 0.5) / k - 0.5, (q.Y + 0.5) / k - 0.5, angle, max));
                     int hw = Math.Max(1, tpl.Width / 2), hh = Math.Max(1, tpl.Height / 2);
                     Cv2.Rectangle(res, new Rect(loc.X - hw, loc.Y - hh, 2 * hw + 1, 2 * hh + 1), Scalar.All(-1), -1);
                 }
+                return hits;
             }
-            finally { rotated?.Dispose(); }
+            finally { turned?.Dispose(); }
+        }
+
+        /// <summary>
+        /// The best match in a small window round (x, y) at one angle: the window is the template
+        /// plus <paramref name="margin"/> px on each side, turned about the guessed origin.
+        /// </summary>
+        private static Hit Local(Mat crop, Mat tpl, Point2d origin, double angle, double x, double y, int margin)
+        {
+            int w = tpl.Width + 2 * margin, h = tpl.Height + 2 * margin;
+            var m = WindowMap(new Point2d(x, y), new Point2d(margin + origin.X, margin + origin.Y), angle);
+            using var win = Warp(crop, m, w, h, BorderTypes.Replicate);
+            using var res = new Mat();
+            Cv2.MatchTemplate(win, tpl, res, TemplateMatchModes.CCoeffNormed);
+            Cv2.MinMaxLoc(res, out _, out double max, out _, out Point loc);
+            if (double.IsNaN(max)) return new Hit(x, y, angle, 0);
+            var q = Apply(m, loc.X + SubPixel(res, loc, true) + origin.X, loc.Y + SubPixel(res, loc, false) + origin.Y);
+            return new Hit(q.X, q.Y, angle, max);
+        }
+
+        /// <summary>A coarse hit refined at full size: position first, then the angle by halving steps, then a parabola through the last three.</summary>
+        private static Hit Refine(Mat crop, Mat tpl, Point2d origin, Hit h, double step, int margin)
+        {
+            var best = Local(crop, tpl, origin, h.Angle, h.X, h.Y, margin);
+            best = Local(crop, tpl, origin, best.Angle, best.X, best.Y, 2);
+            double d = step / 2;
+            for (; d >= 0.25; d /= 2)
+            {
+                var lo = Local(crop, tpl, origin, best.Angle - d, best.X, best.Y, 2);
+                var hi = Local(crop, tpl, origin, best.Angle + d, best.X, best.Y, 2);
+                if (lo.Score > best.Score && lo.Score >= hi.Score) best = lo;
+                else if (hi.Score > best.Score) best = hi;
+            }
+            d *= 2;
+            var l = Local(crop, tpl, origin, best.Angle - d, best.X, best.Y, 2);
+            var r = Local(crop, tpl, origin, best.Angle + d, best.X, best.Y, 2);
+            double den = l.Score - 2 * best.Score + r.Score;
+            if (den < -1e-9)
+            {
+                double off = Math.Clamp(0.5 * (l.Score - r.Score) / den, -0.5, 0.5) * d;
+                var fine = Local(crop, tpl, origin, best.Angle + off, best.X, best.Y, 2);
+                if (fine.Score >= best.Score - 1e-3) best = fine;
+            }
+            return best;
         }
 
         private static double SubPixel(Mat res, Point loc, bool alongX)
@@ -491,19 +646,80 @@ namespace Controller.RobotControl.Vision.Tools
             return Math.Abs(den) > 1e-9 ? Math.Clamp(0.5 * (l - r) / den, -0.5, 0.5) : 0;
         }
 
-        /// <summary>Cuts the region (unrolled upright) from a gray image as the template.</summary>
-        public static Template Teach(Mat gray, PixelRegion region)
+        /// <summary>
+        /// Cuts the region (unrolled upright, so a turned rectangle is deskewed to its own axes)
+        /// from a gray image as the template. Its angle — the direction of the region's top edge,
+        /// TL → TR — becomes the reference orientation; the patch's outlines are kept for drawing.
+        /// </summary>
+        public static Template Teach(Mat gray, PixelRegion region, VisionRegion? drawn = null)
         {
             var (patch, _) = ToolMath.Unroll(gray, region);
             using (patch)
             {
+                var q = region.Corners();
+                double angle = region.Kind is RegionKind.Rect or RegionKind.Quad ? Geo.AngleDeg(q[1].X - q[0].X, q[1].Y - q[0].Y) : 0;
                 Cv2.ImEncode(".png", patch, out var png);
                 return new Template
                 {
                     Png = Convert.ToBase64String(png), Width = patch.Width, Height = patch.Height,
                     OriginX = patch.Width / 2.0, OriginY = patch.Height / 2.0,
+                    Angle = Math.Round(angle, 3), Contours = Outlines(patch), Region = drawn,
                 };
             }
+        }
+
+        /// <summary>
+        /// The patch's outlines: Otsu-thresholded (the smaller side taken as the part), every
+        /// contour bigger than a speck that does not just trace the patch's edge, simplified until
+        /// there are at most ~400 points in all. A flat patch has none.
+        /// </summary>
+        public static List<List<VisionPoint>> Outlines(Mat patch)
+        {
+            var list = new List<List<VisionPoint>>();
+            using var blur = new Mat();
+            Cv2.GaussianBlur(patch, blur, new Size(3, 3), 0);
+            Cv2.MeanStdDev(blur, out _, out var sd);
+            if (sd.Val0 < 4) return list;
+            using var bin = new Mat();
+            Cv2.Threshold(blur, bin, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
+            if (Cv2.CountNonZero(bin) * 2 > bin.Rows * bin.Cols) Cv2.BitwiseNot(bin, bin);
+            Cv2.FindContours(bin, out var contours, out _, RetrievalModes.List, ContourApproximationModes.ApproxNone);
+            double minArea = Math.Max(9, patch.Rows * patch.Cols * 0.002);
+            int w = patch.Cols, h = patch.Rows;
+            // A contour running mostly along the patch's own edge is the cut, not the part.
+            bool AlongEdge(Point[] ct) => ct.Count(q => q.X <= 1 || q.Y <= 1 || q.X >= w - 2 || q.Y >= h - 2) * 2 > ct.Length;
+            var keep = contours.Where(ct => Cv2.ContourArea(ct) >= minArea && !AlongEdge(ct))
+                .OrderByDescending(ct => Cv2.ContourArea(ct)).Take(24).ToList();
+            double eps = 0.8;
+            List<Point[]> simple;
+            do
+            {
+                simple = keep.Select(ct => Cv2.ApproxPolyDP(ct, eps, true)).Where(ct => ct.Length >= 3).ToList();
+                eps *= 1.6;
+            } while (simple.Sum(ct => ct.Length) > 400 && eps < 50);
+            foreach (var ct in simple) list.Add(ct.Select(pt => new VisionPoint(pt.X, pt.Y)).ToList());
+            return list;
+        }
+
+        /// <summary>The taught patch enlarged, its outlines drawn on it, and its origin and 0° direction marked — a PNG for the teach preview.</summary>
+        public static byte[] PreviewPng(Template t, Mat patch)
+        {
+            int s = Math.Max(1, (int)Math.Ceiling(320.0 / Math.Max(1, Math.Max(patch.Width, patch.Height))));
+            s = Math.Min(s, 8);
+            using var big = new Mat();
+            Cv2.Resize(patch, big, new Size(patch.Width * s, patch.Height * s), 0, 0, InterpolationFlags.Linear);
+            using var color = new Mat();
+            Cv2.CvtColor(big, color, ColorConversionCodes.GRAY2BGR);
+            Point P(double x, double y) => new((int)Math.Round((x + 0.5) * s - 0.5), (int)Math.Round((y + 0.5) * s - 0.5));
+            foreach (var ct in t.Contours ?? new())
+                if (ct.Count >= 2) Cv2.Polylines(color, new[] { ct.Select(q => P(q.X, q.Y)).ToArray() }, true, VisionPalette.DebugMatched, 2, LineTypes.AntiAlias);
+            var o = P(t.OriginX, t.OriginY);
+            int len = Math.Max(12, Math.Min(color.Width, color.Height) / 5);
+            Cv2.ArrowedLine(color, o, new Point(o.X + len, o.Y), VisionPalette.Fail, 2, LineTypes.AntiAlias, 0, 0.25);
+            Cv2.Line(color, o, new Point(o.X, o.Y + len), VisionPalette.Pass, 2, LineTypes.AntiAlias);
+            Cv2.Circle(color, o, 3, Scalar.White, -1, LineTypes.AntiAlias);
+            Cv2.ImEncode(".png", color, out var png);
+            return png;
         }
     }
 

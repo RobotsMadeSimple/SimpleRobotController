@@ -54,9 +54,18 @@ namespace Controller.RobotControl.Vision
             foreach (var p in tr.Points.Take(500))
                 Cv2.Circle(img, P(p.X, p.Y), 3, VisionPalette.Corner, -1, LineTypes.AntiAlias);
 
+            // A matching tool's pattern outlines, placed where each match was found.
+            foreach (var ct in tr.Contours)
+                if (ct.Count >= 2)
+                    Cv2.Polylines(img, new[] { Pts(ct) }, true, VisionPalette.DebugMatched, VisionDrawing.OverlayThickness, LineTypes.AntiAlias);
+
             foreach (var item in tr.Items.Take(200))
                 if (item.TryGetValue("x", out var xo) && item.TryGetValue("y", out var yo) && xo is double x && yo is double y)
+                {
                     Cv2.DrawMarker(img, P(x, y), VisionPalette.Blob, MarkerTypes.Cross, 12, 2);
+                    if (tr.Contours.Count > 0 && item.TryGetValue("score", out var so) && so is double score)
+                        VisionDrawing.DrawOutlinedText(img, $"{score:0.00}", P(x + 8, y - 8), VisionDrawing.CellFontScale + 0.1, VisionPalette.DebugMatched);
+                }
 
             if (tr.Pose is { } pose)
             {

@@ -136,6 +136,7 @@ earlier tool, or loops, is a tool error. In the app the area is drawn on either 
   "pose": Pose | null,
   "points": [{x,y}], "lines": [{x1,y1,x2,y2}],
   "items": [ { … } ],             // list records (blobs, matches, codes, markers…)
+  "contours": [[{x,y}]],          // closed outlines for the overlay: a matching tool's pattern placed at each match (≤ 20)
   "cells": [ { "row", "col", "index", "value", "passed", "quad": [{x,y}×4] } ],   // quad: the measured cell window (after inset), px, for the overlay
   "region": [{x,y}]               // the region outline as actually used (after fixture), in pixels, for the overlay
 }
@@ -166,8 +167,8 @@ counts passing cells.
 | `findCorner` | rect = side A; `params.regionB` = rect side B | line params as above (shared) | `found, x, y, angle` (side A angle), `cornerAngle`; `lines[2]`; pose = corner + angle A |
 | `findCircle` | circle (annulus `params.innerRatio` 0.5) | `probes` (16), `direction`: `inward` \| `outward`, `polarity`, `contrast`, `smoothing`, `ignore`, `pick` | `found, x, y, radius, fitError, pointsUsed`; `points`; pose = centre, angle 0 |
 | `blob` | any | `polarity`: `dark` \| `light`, `threshold`: `otsu` \| `fixed`, `level`, `minArea`, `maxArea`, `minCircularity`, `sort`: `area` \| `x` \| `y`, `maxCount` (100) | `count, found, x, y`; `items [{x,y,area,angle,circularity}]`; pose = first item |
-| `contourMatch` | any | `template` `{points:[{x,y}] (0–1 of its own bbox), width, height}` (taught), `minScore` (0.7), `maxCount` (10), `minArea` (50), `polarity` / `threshold` / `level` as blob | `count, score, x, y, angle`; `items [{x,y,angle,score}]`; pose = best |
-| `patternMatch` | any (search area) | `template` `{png (base64 gray PNG), originX, originY, width, height}` (taught), `minScore` (0.7), `angleRange` (0), `angleStep` (5), `maxCount` (1) | `count, score, x, y, angle`; `items [{x,y,angle,score}]`; pose = best |
+| `contourMatch` | any | `template` `{points:[{x,y}] (0–1 of its own bbox), width, height}` (taught), `minScore` (0.7), `maxCount` (10), `minArea` (50), `polarity` / `threshold` / `level` as blob | `count, score, x, y, angle`; `items [{x,y,angle,score}]`; `contours` = each matched outline; pose = best |
+| `patternMatch` | any (search area) | `template` `{png (base64 gray PNG), originX, originY, width, height, angle, contours, region}` (taught), `minScore` (0.7), `angleRange` (0 when absent; the app's new tools use 180 = any angle), `angleStep` (5, the coarse step), `maxCount` (1) | `count, score, x, y, angle` (relative to the taught angle); `items [{x,y,angle,score}]`; `contours` = the pattern's outlines at each match; pose = best |
 | `aruco` | any | `dictionaryId` (OpenCV predefined id, 1 = 4x4_100; −1 = all 17 classic dictionaries), `markerId` (-1 = any), `minArea`, `maxArea` | `count, id, x, y, angle`; `items [{id,x,y,angle}]`; `lines` = marker outlines; pose = first |
 | `makeFixture` | none | `mode`: `pointAngle` \| `twoPoints` \| `lineIntersection` \| `fourLines` \| `fourPoints`; `sources`: [toolId…] | `found, x, y, angle`; pose (with `quad` for the four-* modes) |
 
@@ -178,11 +179,27 @@ region drawn clockwise round an object the probes run from outside in. findLine 
 over a band half its spacing wide; `ignore` drops that many worst-fitting points after a first fit.
 findCircle probes are radial (inward = from the circle towards the inner radius).
 
-**Teaching** `contourMatch` / `patternMatch`: `TeachVisionTool {programId, toolId, image?}` runs the
-earlier tools (so a fixtured region is where its fixture puts it), then cuts the template from the
+**Teaching** `contourMatch` / `patternMatch`: `TeachVisionTool {programId, toolId, image?, region?, preview?}`
+runs the earlier tools (so a fixtured region is where its fixture puts it), then cuts the template from the
 tool's region on its input layer (patternMatch: the region unrolled upright as a gray patch, origin at
 its centre; contourMatch: the largest blob in the region, thresholded as the tool's params say) and
-saves it in `params.template`. The image defaults to the program's newest camera frame.
+saves it in `params.template`. The image defaults to the program's newest camera frame. `region`
+(normalized, in the image as it is — no fixture) teaches from that area instead of the tool's region:
+the app's teach flow draws a **rotated rectangle** round the part on a grabbed frame. `preview: true`
+changes and saves nothing; the reply carries `template` (JSON) and `preview` (base64 PNG of the patch,
+enlarged, with its outlines, origin and 0° direction drawn) for the app to show and then store itself.
+
+**patternMatch rotation.** The patch is cut deskewed to the area's own axes, and the area's angle
+(its top edge TL → TR, i.e. a rect's `rotation`) is stored as `template.angle`: reported angles are
+**relative to it** (0 = the part as taught; (−180, 180]). The search turns the image about the taught
+angle by `angleStep` up to ±`angleRange` (180 = the full turn, evenly spaced). A turned search runs
+coarse first on a shrunk copy (halved while the template's short side stays ≥ 24 px, at most to ¼,
+with a looser score), then refines each distinct candidate at full size: position, then angle by
+halving steps from `angleStep`/2 down to ¼°, then a parabola — so angles come out to about 0.1°, not to
+the step. `angleRange` 0 searches only at the taught angle (as before). `template.contours` are the
+patch's outlines (Otsu, the smaller side taken as the part, simplified to ≤ ~400 points, in patch
+pixels); each match places them by its pose into the result's `contours`. Templates taught before this
+have no `angle` (0) and no `contours`.
 
 `makeFixture` modes: `pointAngle` (origin = pose of source 0, angle = pose angle of source 1),
 `twoPoints` (origin = source 0, angle = direction to source 1), `lineIntersection` (two line tools →

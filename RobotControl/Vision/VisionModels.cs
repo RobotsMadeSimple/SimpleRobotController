@@ -216,6 +216,11 @@ namespace Controller.RobotControl.Vision
         /// <summary>List records (blobs, matches, codes, markers…): numbers and strings by key.</summary>
         [JsonPropertyName("items")]   public List<Dictionary<string, object>> Items { get; set; } = new();
         [JsonPropertyName("cells")]   public List<CellResult> Cells { get; set; } = new();
+        /// <summary>
+        /// Closed outlines to draw, pixels — e.g. a matching tool's taught pattern placed (moved and
+        /// turned) where each match was found. For the overlay only.
+        /// </summary>
+        [JsonPropertyName("contours")] public List<List<PxPoint>> Contours { get; set; } = new();
         /// <summary>The region outline as actually used (after the fixture), pixels.</summary>
         [JsonPropertyName("region")]  public List<PxPoint> Region { get; set; } = new();
 
