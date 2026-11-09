@@ -261,7 +261,10 @@ internal sealed class PluginTestEnv : IDisposable
             ["steps"] = new object[] { new { id = "weigh", label = "Weigh", outputs = new object[] { new { key = "grams", type = "number" } } } },
             ["functions"] = new object[]
             {
-                new { name = "twice", minArgs = 1, maxArgs = 1, timeoutMs = 150 },
+                // "twice" answers: give it the maximum timeout so a loaded runner (thread-pool
+                // starvation while the call blocks) can't turn a success into pluginFunctionTimeout.
+                // "slow" never answers, so its short timeout always fires — that tests the timeout.
+                new { name = "twice", minArgs = 1, maxArgs = 1, timeoutMs = PluginManifest.MaxFunctionTimeoutMs },
                 new { name = "slow", minArgs = 0, maxArgs = 0, timeoutMs = 60 },
                 new { name = "boom", minArgs = 0, maxArgs = 0 },
             },

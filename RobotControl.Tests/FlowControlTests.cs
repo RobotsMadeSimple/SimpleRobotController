@@ -197,8 +197,8 @@ public sealed class FlowControlTests : IDisposable
     public void BlockingTogglePulseRevertsToTheStateItStartedFrom()
     {
         _k.Robot.stb.SetOutput(4, true);
-        _k.RunToEnd(Prog(Out(4, s => { s.OutputAction = "toggle"; s.PulseMs = 1; s.PulseBlocking = true; }),
-                         Set("x", "$stb.out4")), maxTicks: 5000);
+        _k.RunToEndTimed(Prog(Out(4, s => { s.OutputAction = "toggle"; s.PulseMs = 1; s.PulseBlocking = true; }),
+                              Set("x", "$stb.out4")));
         Assert.Equal(1, _k.Value("$x")); // toggled off for the pulse, then back on
         _k.Robot.stb.SetOutput(4, false);
     }
@@ -218,7 +218,7 @@ public sealed class FlowControlTests : IDisposable
     [Fact]
     public void WaitTimeoutContinuesByDefault()
     {
-        _k.RunToEnd(Prog(WaitUntil("0", 5, null, "y"), Set("x", "1")), maxTicks: 100_000);
+        _k.RunToEndTimed(Prog(WaitUntil("0", 5, null, "y"), Set("x", "1")));
         Assert.Equal("Complete", _k.Status());
         Assert.Equal(1, _k.Value("$y"));
         Assert.Equal(1, _k.Value("$x"));
@@ -227,7 +227,7 @@ public sealed class FlowControlTests : IDisposable
     [Fact]
     public void WaitTimeoutCanFailTheProgram()
     {
-        _k.RunToEnd(Prog(WaitUntil("$x == 7", 5, "error", "y"), Set("x", "1")), maxTicks: 100_000);
+        _k.RunToEndTimed(Prog(WaitUntil("$x == 7", 5, "error", "y"), Set("x", "1")));
         Assert.Equal("Error", _k.Status());
         Assert.Contains("timed out after 5 ms waiting for $x == 7", _k.Error());
         Assert.Equal(1, _k.Value("$y"));  // the flag is still written

@@ -175,22 +175,24 @@ public class PluginSessionTests : IDisposable
         var d = new CommandDispatcher();
         new PluginCommands(_env.Manager).Register(d);
 
-        JsonElement Send(object parameters)
+        // Awaited, not .GetResult(): blocking the test thread too would cost one more pool thread
+        // while the call itself already blocks one waiting for the plugin's reply.
+        async Task<JsonElement> Send(object parameters)
         {
             Assert.True(d.TryGet("CallPluginFunction", out var h));
             var msg = new CommandMessage { Type = "Command", Id = "t", Command = "CallPluginFunction", Params = JsonSerializer.SerializeToElement(parameters) };
-            var r = h(msg).GetAwaiter().GetResult();
+            var r = await h(msg);
             return JsonSerializer.SerializeToElement(r ?? new { });
         }
         static string? Err(JsonElement r) => r.TryGetProperty("ok", out var ok) && !ok.GetBoolean() ? r.GetProperty("error").GetString() : null;
 
-        var ok = Send(new { id = "demo", name = "twice", args = new[] { 4.0 } });
+        var ok = await Send(new { id = "demo", name = "twice", args = new[] { 4.0 } });
         Assert.Null(Err(ok));
         Assert.Equal(8, ok.GetProperty("value").GetDouble());
 
-        Assert.Equal("badParams", Err(Send(new { id = "demo", name = "twice", args = Array.Empty<double>() })));   // twice needs 1 arg
-        Assert.Equal("unknownPluginFunction", Err(Send(new { id = "demo", name = "nope" })));
-        Assert.Equal("unknownPlugin", Err(Send(new { id = "ghost", name = "twice", args = new[] { 1.0 } })));
+        Assert.Equal("badParams", Err(await Send(new { id = "demo", name = "twice", args = Array.Empty<double>() })));   // twice needs 1 arg
+        Assert.Equal("unknownPluginFunction", Err(await Send(new { id = "demo", name = "nope" })));
+        Assert.Equal("unknownPlugin", Err(await Send(new { id = "ghost", name = "twice", args = new[] { 1.0 } })));
     }
 
     [Fact]
@@ -257,7 +259,7 @@ public class PluginSessionTests : IDisposable
         var twice = fns.Single(f => f.FullName == "demo.twice");
         Assert.True(twice.Running);
         Assert.Equal(1, twice.MinArgs);
-        Assert.Equal(150, twice.TimeoutMs);
+        Assert.Equal(PluginManifest.MaxFunctionTimeoutMs, twice.TimeoutMs);
         Assert.Equal("demo.twice(…)", twice.Signature);
         Assert.False(fns.Single(f => f.FullName == "other.twice").Running);
         Assert.Equal(250, fns.Single(f => f.FullName == "demo.boom").TimeoutMs);
