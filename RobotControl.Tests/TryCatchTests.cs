@@ -75,8 +75,7 @@ public sealed class TryCatchTests : IDisposable
     public void RetryWaitsTheDelay()
     {
         var sw = Stopwatch.StartNew();
-        _k.RunToEnd(P(Try([Set("n", "$n + 1"), Raise("x")], null, s => { s.TryRetries = 1; s.TryRetryDelayMs = 40; })),
-                    maxTicks: 1_000_000);
+        _k.RunToEndTimed(P(Try([Set("n", "$n + 1"), Raise("x")], null, s => { s.TryRetries = 1; s.TryRetryDelayMs = 40; })));
         Assert.Equal(2, _k.Value("$n"));
         Assert.True(sw.ElapsedMilliseconds >= 35, $"retry did not wait ({sw.ElapsedMilliseconds} ms)");
     }
@@ -155,7 +154,7 @@ public sealed class TryCatchTests : IDisposable
         {
             s.WaitMode = "condition"; s.WaitCondition = Cond("0"); s.WaitTimeoutMs = 2; s.WaitTimeoutAction = "error";
         });
-        _k.RunToEnd(P(Try([wait, Set("x", "1")], [Set("y", "1")], s => s.ErrorCodeVariableName = "code")), maxTicks: 1_000_000);
+        _k.RunToEndTimed(P(Try([wait, Set("x", "1")], [Set("y", "1")], s => s.ErrorCodeVariableName = "code")));
         Assert.Equal("Complete", _k.Status());
         Assert.Equal(0, _k.Value("$x"));
         Assert.Equal(1, _k.Value("$y"));

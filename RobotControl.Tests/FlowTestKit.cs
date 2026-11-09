@@ -129,6 +129,24 @@ internal sealed class FlowTestKit : IDisposable
         Assert.False(Exec.IsRunning, "program did not finish");
     }
 
+    /// <summary>
+    /// <see cref="RunToEnd"/> for programs that wait on the wall clock (output pulses, Wait timeouts,
+    /// retry delays): ticks until the program stops, bounded by real time instead of a tick count.
+    /// A tick budget is not a time budget — a few thousand ticks can all land inside one millisecond
+    /// on a fast runner (or inside one step of a coarse system clock), leaving the timed step pending.
+    /// </summary>
+    public void RunToEndTimed(BuiltProgram p, int timeoutMs = 5000, ProgramExecutor.DebugOptions? debug = null)
+    {
+        Exec.Start(p, debug: debug);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (Exec.IsRunning && sw.ElapsedMilliseconds < timeoutMs)
+        {
+            Exec.Update();
+            Thread.Yield();
+        }
+        Assert.False(Exec.IsRunning, $"program did not finish within {timeoutMs} ms");
+    }
+
     public double Value(string expr) => Exec.EvaluateLive(expr);
 
     public string? Text(string name) =>

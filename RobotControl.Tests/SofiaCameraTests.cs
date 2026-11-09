@@ -530,7 +530,9 @@ public sealed class SofiaCameraTests
         if (aus == null) return;   // no H.264 encoder here (see EncodedH264): nothing to decode
 
         using var cam = new FakeDvripCamera { Loop = true, FrameDelayMs = 66, Script = s => { foreach (var au in aus) s.Frame(au.Key ? FakeDvripCamera.IFrame : FakeDvripCamera.PFrame, au.Data); } };
-        var r = RunTest(SofiaParams(cam.Port, timeoutMs: 8000));
+        // Same 20 s budget as the CameraDevice test below: a cold decoder start on a busy CI runner can
+        // take most of 8 s, and the test returns "ok" with no picture when the budget runs out first.
+        var r = RunTest(SofiaParams(cam.Port, timeoutMs: 20000));
         _out.WriteLine(r.ToString());
         Assert.True(r.GetProperty("ok").GetBoolean(), r.ToString());
         Assert.Equal("h264", r.GetProperty("detectedCodec").GetString());
