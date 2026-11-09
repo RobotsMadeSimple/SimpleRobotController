@@ -32,12 +32,13 @@ public class ProgramValidatorTests
 
     private static ValidationContext Ctx(params BuiltProgram[] others) => new()
     {
-        PointExists         = Points.Contains,
-        ToolExists          = n => n == "Gripper",
-        LocalExists         = n => n == "Fixture",
+        PointExists         = (id, n) => n != null && Points.Contains(n),
+        ToolExists          = (id, n) => n == "Gripper",
+        LocalExists         = (id, n) => n == "Fixture",
         GridExists          = id => id == "grid1",
         StackExists         = id => id == "stack1",
         VisionProgramExists = id => id == "vp1",
+        VisionToolIds       = id => id == "vp1" ? ["a"] : null,
         FindProgram         = (id, name) => others.FirstOrDefault(p =>
             (id != null && p.Id == id) || (id == null && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))),
     };
@@ -118,7 +119,7 @@ public class ProgramValidatorTests
             {
                 ["offsetX"] = "$typo",
                 ["offsetY"] = "$robot.nope",
-                ["offsetZ"] = "$stb.in1 + $relay.2 + $nano.Board.pin3 + $time_ms + $program.runCount + $time.hour",
+                ["offsetZ"] = "$stb.in1 + $relay.2 + $io.Board.pin3 + $time_ms + $program.runCount + $time.hour",
             };
         })]);
         var probs = Validate(p);
@@ -135,6 +136,15 @@ public class ProgramValidatorTests
         Assert.Equal(2, probs.Count);                               // $a[0] (not a list) and $pts.x
         Assert.Contains(probs, x => x.Message.Contains("'$a' is not a list"));
         Assert.Contains(probs, x => x.Message.Contains("$pts.x"));
+    }
+
+    [Fact]
+    public void ListFunctionsMayNameAFieldOfTheList()
+    {
+        // max($pts.x) / sum($pts.y) are list projections, not the bare "$pts.x" the test above rejects.
+        var p = Prog([Step(StepType.SetVariable, s => { s.VariableName = "a"; s.VariableExpr = "max($pts.x) + sum($pts.y) + min($a)"; })],
+                     Num("a"), List("pts", ListElementType.Point));
+        Assert.DoesNotContain(Validate(p), x => x.Code == ValidationCodes.UnknownVariable);
     }
 
     [Fact]
@@ -270,7 +280,7 @@ public class ProgramValidatorTests
     {
         var p = Prog([
             Step(StepType.Loop, s => { s.LoopMode = "forEach"; s.ForEachVariableName = "vals"; s.ForEachValueVariableName = "robot.z"; s.LoopSteps = [Step(StepType.PauseProgram)]; }),
-            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.VisionOutputs = [new VisionStepOutput { InspectionId = "a", CountVar = "time.now" }]; }),
+            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.ToolOutputs = [new VisionToolOutput { ToolId = "a", Value = "count", Variable = "time.now" }]; }),
         ], List("vals", ListElementType.Number));
         Assert.Equal(2, Validate(p).Count(x => x.Code == ValidationCodes.ReadOnlyProperty));
     }
@@ -306,10 +316,29 @@ public class ProgramValidatorTests
     public void ImplicitOutputsAreKnown()
     {
         var p = Prog([
-            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.VisionOutputs = [new VisionStepOutput { InspectionId = "a", CountVar = "blobCount", PointsVar = "blobs" }]; }),
-            Step(StepType.MoveL, s => { s.PointNameExpr = "$blobs[0]"; s.Expressions = new() { ["offsetZ"] = "$blobCount" }; }),
+            Step(StepType.RunVision, s => { s.VisionProgramId = "vp1"; s.PassVariable = "ok"; s.ToolOutputs = [new VisionToolOutput { ToolId = "a", Value = "count", Variable = "blobCount" }, new VisionToolOutput { ToolId = "a", Value = "points", Variable = "blobs" }, new VisionToolOutput { ToolId = "a", Value = "cells", Variable = "cells" }]; }),
+            Step(StepType.MoveL, s => { s.PointNameExpr = "$blobs[0]"; s.Expressions = new() { ["offsetZ"] = "$blobCount + $cells[0].value + $ok" }; }),
         ]);
         Clean(Validate(p));
+    }
+
+    [Fact]
+    public void VisionToolOutputsNeedAKnownToolAValueAndAVariable()
+    {
+        var p = Prog([
+            Step(StepType.RunVision, s =>
+            {
+                s.VisionProgramId = "vp1";
+                s.ToolOutputs = [new VisionToolOutput { ToolId = "zz", Value = "count", Variable = "n" },
+                                 new VisionToolOutput { ToolId = "a", Value = "", Variable = "m" },
+                                 new VisionToolOutput { ToolId = "a", Value = "count", Variable = "" }];
+            }),
+        ]);
+        var probs = Validate(p);
+        var unknown = Single(probs, ValidationCodes.UnknownVisionTool);
+        Assert.Equal(ValidationSeverity.Warning, unknown.Severity);
+        Assert.Equal("toolOutputs[0].toolId", unknown.Field);
+        Assert.Equal(2, probs.Count(x => x.Code == ValidationCodes.MissingField));
     }
 
     // ── Repositories ───────────────────────────────────────────────────────
@@ -338,6 +367,41 @@ public class ProgramValidatorTests
         Assert.Equal(2, probs.Count(x => x.Code == ValidationCodes.UnknownLocal));
         Single(probs, ValidationCodes.UnknownTool);
         Single(probs, ValidationCodes.UnknownVisionProgram);
+    }
+
+    [Fact]
+    public void AGridOrStackWithAMissingBasePointOrNoSpacingIsReported()
+    {
+        var ctx = new ValidationContext
+        {
+            PointExists = (id, n) => n != null && Points.Contains(n),
+            GridExists  = id => id is "taught" or "noBase" or "flat",
+            StackExists = id => id is "pile",
+            GridBase    = id => id switch
+            {
+                "taught" => ("Home", true),
+                "noBase" => ("Board origin", true),
+                "flat"   => ("Pick", false),
+                _        => null,
+            },
+            StackBase   = id => id == "pile" ? ("Gone", false) : null,
+        };
+        var p = Prog(
+        [
+            Step(StepType.MoveL, s => s.GridPoint = new GridPointRef { GridId = "taught" }),
+            Step(StepType.MoveL, s => s.GridPoint = new GridPointRef { GridId = "noBase" }),
+            Step(StepType.MoveL, s => s.GridPoint = new GridPointRef { GridId = "flat" }),
+            Step(StepType.MoveL, s => s.StackPoint = new StackPointRef { StackId = "pile" }),
+        ]);
+        var probs = Validate(p, ctx);
+        var missing = probs.Where(x => x.Code == ValidationCodes.UnknownPoint).ToList();
+        Assert.Equal(2, missing.Count);
+        Assert.Contains(missing, x => x.Message.Contains("'Board origin'") && x.Severity == ValidationSeverity.Error);
+        Assert.Contains(missing, x => x.Message.Contains("'Gone'"));
+        var flat = probs.Where(x => x.Code == ValidationCodes.UntaughtGrid).ToList();
+        Assert.Equal(2, flat.Count);
+        Assert.All(flat, x => Assert.Equal(ValidationSeverity.Warning, x.Severity));
+        Assert.DoesNotContain(probs, x => x.StepPath == "steps[0]");
     }
 
     [Fact]
@@ -474,16 +538,6 @@ public class ProgramValidatorTests
     }
 
     [Fact]
-    public void DisabledStepsAreAWarningAndNotCheckedFurther()
-    {
-        var p = Prog([Step(StepType.MoveL, s => { s.Enabled = false; s.PointName = "Nowhere"; })]);
-        var probs = Validate(p);
-        var prob = Single(probs, ValidationCodes.DisabledStep);
-        Assert.Equal(ValidationSeverity.Warning, prob.Severity);
-        None(probs, ValidationCodes.UnknownPoint);
-    }
-
-    [Fact]
     public void StepsAfterAGoToOrInfiniteLoopAreUnreachableUntilALabel()
     {
         var p = Prog(
@@ -499,6 +553,83 @@ public class ProgramValidatorTests
         var probs = Validate(p).Where(x => x.Code == ValidationCodes.UnreachableStep).ToList();
         Assert.Equal(["steps[2]", "steps[6]"], probs.Select(x => x.StepPath));
         Assert.All(probs, x => Assert.Equal(ValidationSeverity.Warning, x.Severity));
+    }
+
+    private static ProgramStep Forever(params ProgramStep[] body) =>
+        Step(StepType.Loop, s => { s.LoopCount = 0; s.LoopSteps = body.ToList(); });
+
+    private static ProgramStep Break() => Step(StepType.LoopControl, s => s.LoopControl = "break");
+
+    private static List<string> Unreachable(params ProgramStep[] steps) =>
+        Validate(Prog(steps.ToList())).Where(x => x.Code == ValidationCodes.UnreachableStep).Select(x => x.StepPath).ToList();
+
+    [Fact]
+    public void AForeverLoopWithItsOwnBreakCanExit()
+    {
+        // Directly in the body.
+        Assert.Empty(Unreachable(Forever(Step(StepType.PauseProgram), Break()), Step(StepType.PauseProgram)));
+        // Inside an If / Switch / Try within the body still breaks this loop.
+        Assert.Empty(Unreachable(Forever(Step(StepType.IfCondition, s => s.IfSteps = [Break()])), Step(StepType.PauseProgram)));
+        Assert.Empty(Unreachable(Forever(Step(StepType.IfCondition, s => s.ElseSteps = [Break()])), Step(StepType.PauseProgram)));
+        Assert.Empty(Unreachable(Forever(Step(StepType.Switch, s => s.SwitchDefault = [Break()])), Step(StepType.PauseProgram)));
+        Assert.Empty(Unreachable(Forever(Step(StepType.Try, s => s.TrySteps = [Step(StepType.IfCondition, i => i.IfSteps = [Break()])])),
+                                 Step(StepType.PauseProgram)));
+        // A Break with no action set is a Break.
+        Assert.Empty(Unreachable(Forever(Step(StepType.LoopControl)), Step(StepType.PauseProgram)));
+    }
+
+    [Fact]
+    public void ABreakInANestedLoopOnlyExitsTheInnerLoop()
+    {
+        // The inner Break ends the inner (counted) loop; the outer forever loop never ends.
+        Assert.Equal(["steps[1]"], Unreachable(
+            Forever(Step(StepType.Loop, s => { s.LoopCount = 3; s.LoopSteps = [Break()]; })),
+            Step(StepType.PauseProgram)));
+        // Same with a forever inner loop: its Break makes the step after IT reachable only.
+        Assert.Equal(["steps[1]"], Unreachable(
+            Forever(Forever(Break()), Step(StepType.PauseProgram)),
+            Step(StepType.PauseProgram)));
+        // Nested inside an If in the inner loop — still the inner loop's.
+        Assert.Equal(["steps[1]"], Unreachable(
+            Forever(Step(StepType.Loop, s => { s.LoopMode = "while"; s.LoopSteps = [Step(StepType.IfCondition, i => i.IfSteps = [Break()])]; })),
+            Step(StepType.PauseProgram)));
+        // An inner loop's Break plus one of the outer loop's own: the outer can exit.
+        Assert.Empty(Unreachable(
+            Forever(Forever(Break()), Step(StepType.IfCondition, s => s.IfSteps = [Break()])),
+            Step(StepType.PauseProgram)));
+    }
+
+    [Fact]
+    public void ContinueDisabledBreakGoToAndEndDoNotLetAForeverLoopExit()
+    {
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.LoopControl, s => s.LoopControl = "continue")), Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.LoopControl, s => { s.LoopControl = "break"; s.Enabled = false; })),
+                                               Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.IfCondition, s => { s.Enabled = false; s.IfSteps = [Break()]; })),
+                                               Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[2]"], Unreachable(Step(StepType.Label, s => s.LabelId = "top"),
+                                               Forever(Step(StepType.GoToLabel, s => s.LabelId = "top")),
+                                               Step(StepType.PauseProgram)));
+        Assert.Equal(["steps[1]"], Unreachable(Forever(Step(StepType.EndProgram)), Step(StepType.PauseProgram)));
+        // A GoTo to a Label after the loop: the Label itself ends the dead run.
+        Assert.Empty(Unreachable(Forever(Step(StepType.GoToLabel, s => s.LabelId = "out")),
+                                 Step(StepType.Label, s => s.LabelId = "out"), Step(StepType.PauseProgram)));
+    }
+
+    [Fact]
+    public void ARecordedAndExportedListIsUsedAndExportColumnsAreChecked()
+    {
+        var log = new ProgramVariable { Id = "log", Name = "log", ElementType = ListElementType.Record, Items = [] };
+        var p = Prog(
+        [
+            Step(StepType.StartRecording, s => { s.LoadCellDeviceId = "n"; s.LoadCellPin = 3; s.RecordVariableName = "log"; }),
+            Step(StepType.ExportData, s => { s.ExportPath = "exports/a.csv";
+                                             s.ExportColumns = [new() { Key = "log", ListVar = "log" }, new() { Key = "x", ListVar = "nope" }]; }),
+        ], log);
+        var probs = Validate(p);
+        Assert.DoesNotContain(probs, x => x.Code == ValidationCodes.UnusedVariable);
+        var bad = Single(probs, ValidationCodes.UnknownVariable);
+        Assert.Equal("exportColumns[1].listVar", bad.Field);
     }
 
     [Fact]

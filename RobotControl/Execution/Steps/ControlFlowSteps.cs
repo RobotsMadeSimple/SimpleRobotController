@@ -80,11 +80,13 @@ namespace Controller.RobotControl.Execution
                     return ctx.Finish(ProgramStatus.Error, "GoToLabel: no label ID set");
 
                 // Search current frame first, then walk up the stack toward the top-level frame.
-                // frames[0] = current (deepest), frames[last] = top-level.
+                // frames[0] = current (deepest), frames[last] = top-level. A routine's body is
+                // the last frame searched: a jump never leaves the routine it is in.
                 var frames = ctx.Frames.ToArray();
                 for (int fi = 0; fi < frames.Length; fi++)
                 {
                     var target = frames[fi];
+                    bool boundary = target.Kind == FrameKind.Routine;
                     for (int i = 0; i < target.Steps.Count; i++)
                     {
                         if (target.Steps[i].Type == StepType.Label &&
@@ -98,10 +100,12 @@ namespace Controller.RobotControl.Execution
                             return StepOutcome.Yield;
                         }
                     }
+                    if (boundary) break;
                 }
 
                 return ctx.Finish(ProgramStatus.Error,
-                    $"GoToLabel: label '{step.LabelName ?? step.LabelId}' not found");
+                    $"GoToLabel: label '{step.LabelName ?? step.LabelId}' not found" +
+                    (frames.Any(f => f.Kind == FrameKind.Routine) ? " in this routine" : ""));
             }
         }
 
@@ -145,17 +149,34 @@ namespace Controller.RobotControl.Execution
                 routine ??= repo.Get(step.RoutineName ?? "");
                 if (routine is null)
                     return ctx.Finish(ProgramStatus.Error, $"Routine not found: {step.RoutineName}");
-                if (routine.Steps.Count == 0) return StepOutcome.Advance;
+
+                // Arguments are evaluated in the caller's scope, before the routine's own
+                // variables are (re)initialised — "n = $n + 1" reads the caller's $n.
+                var args = new List<(ProgramVariable Param, object Value)>();
+                if (step.RoutineArgs is { Count: > 0 } given)
+                {
+                    foreach (var param in routine.Variables ?? [])
+                    {
+                        if (param?.ParamMode is not (ParamModes.In or ParamModes.InOut)) continue;
+                        var arg = given.FirstOrDefault(kv => string.Equals(kv.Key?.Trim(), param.Name, StringComparison.OrdinalIgnoreCase)).Value;
+                        if (string.IsNullOrWhiteSpace(arg)) continue; // no argument: the declared value
+                        args.Add((param, ctx.Vars.EvaluateParamArg(param, arg)));
+                    }
+                }
 
                 // Register the routine's own variables so they can be used inside the routine.
                 // Caller variables remain available (shared scope); a routine variable with
-                // the same name as a caller's takes the routine's declared default.
+                // the same name as a caller's takes the routine's declared default — and then a
+                // parameter takes its argument.
                 ctx.Vars.Initialize(routine);
+                foreach (var (param, value) in args) ctx.Vars.AssignParam(param, value);
 
-                // Push the routine's steps as a plain (non-loop) frame. The call step itself
-                // then completes on Advance (a plain frame leaves the loop depth unchanged, so
-                // it counts exactly as if reported first); routine steps count separately.
-                ctx.Frames.Push(StepListFrame.Plain(routine.Steps));
+                // Push the routine's steps as a Routine frame — the boundary GoToLabel, Break and
+                // Return respect, and where out-parameters are copied back when it is left. The
+                // call step itself then completes on Advance (the frame leaves the loop depth
+                // unchanged, so it counts exactly as if reported first); routine steps count
+                // separately. An empty routine is left on the next tick (outputs still copied).
+                ctx.Frames.Push(StepListFrame.RoutineBody(routine, step.RoutineOutputs));
                 return StepOutcome.Advance;
             }
         }

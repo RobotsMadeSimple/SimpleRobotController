@@ -39,7 +39,7 @@ internal sealed class ConfigCommands
             m2Direction               = c.M2Direction,
             m3Direction               = c.M3Direction,
             m4Direction               = c.M4Direction,
-            enableNanoCards           = c.EnableNanoCards,
+            enableIoDevices           = c.EnableIoDevices,
             enableRelayCard           = c.EnableRelayCard,
             enableAuxAxis             = c.EnableAuxAxis,
             enableCameras             = c.EnableCameras,
@@ -115,7 +115,7 @@ internal sealed class ConfigCommands
         if (p.M2Direction.HasValue)               { c.M2Direction             = p.M2Direction.Value;   motorDirectionsChanged = true; }
         if (p.M3Direction.HasValue)               { c.M3Direction             = p.M3Direction.Value;   motorDirectionsChanged = true; }
         if (p.M4Direction.HasValue)               { c.M4Direction             = p.M4Direction.Value;   motorDirectionsChanged = true; }
-        if (p.EnableNanoCards.HasValue)           c.EnableNanoCards           = p.EnableNanoCards.Value;
+        if (p.EnableIoDevices.HasValue)           c.EnableIoDevices           = p.EnableIoDevices.Value;
         if (p.EnableRelayCard.HasValue)           c.EnableRelayCard           = p.EnableRelayCard.Value;
         if (p.EnableAuxAxis.HasValue)             c.EnableAuxAxis             = p.EnableAuxAxis.Value;
         if (p.EnableCameras.HasValue)             c.EnableCameras             = p.EnableCameras.Value;
@@ -228,7 +228,7 @@ internal sealed class ConfigCommands
         // Preserve robot type + device/topology toggles; reset everything else to defaults.
         d.RobotType       = c.RobotType;
         d.EnableMdns      = c.EnableMdns;
-        d.EnableNanoCards = c.EnableNanoCards;
+        d.EnableIoDevices = c.EnableIoDevices;
         d.EnableRelayCard = c.EnableRelayCard;
         d.EnableAuxAxis   = c.EnableAuxAxis;
         d.EnableCameras   = c.EnableCameras;

@@ -25,8 +25,71 @@ namespace Controller.RobotControl.Execution
             _vars           = vars;
         }
 
+        /// <summary>The program status this reporter publishes to (the Prompt step posts its
+        /// pending prompt here).</summary>
+        internal ProgramCycleManager Programs => _programManager;
+
         /// <summary>Name of the program being run; set by the executor on Start.</summary>
         public string ProgramName { get; set; } = "";
+
+        /// <summary>True for a background executor (carried by the plugin events).</summary>
+        public bool IsBackground { get; init; }
+
+        /// <summary>The plugin manager the lifecycle/step events go to and plugin step labels come
+        /// from (docs/plugins.md §4.4); null or returning null: no events.</summary>
+        public Func<global::Controller.RobotControl.Plugins.PluginManager?>? Plugins { get; init; }
+
+        // ── Plugin events ─────────────────────────────────────────────────────
+
+        /// <summary>The manager when some connected plugin subscribes to <paramref name="name"/>, else null —
+        /// the zero-cost gate: no payload is built unless someone listens.</summary>
+        private global::Controller.RobotControl.Plugins.PluginManager? Subscriber(string name)
+        {
+            var pm = Plugins?.Invoke();
+            return pm != null && pm.HasSubscribers(name) ? pm : null;
+        }
+
+        private void PublishProgram(string name, string? error = null)
+        {
+            if (Subscriber(name) is not { } pm) return;
+            var payload = new Dictionary<string, object?>
+            {
+                ["programName"]  = ProgramName,
+                ["isBackground"] = IsBackground,
+                ["runCount"]     = RunCount,
+            };
+            if (error != null) payload["error"] = error;
+            pm.PublishEvent(name, payload);
+        }
+
+        private void PublishStep(string name, ProgramStep step, string description)
+        {
+            if (Subscriber(name) is not { } pm) return;
+            var payload = new Dictionary<string, object?>
+            {
+                ["programName"] = ProgramName,
+                ["stepId"]      = step.Id,
+                ["stepType"]    = step.Type.ToString(),
+                ["stepIndex"]   = GlobalStepIndex,
+                ["description"] = description,
+            };
+            if (!string.IsNullOrEmpty(step.Name)) payload["stepName"] = step.Name;
+            pm.PublishEvent(name, payload);
+        }
+
+        /// <summary><see cref="StepDescription(ProgramStep)"/>, with a Plugin step's plugin name and
+        /// step label looked up in the manager.</summary>
+        public string Describe(ProgramStep step) =>
+            step.Type == StepType.Plugin
+                ? StepDescription(step, PluginSteps.Label(step, Plugins?.Invoke()))
+                : StepDescription(step);
+
+        /// <summary>A plugin step's <c>step.progress</c>: replaces the monitor's current-step description.</summary>
+        public void StepProgress(string description)
+        {
+            CurrentStepDescription = description;
+            Announce(description);
+        }
 
         /// <summary>Completed top-level steps so far.</summary>
         public int GlobalStepIndex { get; private set; }
@@ -53,6 +116,8 @@ namespace Controller.RobotControl.Execution
 
         public void Reset()
         {
+            // _failStepId / _failCode survive: Finish resets the run state before it reports
+            // the terminal status that reads them (they are cleared there and on Starting).
             GlobalStepIndex        = 0;
             CurrentStepDescription = "";
             StepCount              = 0;
@@ -79,14 +144,16 @@ namespace Controller.RobotControl.Execution
             var ev = _vars.Eval;
             double? Off(string key, double? raw) => isMove ? ev.OptionalField(step, key, raw) : null;
 
-            var desc = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step);
+            var desc = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : Describe(step);
             CurrentStepDescription = desc;
+            PublishStep(global::Controller.RobotControl.Plugins.PluginEvents.StepStarted, step, desc);
 
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName          = ProgramName,
                 ProgramStatus        = ProgramStatus.Running,
                 CurrentStepNumber    = GlobalStepIndex,
+                CurrentStepId        = step.Id,
                 StepDescription      = desc,
                 WarningDescription   = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
                 ErrorDescription     = string.IsNullOrEmpty(step.StatusError)   ? null : step.StatusError,
@@ -120,29 +187,49 @@ namespace Controller.RobotControl.Execution
 
             if (Diag.Enabled) Diag.StepDone(step.Type);
             if (_frames.LoopDepth == 0) GlobalStepIndex++;
+            var desc = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : Describe(step);
+            PublishCompleted(step, desc);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName        = ProgramName,
                 ProgramStatus      = ProgramStatus.Running,
                 CurrentStepNumber  = GlobalStepIndex,
-                StepDescription    = !string.IsNullOrEmpty(step.StatusMessage) ? step.StatusMessage : StepDescription(step),
+                CurrentStepId      = step.Id,
+                StepDescription    = desc,
                 WarningDescription = string.IsNullOrEmpty(step.StatusWarning) ? null : step.StatusWarning,
                 ErrorDescription   = string.IsNullOrEmpty(step.StatusError)   ? null : step.StatusError,
                 ShouldLog          = true,
             });
         }
 
+        // A skipped step is completed right after (it still counts); its event is step.skipped only.
+        private ProgramStep? _skipped;
+
+        private void PublishCompleted(ProgramStep step, string description)
+        {
+            if (ReferenceEquals(_skipped, step)) { _skipped = null; return; }
+            PublishStep(global::Controller.RobotControl.Plugins.PluginEvents.StepCompleted, step, description);
+        }
+
+        private void PublishSkipped(ProgramStep step)
+        {
+            _skipped = step;
+            PublishStep(global::Controller.RobotControl.Plugins.PluginEvents.StepSkipped, step, Describe(step));
+        }
+
         private void StatusUpdateCompleted(ProgramStep step)
         {
             if (_frames.LoopDepth == 0) GlobalStepIndex++;
+            var desc = !string.IsNullOrEmpty(step.StatusMessage)
+                ? _vars.Interpolate(step.StatusMessage)
+                : StepDescription(step);
+            PublishCompleted(step, desc);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName        = ProgramName,
                 ProgramStatus      = ProgramStatus.Running,
                 CurrentStepNumber  = GlobalStepIndex,
-                StepDescription    = !string.IsNullOrEmpty(step.StatusMessage)
-                    ? _vars.Interpolate(step.StatusMessage)
-                    : StepDescription(step),
+                StepDescription    = desc,
                 WarningDescription = !string.IsNullOrEmpty(step.StatusWarning)
                     ? _vars.Interpolate(step.StatusWarning)
                     : null,
@@ -153,22 +240,42 @@ namespace Controller.RobotControl.Execution
             });
         }
 
-        /// <summary>A step a background program skips (motion/tool/homing) — logged, then completed.</summary>
-        public void SkippedDisabled(ProgramStep step) =>
+        /// <summary>A step skipped because it is disabled (<c>enabled: false</c>) — logged, then
+        /// completed by the caller (so it still counts as a step).</summary>
+        public void SkippedDisabled(ProgramStep step)
+        {
+            PublishSkipped(step);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName     = ProgramName,
                 StepDescription = $"[Skipped — disabled] {StepDescription(step)}",
                 ShouldLog       = true,
             });
+        }
 
-        public void SkippedInBackground(ProgramStep step) =>
+        /// <summary>A Try caught a failure (package B): logged with what happens next
+        /// (<paramref name="outcome"/>: "retry 1 of 3", "running the catch steps", "ignored").</summary>
+        public void ErrorCaught(ProgramStep tryStep, string code, string message, string outcome) =>
+            _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
+            {
+                ProgramName       = ProgramName,
+                ProgramStatus     = ProgramStatus.Running,
+                CurrentStepNumber = GlobalStepIndex,
+                CurrentStepId     = tryStep.Id,
+                StepDescription   = $"[Caught {code}] {message} — {outcome}",
+                ShouldLog         = true,
+            });
+
+        public void SkippedInBackground(ProgramStep step)
+        {
+            PublishSkipped(step);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName     = ProgramName,
                 StepDescription = $"[Skipped — background] {step.Type}",
                 ShouldLog       = true,
             });
+        }
 
         /// <summary>A Running update with a free-form description and the current step number.</summary>
         public void Announce(string description) =>
@@ -193,6 +300,8 @@ namespace Controller.RobotControl.Execution
 
             // Clear any terminal state so the incoming Running update is not blocked by the guard
             _programManager.ResetToReady(program.Name, totalSteps);
+            _failStepId = null;
+            _failCode   = null;
             _programManager.MarkStarted(program.Name);
             RunCount   = RunCounts.AddOrUpdate(program.Name, 1, (_, n) => n + 1);
             StepCount  = totalSteps;
@@ -205,6 +314,8 @@ namespace Controller.RobotControl.Execution
                 MaxStepCount      = totalSteps,
                 StepDescription   = "Starting…",
             });
+            ProgramName = program.Name;
+            PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramStarted);
         }
 
         public void Resuming()
@@ -213,10 +324,12 @@ namespace Controller.RobotControl.Execution
             // resume transition goes through its dedicated path.
             _programManager.ResumeToRunning(ProgramName);
             Announce("Resuming…");
+            PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramResumed);
         }
 
         /// <summary>A user Stop that pauses the main program.</summary>
-        public void StoppedByUser() =>
+        public void StoppedByUser()
+        {
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName       = ProgramName,
@@ -224,9 +337,14 @@ namespace Controller.RobotControl.Execution
                 CurrentStepNumber = GlobalStepIndex,
                 StepDescription   = "Stopped — Continue resumes from the current step",
             });
+            _programManager.SetPauseState(ProgramName, PauseReasons.User, null);
+            PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramStopped);
+        }
 
         /// <summary>A PauseProgram step: Stopped, with the move display cleared.</summary>
-        public void Paused() =>
+        public void Paused()
+        {
+            PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramPaused);
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName         = ProgramName,
@@ -239,9 +357,40 @@ namespace Controller.RobotControl.Execution
                 CurrentToolOffsetX  = null, CurrentToolOffsetY  = null, CurrentToolOffsetZ  = null,
                 CurrentToolOffsetRX = null, CurrentToolOffsetRY = null, CurrentToolOffsetRZ = null,
             });
+            _programManager.SetPauseState(ProgramName, PauseReasons.PauseStep, null);
+        }
+
+        // What the next Error ending is about (package B): the failing step and its error code.
+        private string? _failStepId;
+        private string? _failCode;
+
+        /// <summary>
+        /// Records the step that is failing and its error code, for the Error status that
+        /// follows: the monitor marks that step (not the last one that reported progress) and
+        /// shows the code. Consumed by the next <see cref="Finished"/>.
+        /// </summary>
+        public void Failing(ProgramStep? step, string? code)
+        {
+            _failStepId = step?.Id ?? _failStepId;
+            _failCode   = code ?? _failCode;
+        }
 
         /// <summary>The run's terminal status, with the move display cleared.</summary>
-        public void Finished(ProgramStatus status, string description, int finalStepIndex) =>
+        public void Finished(ProgramStatus status, string description, int finalStepIndex)
+        {
+            string? failStepId = status == ProgramStatus.Error ? _failStepId : null;
+            string? failCode   = status == ProgramStatus.Error ? _failCode   : null;
+            _failStepId = null;
+            _failCode   = null;
+            switch (status)
+            {
+                case ProgramStatus.Error:
+                    PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramError, description); break;
+                case ProgramStatus.Stopped:
+                    PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramStopped); break;
+                default:
+                    PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramFinished); break;
+            }
             _programManager.ApplyStatusUpdate(new ProgramCycleUpdate
             {
                 ProgramName          = ProgramName,
@@ -249,12 +398,15 @@ namespace Controller.RobotControl.Execution
                 CurrentStepNumber    = finalStepIndex,
                 StepDescription      = description,
                 ErrorDescription     = status == ProgramStatus.Error ? description : null,
+                ErrorCode            = failCode,
+                CurrentStepId        = failStepId,
                 CurrentPointName  = "",
                 CurrentOffsetX   = null, CurrentOffsetY  = null, CurrentOffsetZ  = null,
                 CurrentOffsetRX  = null, CurrentOffsetRY = null, CurrentOffsetRZ = null,
                 CurrentToolOffsetX  = null, CurrentToolOffsetY  = null, CurrentToolOffsetZ  = null,
                 CurrentToolOffsetRX = null, CurrentToolOffsetRY = null, CurrentToolOffsetRZ = null,
             });
+        }
 
         // ── Descriptions ──────────────────────────────────────────────────────
 
@@ -270,10 +422,15 @@ namespace Controller.RobotControl.Execution
             : !string.IsNullOrEmpty(step.PointName)    ? step.PointName
             : "current position";
 
-        public static string StepDescription(ProgramStep step)
+        public static string StepDescription(ProgramStep step) => StepDescription(step, null);
+
+        /// <param name="pluginLabel">For a Plugin step, <c>"&lt;plugin name&gt;: &lt;step label&gt;"</c>
+        /// (see <see cref="Describe"/>); null falls back to the ids.</param>
+        public static string StepDescription(ProgramStep step, string? pluginLabel)
         {
             var type = step.Type switch
             {
+                StepType.Plugin       => pluginLabel ?? $"{step.PluginId ?? "?"}: {step.PluginStepId ?? "?"}",
                 StepType.MoveL        => $"MoveL → {MoveTargetLabel(step)}",
                 StepType.MoveJ        => $"MoveJ → {MoveTargetLabel(step)}",
                 StepType.JumpL        => $"JumpL → {MoveTargetLabel(step)}",
@@ -290,7 +447,7 @@ namespace Controller.RobotControl.Execution
                 StepType.Label        => $"Label: {step.LabelName ?? step.LabelId}",
                 StepType.GoToLabel    => $"Go To: {step.LabelName ?? step.LabelId}",
                 StepType.IfCondition  => step.Condition != null
-                    ? $"If [{step.Condition.Combinator} · {step.Condition.Items.Count} condition(s)]"
+                    ? $"If [{(step.Condition.Items.Exists(i => i.Join != null) ? "AND/OR" : step.Condition.Combinator)} · {step.Condition.Items.Count} condition(s)]"
                     : "If Condition",
                 StepType.SetTool      => $"Set Tool → {(string.IsNullOrEmpty(step.ToolName) ? "None" : step.ToolName)}",
                 StepType.SetLocal     => $"Set Local → {(string.IsNullOrEmpty(step.LocalName) ? "None" : step.LocalName)}",
@@ -308,9 +465,33 @@ namespace Controller.RobotControl.Execution
                 StepType.WaitForBackground  => $"Wait for Background → {step.BackgroundProgramName ?? "?"}",
                 StepType.StopwatchControl   => $"Stopwatch {step.StopwatchAction ?? "?"} → ${step.StopwatchVariableName ?? "?"}",
                 StepType.SaveImage          => $"Save Image → {step.SaveImagePath ?? "?"}",
+                // Program editor v2 (docs/program-language.md §4)
+                StepType.Note               => step.NoteStyle == "section"
+                    ? $"## {FirstLine(step.Comment) ?? "Section"}"
+                    : $"Note: {FirstLine(step.Comment) ?? ""}",
+                StepType.LoopControl        => step.LoopControl == "continue" ? "Next iteration" : "Break loop",
+                StepType.Return             => "Return",
+                StepType.EndProgram         => string.IsNullOrEmpty(step.StatusMessage) ? "End Program" : $"End Program: {step.StatusMessage}",
+                StepType.RaiseError         => $"Raise Error {step.ErrorCode ?? "userError"}: {step.ErrorMessage ?? ""}",
+                StepType.Switch             => $"Switch {step.SwitchExpr ?? "?"} · {step.SwitchCases?.Count ?? 0} case(s)",
+                StepType.Try                => (step.TryRetries ?? 0) > 0 ? $"Try (retry ×{step.TryRetries})" : "Try",
+                StepType.SavePosition       => step.SavePositionTo == "point"
+                    ? $"Save Position → point {step.PointName ?? step.PointId ?? "?"}"
+                    : $"Save Position → ${step.VariableName ?? "?"}",
+                StepType.SetSpeedFactor     => $"Set Speed Factor → {step.SpeedFactor ?? 100}%",
+                StepType.ListOp             => $"${step.VariableName ?? "?"}.{step.ListAction ?? "?"}",
+                StepType.Prompt             => $"Prompt: {step.PromptMessage ?? ""}",
+                StepType.MoveC              => $"MoveC → {MoveTargetLabel(step)} via {step.ViaPointName ?? step.ViaPointNameExpr ?? step.ViaPointId ?? "?"}",
                 _                           => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
+        }
+
+        private static string? FirstLine(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            int nl = text.IndexOf('\n');
+            return (nl >= 0 ? text[..nl] : text).Trim();
         }
 
         private static string BuildSetOutputDescription(ProgramStep step)
@@ -318,7 +499,7 @@ namespace Controller.RobotControl.Execution
             var state = step.OutputValue == true ? "ON" : "OFF";
             var base_ = step.OutputCard switch {
                 "relay" => $"Relay {step.OutputNumber} → {state}",
-                "nano"  => $"Nano Output {step.OutputNumber} → {state}",
+                "io"  => $"IO Output {step.OutputNumber} → {state}",
                 _       => $"STB Output {step.OutputNumber} → {state}",
             };
             var pulseSuffix = (step.PulseMs ?? 0) > 0
@@ -329,27 +510,29 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>
         /// Total steps a program reports as its MaxStepCount: every step, plus routine bodies
-        /// (when a repository is given), if/else branches and CNC blocks (estimated from the
-        /// spec with the same arithmetic as <see cref="CncStepGenerator.Generate"/>).
+        /// (when a repository is given), the bodies of branching blocks (If, Switch, Try — via
+        /// <see cref="StepTree"/>) and CNC blocks (estimated from the spec with the same arithmetic
+        /// as <see cref="CncStepGenerator.Generate"/>). Loop bodies add nothing (a completed step
+        /// only counts outside loops), Notes are not steps, and a disabled step counts once —
+        /// its body is skipped with it.
         /// </summary>
         public static int CountSteps(List<ProgramStep> steps, BuiltProgramRepository? repo = null)
         {
             int count = 0;
             foreach (var s in steps)
             {
+                if (s == null || s.Type == StepType.Note) continue;
                 count++;
+                if (!s.IsEnabled) continue;
                 if (s.Type == StepType.CallRoutine && repo != null)
                 {
                     var routine = !string.IsNullOrEmpty(s.RoutineId) ? repo.GetById(s.RoutineId!) : null;
                     routine ??= repo.Get(s.RoutineName ?? "");
                     if (routine != null) count += CountSteps(routine.Steps, repo);
                 }
-                if (s.Type == StepType.IfCondition)
-                {
-                    if (s.IfSteps != null) count += CountSteps(s.IfSteps, repo);
-                    foreach (var elif in s.ElseIfBranches ?? []) count += CountSteps(elif.Steps, repo);
-                    if (s.ElseSteps != null) count += CountSteps(s.ElseSteps, repo);
-                }
+                if (s.Type != StepType.CncProgram && s.Type != StepType.Loop)
+                    foreach (var child in s.ChildLists(executableOnly: true))
+                        count += CountSteps(child.Steps, repo);
                 if (s.Type == StepType.CncProgram)
                 {
                     if (s.CncSpec != null)

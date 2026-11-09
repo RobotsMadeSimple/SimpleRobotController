@@ -13,6 +13,14 @@ namespace Controller.RobotControl.Execution
         WhileLoop,
         /// <summary>A for-each body: re-pushed once per element of the source list.</summary>
         ForEach,
+        /// <summary>A called routine's body — the routine boundary: GoToLabel, Break/Next never
+        /// cross it, Return unwinds to it, and leaving it copies the out-parameters back.</summary>
+        Routine,
+        /// <summary>A Try block's body: a catchable failure inside it unwinds to here, then
+        /// retries the body or runs the catch steps (docs/program-language.md §4.2).</summary>
+        Try,
+        /// <summary>The Switch case (or default) that matched: popped when done, like Plain.</summary>
+        Switch,
     }
 
     /// <summary>
@@ -40,6 +48,8 @@ namespace Controller.RobotControl.Execution
         // at Index uses it, and that step holds the frame until it finishes.
         public bool WaitStarted { get; set; }
         public long WaitStartMs { get; set; }
+        /// <summary>A blocking SetOutput pulse: the state set on entry (reverted when the pulse ends).</summary>
+        public bool PulseValue { get; set; }
 
         // ── Loop state ────────────────────────────────────────────────────────
 
@@ -60,9 +70,37 @@ namespace Controller.RobotControl.Execution
         public string ForEachSourceVar    { get; private init; } = "";
         public string ForEachValueVar     { get; private init; } = "";
 
+        // ── Routine state ─────────────────────────────────────────────────────
+
+        /// <summary>Routine: the routine being run (its declared parameters).</summary>
+        public BuiltProgram? Routine { get; private init; }
+        /// <summary>Routine: out / inOut parameter (key) → caller variable, copied when the frame is left.</summary>
+        public List<PluginOutputMapping>? RoutineOutputs { get; private init; }
+
+        // ── Try state ─────────────────────────────────────────────────────────
+
+        /// <summary>Try: the Try step (retries, delay, catch codes, catch body, error variables).</summary>
+        public ProgramStep? TryStep { get; private init; }
+        /// <summary>Try: retries done so far (0 on the first attempt).</summary>
+        public int TryAttempt { get; set; }
+
+        /// <summary>
+        /// Unix ms before which the executor does not run this frame's next step (a Try retry
+        /// delay); 0 = no hold.
+        /// </summary>
+        public long ResumeAtMs { get; set; }
+
         // ── Factories ─────────────────────────────────────────────────────────
 
         public static StepListFrame Plain(List<ProgramStep> steps) => new(FrameKind.Plain, steps);
+
+        public static StepListFrame RoutineBody(BuiltProgram routine, List<PluginOutputMapping>? outputs) =>
+            new(FrameKind.Routine, routine.Steps ?? new()) { Routine = routine, RoutineOutputs = outputs };
+
+        public static StepListFrame TryBody(ProgramStep tryStep) =>
+            new(FrameKind.Try, tryStep.TrySteps ?? new()) { TryStep = tryStep };
+
+        public static StepListFrame SwitchBody(List<ProgramStep> steps) => new(FrameKind.Switch, steps);
 
         public static StepListFrame Cnc(List<ProgramStep> steps) => new(FrameKind.Cnc, steps);
 

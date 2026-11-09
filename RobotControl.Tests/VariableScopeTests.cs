@@ -113,6 +113,22 @@ public class VariableScopeTests
     }
 
     [Fact]
+    public void Interpolate_WholeNumbersPrintInFull_FractionsKeepSixDigits()
+    {
+        // $time_ms-sized values go into file names ("recordings/grip_$time_ms.csv"): "1.79307E+12"
+        // is unreadable and the same for every run in a ~2.8 h window, so whole numbers print in full.
+        var scope = new VariableScope();
+        scope.Initialize(Program(
+            new ProgramVariable { Name = "big",  Value = 1793066899654 },
+            new ProgramVariable { Name = "frac", Value = 0.05740074403854364 },
+            new ProgramVariable { Name = "neg",  Value = -12 },
+            new ProgramVariable { Name = "raw",  Value = 62460 }));
+
+        Assert.Equal("1793066899654 1793066899654 0.0574007 -12 62461",
+            scope.Interpolate("$big {$big} $frac $neg {$raw + 1}"));
+    }
+
+    [Fact]
     public void Interpolate_ListElementsAndComponents()
     {
         var scope = new VariableScope();

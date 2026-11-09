@@ -90,11 +90,16 @@ namespace Controller.RobotControl
                     {
                         if (program.Status != incoming) listLevelChanged = true;
                         program.Status  = incoming;
+                        // A finished run is no longer paused anywhere and can no longer be answered.
+                        if (incoming is ProgramStatus.Complete or ProgramStatus.Error or ProgramStatus.Ready)
+                            listLevelChanged |= ClearPauseAndPrompt(program);
                     }
                 }
+                if (update.CurrentStepId != null) program.CurrentStepId = update.CurrentStepId;
                 if (update.CurrentStepNumber.HasValue) program.CurrentStepNumber    = update.CurrentStepNumber.Value;
                 if (update.MaxStepCount.HasValue)      program.MaxStepCount         = update.MaxStepCount.Value;
                 if (update.ErrorDescription      != null && update.ErrorDescription   != program.ErrorDescription)   { program.ErrorDescription   = update.ErrorDescription;   listLevelChanged = true; }
+                if (update.ErrorCode             != null && update.ErrorCode          != program.ErrorCode)          { program.ErrorCode          = update.ErrorCode;          listLevelChanged = true; }
                 if (update.WarningDescription    != null && update.WarningDescription != program.WarningDescription) { program.WarningDescription = update.WarningDescription; listLevelChanged = true; }
                 if (update.CurrentPointName != null)
                 {
@@ -137,6 +142,59 @@ namespace Controller.RobotControl
 
                 if (listLevelChanged) Touch();
             }
+        }
+
+        // ── Debugging and operator prompts (docs/program-language.md §4.2–4.3) ──
+
+        /// <summary>Clears the pause reason/step and the prompt; true when anything was set.</summary>
+        private static bool ClearPauseAndPrompt(ProgramModel p)
+        {
+            bool any = p.PauseReason != null || p.PausedAtStepId != null || p.Prompt != null;
+            p.PauseReason    = null;
+            p.PausedAtStepId = null;
+            p.Prompt         = null;
+            return any;
+        }
+
+        /// <summary>
+        /// Records why a program is paused (<see cref="PauseReasons"/>) and the step it will run
+        /// next; null clears both. Rides the programs summary (a paused program is not in the
+        /// active block), so it bumps <see cref="LastUpdatedUnixMs"/>.
+        /// </summary>
+        public void SetPauseState(string programName, string? reason, string? pausedAtStepId)
+        {
+            lock (_lock)
+            {
+                if (!_programs.TryGetValue(programName, out var p)) return;
+                if (p.PauseReason == reason && p.PausedAtStepId == pausedAtStepId) return;
+                p.PauseReason    = reason;
+                p.PausedAtStepId = pausedAtStepId;
+                Touch();
+            }
+        }
+
+        /// <summary>Publishes (or with null clears) the prompt a program is waiting on.</summary>
+        public void SetPrompt(string programName, ProgramPromptInfo? prompt)
+        {
+            lock (_lock)
+            {
+                if (!_programs.TryGetValue(programName, out var p)) return;
+                if (ReferenceEquals(p.Prompt, prompt)) return;
+                p.Prompt = prompt;
+                Touch();
+            }
+        }
+
+        /// <summary>The prompt a program is waiting on, or null.</summary>
+        public ProgramPromptInfo? GetPrompt(string programName)
+        {
+            lock (_lock) return _programs.TryGetValue(programName, out var p) ? p.Prompt : null;
+        }
+
+        /// <summary>Every published prompt (across programs), for AnswerPrompt to find one by id.</summary>
+        public List<ProgramPromptInfo> GetPrompts()
+        {
+            lock (_lock) return _programs.Values.Where(p => p.Prompt != null).Select(p => p.Prompt!).ToList();
         }
 
         // ── Action flags ─────────────────────────────────────────────────────
@@ -191,7 +249,10 @@ namespace Controller.RobotControl
                 program.MaxStepCount           = maxStepCount;
                 program.CurrentStepDescription = "";
                 program.ErrorDescription       = "";
+                program.ErrorCode              = null;
                 program.WarningDescription     = "";
+                program.CurrentStepId          = null;
+                ClearPauseAndPrompt(program);
                 Touch();
             }
         }
@@ -209,6 +270,9 @@ namespace Controller.RobotControl
                 if (p.Status == ProgramStatus.Stopped)
                 {
                     p.Status = ProgramStatus.Running;
+                    // Running again: no longer paused. A prompt stays — Continue re-shows it.
+                    p.PauseReason    = null;
+                    p.PausedAtStepId = null;
                     Touch();
                 }
             }
@@ -234,7 +298,10 @@ namespace Controller.RobotControl
                     p.MaxStepCount           = maxSteps;
                     p.CurrentStepDescription = "";
                     p.ErrorDescription       = "";
+                    p.ErrorCode              = null;
                     p.WarningDescription     = "";
+                    p.CurrentStepId          = null;
+                    ClearPauseAndPrompt(p);
                     changed = true;
                 }
                 if (changed) Touch();
@@ -282,6 +349,7 @@ namespace Controller.RobotControl
                     runCount               = p.RunCount,
                     lastStartedUnixMs      = p.LastStartedUnixMs,
                     errorDescription       = p.ErrorDescription,
+                    errorCode              = p.ErrorCode,
                     warningDescription     = p.WarningDescription,
                     currentPointName    = p.CurrentPointName,
                     currentOffsetX      = p.CurrentOffsetX,
@@ -296,6 +364,10 @@ namespace Controller.RobotControl
                     currentToolOffsetRX = p.CurrentToolOffsetRX,
                     currentToolOffsetRY = p.CurrentToolOffsetRY,
                     currentToolOffsetRZ = p.CurrentToolOffsetRZ,
+                    currentStepId          = p.CurrentStepId,
+                    pauseReason            = p.PauseReason,
+                    pausedAtStepId         = p.PausedAtStepId,
+                    prompt                 = p.Prompt,
                     start                  = p.Start,
                     stop                   = p.Stop,
                     reset                  = p.Reset,
@@ -338,6 +410,8 @@ namespace Controller.RobotControl
                         currentToolOffsetRX    = p.CurrentToolOffsetRX,
                         currentToolOffsetRY    = p.CurrentToolOffsetRY,
                         currentToolOffsetRZ    = p.CurrentToolOffsetRZ,
+                        currentStepId          = p.CurrentStepId,
+                        prompt                 = p.Prompt,
                     }).ToList();
             }
         }

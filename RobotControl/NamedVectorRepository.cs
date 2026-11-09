@@ -201,6 +201,22 @@ public abstract class NamedVectorRepository<TItem, TEntry>
         }
     }
 
+    /// <summary>
+    /// The item with this stable id, or null. Resolves a step's stored id regardless of the
+    /// item's current name (rename-proof). Prefer this over <see cref="Get"/> for program links;
+    /// Get-by-name stays as a convenience alias (API / human reference).
+    /// </summary>
+    public TItem? GetById(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        lock (_lock)
+        {
+            foreach (var item in _items.Values)
+                if (item.Id == id) return item;
+            return null;
+        }
+    }
+
     // ── History ──────────────────────────────────────────────────────────────
 
     /// <summary>Subclass supplies the concrete history-entry wrapper.</summary>
@@ -209,13 +225,24 @@ public abstract class NamedVectorRepository<TItem, TEntry>
     // ── Stable identity ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Hook for subclasses that carry a stable id (Point): assign one when missing,
-    /// preserving <paramref name="existing"/>'s id when an item of the same name is
-    /// being replaced. Called on create and for each item at load (with existing
-    /// null) to backfill legacy data. Returns true when it changed the item, so the
-    /// loader knows to persist. Default: no-op (items without an id, like Tool/Local).
+    /// Give every item a stable id: keep the prior id when re-teaching/replacing an item of the
+    /// same name (so program-step links survive), otherwise mint a fresh one. Called on create and
+    /// for each item at load (with <paramref name="existing"/> null) to backfill data saved before
+    /// ids existed. Returns true when it assigned an id, so the loader knows to persist the backfill.
+    /// All named vectors (Point, Tool, Local) now carry an id; subclasses may still override.
     /// </summary>
-    protected virtual bool EnsureIdentity(TItem item, TItem? existing) => false;
+    protected virtual bool EnsureIdentity(TItem item, TItem? existing)
+    {
+        if (existing != null && !string.IsNullOrWhiteSpace(existing.Id))
+            item.Id = existing.Id;
+
+        if (string.IsNullOrWhiteSpace(item.Id))
+        {
+            item.Id = Guid.NewGuid().ToString("N");
+            return true;
+        }
+        return false;
+    }
 
     private void AppendHistory(TItem item)
     {

@@ -1,7 +1,7 @@
 using System.IO.Ports;
 using Controller.RobotControl.Serial;
 
-namespace Controller.RobotControl.Nano
+namespace Controller.RobotControl.Io
 {
     /// <summary>
     /// Manages the serial connection to a single Arduino Nano edge device.
@@ -9,37 +9,57 @@ namespace Controller.RobotControl.Nano
     /// </summary>
     public sealed class NanoDevice : SerialLineDevice
     {
-        private readonly NanoDeviceConfig _config;
+        private readonly IoDeviceConfig _config;
 
         // Live pin state keyed by Arduino pin number
-        private readonly Dictionary<int, NanoPinState> _pinStates = new();
+        private readonly Dictionary<int, IoPinState> _pinStates = new();
 
         /// <summary>Fired on the device thread when an Input pin changes value.</summary>
-        public event Action<NanoPinState>? InputChanged;
+        public event Action<IoPinState>? InputChanged;
+
+        /// <summary>Fired on the device thread for every HX711 load-cell reading (pinState, unixMs).
+        /// Carries the just-updated state (Raw/Grams/Unit/Name) so a recorder can capture every sample.</summary>
+        public event Action<IoPinState, long>? LoadCellSampled;
 
         // ── SerialLineDevice knobs ─────────────────────────────────────────────
         protected override string DeviceTag                    => "Nano";
         protected override string ThreadNamePrefix              => "NanoDevice";
-        protected override int    ProbeAttempts                 => 1;
-        protected override int    ProbeResponseDelayMs          => 100;
-        protected override bool   KeepProbePortOpenForSession   => false;
+        // Poll "ID?" across the boot window instead of a single ping at a fixed offset: a Nano
+        // (CH340 + old bootloader) takes ~3s to come up after the open-time DTR reset, longer than
+        // the old 2000ms wait, so one ping raced the boot, missed, and forced a full rescan — which
+        // re-opened the port, reset the Nano again, and looped (the ~1 min first-connect). Now: a
+        // short initial grace, then up to 8 short-timeout pings (~5.7s window) that catch the device
+        // the instant its sketch answers and exit immediately on match.
+        protected override int    ProbeAttempts                 => 8;
+        protected override int    ProbeResponseDelayMs          => 120;
+        protected override int    ProbeReadTimeoutMs            => 500;
+        protected override int    PostOpenResetDelayMs          => 800;
+        // Reuse the port that answered the probe for the session instead of closing it and opening a
+        // fresh one — the reopen would DTR-reset the just-booted Nano a second time and make us wait
+        // out another ~3s boot before streaming resumed.
+        protected override bool   KeepProbePortOpenForSession   => true;
+        public    override string SketchName                    => "NanoEdgeDevice";
 
-        public NanoDevice(NanoDeviceConfig config) : base(config.Id, config.Name)
+        public NanoDevice(IoDeviceConfig config) : base(config.Id, config.Name)
         {
             _config = config;
 
             // Pre-populate pin state map from config so callers can read it even before connect
             foreach (var p in config.Pins)
             {
-                _pinStates[p.Pin] = new NanoPinState
+                _pinStates[p.Pin] = new IoPinState
                 {
-                    Pin        = p.Pin,
-                    Type       = p.Type,
-                    Name       = p.Name,
-                    NanoId     = config.Id,
-                    NanoName   = config.Name,
-                    PixelCount = p.PixelCount,
-                    Value      = false,
+                    Pin           = p.Pin,
+                    Type          = p.Type,
+                    Name          = p.Name,
+                    DeviceId        = config.Id,
+                    DeviceName      = config.Name,
+                    PixelCount    = p.PixelCount,
+                    Value         = false,
+                    SckPin        = p.SckPin,
+                    Unit          = p.Unit,
+                    TareOffset    = p.TareOffset,
+                    CountsPerGram = p.CountsPerGram,
                 };
             }
         }
@@ -48,24 +68,12 @@ namespace Controller.RobotControl.Nano
 
         protected override void OnSessionStarted(SerialPort port)
         {
-            Console.WriteLine($"[{LogPrefix}] Session started on {port.PortName}");
+            // (The base class has already logged "Connected on <port> — firmware …".)
 
             // ── Send pin configuration ────────────────────────────────────────
             foreach (var pin in _config.Pins)
             {
-                string typeChar = pin.Type switch
-                {
-                    PinType.Input    => "I",
-                    PinType.Output   => "O",
-                    PinType.Neopixel => "N",
-                    _                => "I",
-                };
-
-                string cmd = pin.Type == PinType.Neopixel
-                    ? $"CFG:{pin.Pin},{typeChar},{pin.PixelCount}"
-                    : $"CFG:{pin.Pin},{typeChar}";
-
-                SafeWrite(cmd);
+                SafeWrite(ConfigCommand(pin.Pin, pin.Type, pin.PixelCount, pin.SckPin));
                 Thread.Sleep(30);
             }
 
@@ -78,13 +86,29 @@ namespace Controller.RobotControl.Nano
             Console.WriteLine($"[{LogPrefix}] Session ended");
         }
 
+        /// <summary>The firmware CFG command for a pin. Load cells carry the SCK pin in place of pixel count.</summary>
+        private static string ConfigCommand(int pin, PinType type, int pixelCount, int sckPin) => type switch
+        {
+            PinType.Neopixel => $"CFG:{pin},N,{pixelCount}",
+            PinType.LoadCell => $"CFG:{pin},L,{sckPin}",
+            PinType.Output   => $"CFG:{pin},O",
+            _                => $"CFG:{pin},I",
+        };
+
+        /// <summary>Convert a raw HX711 count to grams using the channel's calibration (0 when uncalibrated).</summary>
+        private static double RawToGrams(long raw, long tareOffset, double countsPerGram) =>
+            countsPerGram != 0 ? (raw - tareOffset) / countsPerGram : 0;
+
+        // Per-load-cell sample-rate estimate (ticks of the last LC line, smoothed).
+        private readonly Dictionary<int, long> _lcLastTicks = new();
+
         // ── Protocol parsing ───────────────────────────────────────────────────
 
         protected override void OnLine(string line)
         {
             if (string.IsNullOrEmpty(line)) return;
 
-            // STATE:<pin>,<type>,<value>;<pin>,<type>,<value>;...
+            // STATE:<pin>,<type>,<value>;<pin>,<type>,<value>;...  (type L: value is the raw count)
             if (line.StartsWith("STATE:"))
             {
                 foreach (string entry in line.Substring(6).Split(';'))
@@ -92,11 +116,27 @@ namespace Controller.RobotControl.Nano
                     string[] parts = entry.Split(',');
                     if (parts.Length >= 3 && int.TryParse(parts[0], out int pin))
                     {
-                        NanoPinState? state;
+                        IoPinState? state;
                         lock (_lock) _pinStates.TryGetValue(pin, out state);
-                        if (state != null)
+                        if (state == null) continue;
+                        if (parts[1] == "L" && long.TryParse(parts[2], out long raw))
+                            UpdateLoadCellRaw(state, raw);
+                        else
                             state.Value = parts[2] != "0";
                     }
+                }
+                return;
+            }
+
+            // LC:<pin>,<raw>  — streamed HX711 reading
+            if (line.StartsWith("LC:"))
+            {
+                string[] parts = line.Substring(3).Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int pin) && long.TryParse(parts[1], out long raw))
+                {
+                    IoPinState? state;
+                    lock (_lock) _pinStates.TryGetValue(pin, out state);
+                    if (state != null) UpdateLoadCellRaw(state, raw);
                 }
                 return;
             }
@@ -107,7 +147,7 @@ namespace Controller.RobotControl.Nano
                 string[] parts = line.Substring(4).Split(',');
                 if (parts.Length >= 2 && int.TryParse(parts[0], out int pin))
                 {
-                    NanoPinState? state;
+                    IoPinState? state;
                     lock (_lock) _pinStates.TryGetValue(pin, out state);
                     if (state != null)
                     {
@@ -122,12 +162,34 @@ namespace Controller.RobotControl.Nano
             // Other lines (ID echo etc.) — ignore silently
         }
 
+        /// <summary>Store a new raw HX711 reading on a load-cell pin: update grams + estimate the sample rate.</summary>
+        private void UpdateLoadCellRaw(IoPinState state, long raw)
+        {
+            state.Raw   = raw;
+            state.Grams = RawToGrams(raw, state.TareOffset, state.CountsPerGram);
+
+            long now = Environment.TickCount64;
+            lock (_lock)
+            {
+                if (_lcLastTicks.TryGetValue(state.Pin, out long last) && now > last)
+                {
+                    double inst = 1000.0 / (now - last);
+                    state.SampleRateHz = state.SampleRateHz <= 0 ? inst : state.SampleRateHz * 0.8 + inst * 0.2;
+                }
+                _lcLastTicks[state.Pin] = now;
+            }
+
+            // Per-sample fidelity for the history/recording engine. Timestamp is assigned here
+            // (receive time) since the firmware sends no timestamp. Fires on the device thread.
+            LoadCellSampled?.Invoke(state, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
+
         // ── Public command API ─────────────────────────────────────────────────
 
         /// <summary>Queues a digital output change. Thread-safe.</summary>
         public void SetOutput(int pin, bool value)
         {
-            NanoPinState? state;
+            IoPinState? state;
             lock (_lock)
             {
                 _commandQueue.Enqueue($"SET:{pin},{(value ? 1 : 0)}");
@@ -152,33 +214,34 @@ namespace Controller.RobotControl.Nano
                 _commandQueue.Enqueue(sb.ToString());
         }
 
-        /// <summary>Queues a pin reconfiguration command. Thread-safe.</summary>
-        public void ConfigurePin(int pin, PinType type, int pixelCount = 8)
+        /// <summary>Queues a pin reconfiguration command. Thread-safe. For a load cell, pass the HX711 SCK pin.</summary>
+        public void ConfigurePin(int pin, PinType type, int pixelCount = 8, int sckPin = -1)
         {
-            string typeChar = type switch
-            {
-                PinType.Input    => "I",
-                PinType.Output   => "O",
-                PinType.Neopixel => "N",
-                _                => "I",
-            };
-
-            string cmd = type == PinType.Neopixel
-                ? $"CFG:{pin},{typeChar},{pixelCount}"
-                : $"CFG:{pin},{typeChar}";
-
             lock (_lock)
-                _commandQueue.Enqueue(cmd);
+                _commandQueue.Enqueue(ConfigCommand(pin, type, pixelCount, sckPin));
+        }
+
+        /// <summary>Apply a load cell's calibration to its live state so grams recompute immediately. Thread-safe.</summary>
+        public void ApplyLoadCellCalibration(int pin, long tareOffset, double countsPerGram, string unit)
+        {
+            lock (_lock)
+            {
+                if (!_pinStates.TryGetValue(pin, out var s)) return;
+                s.TareOffset    = tareOffset;
+                s.CountsPerGram = countsPerGram;
+                s.Unit          = unit;
+                s.Grams         = RawToGrams(s.Raw, tareOffset, countsPerGram);
+            }
         }
 
         // ── State accessors ────────────────────────────────────────────────────
 
-        public List<NanoPinState> GetPinStates()
+        public List<IoPinState> GetPinStates()
         {
             lock (_lock) return _pinStates.Values.ToList();
         }
 
-        public NanoPinState? GetPinState(int pin)
+        public IoPinState? GetPinState(int pin)
         {
             lock (_lock) return _pinStates.TryGetValue(pin, out var s) ? s : null;
         }
@@ -187,27 +250,36 @@ namespace Controller.RobotControl.Nano
         /// Adds or updates the tracked state for a pin without sending a firmware
         /// command — call ConfigurePin separately when the device is connected.
         /// </summary>
-        public void UpsertPinState(int pin, PinType type, string name, int pixelCount)
+        public void UpsertPinState(int pin, PinType type, string name, int pixelCount,
+            int sckPin = -1, string unit = "g", long tareOffset = 0, double countsPerGram = 0)
         {
             lock (_lock)
             {
                 if (_pinStates.TryGetValue(pin, out var existing))
                 {
-                    existing.Type       = type;
-                    existing.Name       = name;
-                    existing.PixelCount = pixelCount;
+                    existing.Type          = type;
+                    existing.Name          = name;
+                    existing.PixelCount    = pixelCount;
+                    existing.SckPin        = sckPin;
+                    existing.Unit          = unit;
+                    existing.TareOffset    = tareOffset;
+                    existing.CountsPerGram = countsPerGram;
                 }
                 else
                 {
-                    _pinStates[pin] = new NanoPinState
+                    _pinStates[pin] = new IoPinState
                     {
-                        Pin        = pin,
-                        Type       = type,
-                        Name       = name,
-                        NanoId     = _config.Id,
-                        NanoName   = _config.Name,
-                        PixelCount = pixelCount,
-                        Value      = false,
+                        Pin           = pin,
+                        Type          = type,
+                        Name          = name,
+                        DeviceId        = _config.Id,
+                        DeviceName      = _config.Name,
+                        PixelCount    = pixelCount,
+                        Value         = false,
+                        SckPin        = sckPin,
+                        Unit          = unit,
+                        TareOffset    = tareOffset,
+                        CountsPerGram = countsPerGram,
                     };
                 }
             }

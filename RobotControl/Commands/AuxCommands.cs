@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Controller.RobotControl.AuxAxis;
+using Controller.RobotControl.Serial;
 
 namespace Controller.RobotControl.Commands;
 
@@ -36,9 +37,15 @@ internal sealed class AuxCommands
         return new { config = auxCfgJson };
     }
 
+    /// <summary>Refuse a move on a board whose firmware reports no stepper capability (sanity check —
+    /// every AuxStepperDriver build reports it; a legacy board is never refused).</summary>
+    private void RequireStepper(string deviceId) =>
+        _robot.AuxAxisManager.GetDevice(deviceId)?.RequireCapability(FirmwareInfo.CapStepper, "Stepper motion");
+
     private void MoveAux(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<MoveAuxParams>(msg);
+        RequireStepper(p.DeviceId);
         _robot.StartAuxMove(p.DeviceId, p.Axis, p.Steps, p.Velocity, p.Accel, p.Decel);
     }
 
@@ -48,7 +55,10 @@ internal sealed class AuxCommands
         if (p.Velocity == 0)
             _robot.StopAux(p.Decel);
         else
+        {
+            RequireStepper(p.DeviceId);
             _robot.StartAuxContinuous(p.DeviceId, p.Axis, p.Velocity, p.Accel);
+        }
     }
 
     private void StopAux(CommandMessage msg)

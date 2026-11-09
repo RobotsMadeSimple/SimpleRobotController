@@ -50,11 +50,12 @@ maps `/control`, and `Hosting/MdnsAdvertiser` advertises `_robot._tcp`.
 | `Robots/` | `IRobotKinematics` and the ASTRO / CNC4Axis implementations. `Joints/` holds the joint models ASTRO composes. |
 | `Persistence/` | `AtomicFile` (temp + rename), `JsonFiles` (load/save, corrupt files quarantined as `*.corrupt-<stamp>`), `JsonListRepository<T>`, the named-vector repositories (points/tools/locals with history) and `BuiltProgramRepository` (one file per program). |
 | `Hosting/` | HTTP endpoints, WebSocket server, mDNS. |
-| `Vision/` | `VisionProcessor` (thread + loop), `InspectionPlan` (program → ordered run-ready steps), `FrameContext` (cached grey/blur/edges/masks per frame), `ZoneGeometry`, drawing helpers. |
-| `Vision/Inspections/` | One `IInspectionStrategy` per inspection type: detection, annotation, debug rendering. Adding a type means one strategy class plus its list in `VisionProgram`. |
-| `Nano/`, `AuxAxis/`, `Serial/` | Arduino serial devices on the shared `SerialLineDevice` base (port scan, `ID?` probe, port claim registry, session loop). |
+| `Vision/` | Building-block vision ([vision-tools.md](vision-tools.md)). `VisionProcessor` (thread + loop, layer/tool previews), `VisionEngine` (runs a program on one frame: tools in order, fixtures, limits, notRun propagation, reference capture, teaching), `LayerCache` + `VisionFilters` (image layers, cached per frame), `RegionGeometry` (pixel regions, grid cells, fixture transforms), `VisionOverlay` (annotated frames). |
+| `Vision/Tools/` | One `IVisionTool` per tool type, registered in `ToolRegistry`; `ToolCore` holds the shared caliper-profile, threshold and per-cell measurement helpers. Adding a tool means one class plus its registry entry. |
+| `Nano/`, `AuxAxis/`, `Serial/` | Arduino serial devices on the shared `SerialLineDevice` base (port scan, `ID?` probe, port claim registry, session loop). `Serial/FirmwareInfo.cs` parses the probe reply's firmware version + capabilities and gates features on them (see [websocket-api.md](websocket-api.md#arduino-firmware-handshake--capabilities)). |
 | `Controllers/STB4100/` | The HID motion board: loops (timing-critical), `Stb4100Packets` (pure packet builders, byte-exact tests). |
 | `Camera/`, `UsbRelay/` | USB camera capture and the HID relay board. |
+| `Plugins/` | External plugin processes (`docs/plugins.md`). `PluginManager` (owned by `RobotController`) discovers `plugins/<id>/plugin.json`, installs/uninstalls zips, publishes events, serves plugin functions/properties/steps; `PluginHost` is one plugin's state machine (launch, ready timeout, restart backoff, stop); `PluginSession` is the JSON frame protocol over `IPluginTransport` (WebSocket in production, in-memory in tests); `PluginProcess` launches python (venv bootstrap)/dotnet/exe. `Hosting/PluginEndpoint` maps `GET /plugin` and the install/download routes; plugins are started once Kestrel listens and stopped on `ApplicationStopping`. |
 
 ## Conventions
 

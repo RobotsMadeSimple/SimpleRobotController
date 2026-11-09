@@ -8,7 +8,7 @@ existing is renamed or reshaped.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `enabled` | bool, optional | `false` = executor skips the step (still counted for progress, logged as `[Skipped — disabled] …`). Absent/`true` = runs. |
+| `enabled` | bool, optional | `false` = the executor skips the step and its whole body (it still counts once for progress, logged as `[Skipped — disabled] …`; a disabled Note just advances). The validator reports one `disabledStep` warning and checks nothing inside it; the debugger never pauses on it. Absent/`true` = runs. |
 | `comment` | string, optional | Free text shown under the step in the editor. Never executed. |
 
 ## 2. Expression language
@@ -16,9 +16,9 @@ existing is renamed or reshaped.
 Expressions are numeric (doubles). Booleans are 1/0. Existing syntax stays valid.
 
 ```
-Literals      3.14  -5  true  false
+Literals      3.14  -5  true  false  on  off       (on/true = 1, off/false = 0)
 Variables     $name                 program, global, persistent variables
-IO            $stb.in1 $stb.out2 $relay.3 $nano.<board>.<pin>
+IO            $stb.in1 $stb.out2 $relay.3 $io.<nano>.<pin>
 Properties    $robot.x  $program.runCount  $time.hour     (read-only, section 3)
 Lists         $list.length  $list.count  $list[i]  $pts[i].x  $pts[i][0]  $recs[i].field
 Arithmetic    +  -  *  /  %  ^        (% = remainder, ^ = power, right-assoc)
@@ -27,6 +27,15 @@ Logic         and or not  && || !
 Conditional   cond ? a : b            (lowest precedence, right-assoc)
 Grouping      ( … )
 ```
+
+**Nano pins** read as `$io.<nano name>.<pin name>`: a digital pin as 1/0, a
+**load cell** as its calibrated weight in grams (the master unit — convert in the
+expression if you think in kg or N). Identifiers are `[A-Za-z0-9_]` only, so a
+name with other characters is also published under an identifier-safe alias with
+every run of such characters replaced by one `_`: nano "Arduino Nano", pin "Load
+Cell" → `$io.Arduino_Nano.Load_Cell`. `GetExpressionSymbols` lists the alias
+(the typed form cannot be written), and the app composes the same alias when it
+offers a load-cell chip. The sanitizer lives in `IoVariableNames.Sanitize`.
 
 Precedence, tightest first: `^` · unary `-` · `* / %` · `+ -` ·
 comparison · `not` · `and` · `or` · `? :`. A leading `not` keeps its existing
@@ -38,17 +47,46 @@ place above comparison (`not $a > 5` is `not ($a > 5)`, as it always was); a
 | Function | Notes |
 |---|---|
 | `abs(x)` `sign(x)` `sqrt(x)` `pow(x,y)` | |
-| `min(a,b,…)` `max(a,b,…)` `clamp(x,lo,hi)` | variadic min/max |
+| `min(a,b,…)` `max(a,b,…)` `clamp(x,lo,hi)` | variadic min/max; `min($list)` / `max($list.field)` take a list (see below) |
 | `round(x)` `round(x,digits)` `floor(x)` `ceil(x)` `trunc(x)` | round half away from zero |
 | `mod(a,b)` | same as `%` |
 | `sin(deg)` `cos(deg)` `tan(deg)` `asin(x)` `acos(x)` `atan(x)` `atan2(y,x)` | degrees in and out |
 | `deg(rad)` `rad(deg)` `hypot(x,y)` `dist(x1,y1,x2,y2)` `dist3(x1,y1,z1,x2,y2,z2)` | |
 | `if(cond,a,b)` | same as `cond ? a : b` |
-| `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | number lists |
+| `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | number lists; for a point/record list name the field — `sum($pts.x)`, `max($samples.v)` (missing field reads 0) |
 | `rand()` `rand(lo,hi)` | uniform |
 | `map(x,inLo,inHi,outLo,outHi)` `lerp(a,b,t)` | |
+| `inBox(x,y,z,x1,y1,z1,x2,y2,z2)` `inCircle(x,y,cx,cy,r)` | 1/0 zone tests: inside the box with opposite corners (x1,y1,z1)–(x2,y2,z2), corners in any order; within r of (cx,cy). Edges count as inside. |
 
 Unknown function → parse error `unknownFunction`. Wrong arity → `badArity`.
+
+**Text helpers** on a string variable `$s`: `$s.contains("x")`, `$s.startsWith("x")`,
+`$s.endsWith("x")` (1/0), `$s.indexOf("x")` (position of the first match from 0, -1 when
+absent), `$s.toNumber()` (invariant culture, spaces ignored; text that is not a finite number
+is **0**) and `$s.length` (its character count — on a list `.length` is still the element
+count). The argument may be a string literal or another string variable. They work in every
+expression field (Set Variable, step fields, conditions); `ExpressionEvaluator.StringMethods`
+lists them.
+
+**Plugin functions** ([plugins.md](plugins.md) §5): a running plugin's functions
+are called with a dotted name, `<pluginId>.<name>(…)` — `scale.tare()`,
+`scale.toOz($g)` (case-insensitive, numeric arguments, numeric result; booleans
+come back as 1/0). A dotted name is any `ident(.ident)+` immediately followed by
+`(`; it always parses, and is resolved when it is evaluated, so the parse cache
+never depends on which plugins are installed. At evaluation:
+
+- no such plugin → `unknownFunction`; the plugin exists but has no such function →
+  `unknownPluginFunction`; wrong argument count (the manifest's `minArgs`/`maxArgs`) → `badArity`;
+- the plugin is not running → `pluginNotRunning`; no reply within the function's
+  `timeoutMs` (default 250, max 5000) → `pluginFunctionTimeout`; the plugin answered
+  `ok:false` → `pluginFunctionFailed`.
+
+All of these error the program with the plugin's message (they are
+`ExpressionParseException`s — `PluginFunctionCallException` for the last three —
+so every path that reports an expression error reports them). The call blocks the
+program loop up to the timeout: prefer a plugin **property** for anything read
+every tick. `References`/`ReferencedNames` report the call as a function named
+`pluginId.name`.
 
 ### Errors
 
@@ -59,7 +97,8 @@ evaluating to a fallback; the validator (section 5) reports them before a run.
 `out position`) checks syntax only. `ExpressionParseException.Code` is
 `expressionSyntax`, `unknownFunction` or `badArity`. An empty expression is valid
 and evaluates to 0; a bare word without `$` is valid and evaluates to 0 (legacy —
-the validator warns).
+the validator warns). `true`/`on` and `false`/`off` are literals, not bare words; a
+variable named `on` is `$on`.
 
 ## 3. Properties (read-only system variables)
 
@@ -74,9 +113,16 @@ Resolved live at evaluation time; never assignable. Names are case-insensitive.
 | `$robot.speedOverride` | percent |
 | `$robot.joint1 $robot.joint2x $robot.joint2z $robot.joint4` | joint readouts |
 | `$program.runCount` `$program.stepIndex` `$program.stepCount` `$program.elapsedMs` `$program.loopDepth` | current run |
+| `$program.speedFactor` | the run's Set Speed Factor in percent (100 = full speed; 100 again when the run ends) |
 | `$time.now` (unix ms) `$time.hour` `$time.minute` `$time.second` `$time.dayOfWeek` (0=Sun) `$time.dayOfYear` | wall clock |
 | `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes |
 | `$camera.<cameraId>.calibrated` | 1 when the camera has a camera-to-robot calibration ([camera-calibration.md](camera-calibration.md)) |
+| `$<pluginId>.<name>` | a running plugin's live property, e.g. `$scale.weight` ([plugins.md](plugins.md)) |
+
+Plugin properties sit in the chain computed variables → plugin properties →
+system properties (a plugin id can never be one of the roots above). A property
+the plugin has not set, or of a plugin that is not connected, is unknown
+(`UnknownVariableException` at run time). They work in computed variables too.
 
 Commands (section 4) expose the list so the app can offer them in pickers.
 
@@ -86,7 +132,7 @@ Commands (section 4) expose the list so the app can offer them in pickers.
 |---|---|---|
 | `ValidateBuiltProgram` | `program` (full BuiltProgram object, may be unsaved) | `problems: [{ stepId, stepPath, field?, severity: "error"\|"warning", code, message }]` |
 | `EvaluateExpression` | `expression`, `programName?` | `ok`, `value` (number), `error?`, `isBoolean?` — evaluated against the named running program's variables (or globals + IO + properties when none) |
-| `GetExpressionSymbols` | `programName?` | `variables: [{name, kind: "number"\|"boolean"\|"string"\|"image"\|"list", elementType?, isGlobal, isPersistent, value?}]`, `properties: [{name, description, type}]`, `functions: [{name, signature, description}]`, `io: [{name, description}]` |
+| `GetExpressionSymbols` | `programName?` | `variables: [{name, kind: "number"\|"boolean"\|"string"\|"image"\|"list", elementType?, isGlobal, isPersistent, value?}]`, `properties: [{name, description, type, pluginId?, value?}]`, `functions: [{name, signature, description, pluginId?}]`, `io: [{name, description}]`, `plugins: [{id, name, running, functions: [{name, fullName, signature, description, minArgs, maxArgs, timeoutMs}], properties: [{name, fullName, description, type, value}]}]` — plugin functions/properties also appear in `functions`/`properties` under their full name (`scale.tare`, `scale.weight`) with `pluginId` |
 | `GetBuiltProgramRevisions` | `name` | `revisions: [{ id, savedUnixMs, stepCount, variableCount, note? }]` newest first |
 | `GetBuiltProgramRevision` | `name`, `id` | `program` (BuiltProgram JSON) |
 | `RestoreBuiltProgramRevision` | `name`, `id` | saves that revision as current (which itself creates a new revision); returns `program` |
@@ -99,7 +145,8 @@ content before overwriting when the content differs (section 6).
 `unknownPoint unknownTool unknownLocal unknownRoutine unknownVisionProgram
 unknownGrid unknownStack unknownLabel duplicateLabel unknownVariable
 unknownProperty expressionSyntax emptyLoop emptyBranch missingField
-routineRecursion disabledStep(warning) unreachableStep(warning)
+routineRecursion disabledStep(warning) unreachableStep(warning: after an enabled GoTo, or a
+`repeat forever` with no Break of its own — a Break in a nested loop only ends that loop)
 unusedVariable(warning)`.
 
 Also emitted: `unknownFunction` and `badArity` (the parse-error codes of section 2),
@@ -109,7 +156,25 @@ loop/vision/HTTP output variables — or declared as a variable), `unknownProgra
 `unknownStepType(warning)` (a step type the controller does not know; it is skipped),
 `cameraNotCalibrated` (RunVision `outputFrame: "robot"` for a vision program whose
 camera has no calibration) and `badOutputFrame` (an `outputFrame` other than
-`pixel`, `normalized` or `robot`).
+`pixel`, `normalized` or `robot`). A move to a grid or stack cell also checks the
+grid/stack's base point (`unknownPoint` when it is missing — every cell resolves from
+it) and reports `untaughtGrid(warning)` when its row/column (or layer) steps are all
+zero, i.e. every cell is the same position.
+
+Plugins ([plugins.md](plugins.md) §6), checked when the controller has a plugin
+manager: `unknownPlugin` (Plugin step `pluginId` not installed),
+`unknownPluginStep` (no such `pluginStepId`), `pluginNotRunning(warning)` (the
+plugin is installed but not running — for a Plugin step, an `id.fn(…)` call or a
+`$id.prop` reference), `pluginParamMissing` (a `required` param with no text and no
+default), `pluginParamEnum` (enum text not in `options`), `pluginOutputType` (an
+output mapped to a variable that cannot hold it: number/boolean → number or boolean
+variable, string → text variable, point → points list, list → a list, image → an
+image variable; undeclared targets are fine for number/boolean/list/image; also a
+warning for a mapping to an output the step does not have) and
+`unknownPluginFunction` (`x.y(…)` where `x` is a plugin without function `y`;
+`badArity` uses the manifest's `minArgs`/`maxArgs`). `$id.prop` for an installed
+plugin that neither declares nor has set `prop` is `unknownProperty`. A `grid:` /
+`stack:` point param naming a missing grid/stack is `unknownGrid`/`unknownStack`.
 Problems inside templates (`statusMessage`, `saveImagePath`, string Set Variable,
 text conditions) are warnings: at run time an unresolved reference there is left
 as written rather than failing. `stepPath` uses the JSON field names
@@ -118,8 +183,9 @@ checked once, under the first call that reaches it: `steps[4].routine(Pick).step
 Program-level problems (variables) have `stepId: null` and `stepPath: "variables[i]"`.
 
 `EvaluateExpression` failures also carry `code` (`expressionSyntax`,
-`unknownFunction`, `badArity`, `unknownVariable`) and `position` (-1 when not a
-syntax error). The named program's variables are used while the foreground
+`unknownFunction`, `badArity`, `unknownVariable`, and for plugin calls
+`unknownPluginFunction`, `pluginNotRunning`, `pluginFunctionTimeout`,
+`pluginFunctionFailed`) and `position` (-1 when not a syntax error). The named program's variables are used while the foreground
 executor holds it (running, paused, or finished and not yet reset).
 
 ## 5. Validation rules

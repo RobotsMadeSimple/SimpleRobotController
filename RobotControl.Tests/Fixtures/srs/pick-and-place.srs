@@ -1,0 +1,43 @@
+#!srs 1
+var count = 0  # Parts placed this run
+var ok: bool = off
+var grams = 0
+var target = 25  # Fill weight (g)
+var parts: list point
+var msg: string
+
+## Setup
+SetTool Gripper
+SetSpeedL 200, accel=800, decel=800
+prompt "Load the tray and press Start", buttons=("Start", "Cancel"), result=$ok
+if $ok == 1
+  exit "Cancelled by operator"
+end
+
+## Find parts
+try retry=2, delay=1s
+  RunVision Detect_Parts, frame=robot, pass=$ok
+    Top_edge.points -> $parts
+  end
+  if not $ok
+    raise "No parts found", code=noParts
+  end
+catch $msg
+  status error "Vision failed: {$msg}"
+  exit
+end
+
+## Pick and place
+for _, $i in $parts
+  JumpL $parts[$i], z=40
+  GripperAction close, device=Aux, axis=1, until=$io.Nano.Grip >= 300
+  JumpL grid Tray[$count], z=40
+  GripperAction open
+  ReadLoadCell $grams, device=Arduino_Nano, pin=2
+  if $grams < $target
+    status warning "Slot {$count} light: {round($grams, 1)} g"
+    continue
+  end
+  $count = $count + 1
+end
+status "Placed {$count} parts"

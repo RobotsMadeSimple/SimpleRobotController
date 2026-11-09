@@ -1,0 +1,718 @@
+{
+  "title": "SimpleRobot Programming Manual",
+  "subtitle": "Blocks and Simple Robot Script — concepts, instruction reference, functions and error codes",
+  "languageVersion": 1,
+  "reference": "reference.json",
+  "parts": [
+    {
+      "id": "part-concepts",
+      "title": "Part I — Concepts",
+      "chapters": [
+        "intro",
+        "structure",
+        "data",
+        "expressions",
+        "points",
+        "motion",
+        "io",
+        "flow",
+        "routines",
+        "errors",
+        "running",
+        "background",
+        "vision",
+        "comms",
+        "plugins"
+      ]
+    },
+    {
+      "id": "part-reference",
+      "title": "Part II — Reference",
+      "chapters": [
+        "instructions",
+        "functions",
+        "error-codes"
+      ]
+    },
+    {
+      "id": "part-appendices",
+      "title": "Appendices",
+      "chapters": [
+        "grammar",
+        "keywords",
+        "quick-reference"
+      ]
+    }
+  ],
+  "chapters": [
+    {
+      "id": "intro",
+      "number": "1",
+      "title": "Introduction",
+      "file": "chapters/01-introduction.md"
+    },
+    {
+      "id": "structure",
+      "number": "2",
+      "title": "Program Structure",
+      "file": "chapters/02-program-structure.md"
+    },
+    {
+      "id": "data",
+      "number": "3",
+      "title": "Data and Variables",
+      "file": "chapters/03-data-and-variables.md"
+    },
+    {
+      "id": "expressions",
+      "number": "4",
+      "title": "Expressions and Conditions",
+      "file": "chapters/04-expressions.md"
+    },
+    {
+      "id": "points",
+      "number": "5",
+      "title": "Points, Frames and Tools",
+      "file": "chapters/05-points-frames-tools.md"
+    },
+    {
+      "id": "motion",
+      "number": "6",
+      "title": "Motion",
+      "file": "chapters/06-motion.md"
+    },
+    {
+      "id": "io",
+      "number": "7",
+      "title": "I/O, Waits and Aux Axes",
+      "file": "chapters/07-io-and-timing.md"
+    },
+    {
+      "id": "flow",
+      "number": "8",
+      "title": "Flow Control",
+      "file": "chapters/08-flow-control.md"
+    },
+    {
+      "id": "routines",
+      "number": "9",
+      "title": "Routines and Parameters",
+      "file": "chapters/09-routines.md"
+    },
+    {
+      "id": "errors",
+      "number": "10",
+      "title": "Error Handling",
+      "file": "chapters/10-error-handling.md"
+    },
+    {
+      "id": "running",
+      "number": "11",
+      "title": "Running and Debugging",
+      "file": "chapters/11-running-and-debugging.md"
+    },
+    {
+      "id": "background",
+      "number": "12",
+      "title": "Background Programs",
+      "file": "chapters/12-background-programs.md"
+    },
+    {
+      "id": "vision",
+      "number": "13",
+      "title": "Vision",
+      "file": "chapters/13-vision.md"
+    },
+    {
+      "id": "comms",
+      "number": "14",
+      "title": "Operator Prompts and Communication",
+      "file": "chapters/14-communication-and-prompts.md"
+    },
+    {
+      "id": "plugins",
+      "number": "15",
+      "title": "Plugins",
+      "file": "chapters/15-plugins.md"
+    },
+    {
+      "id": "instructions",
+      "number": "16",
+      "title": "Instruction Reference",
+      "file": "chapters/16-instructions.md",
+      "generated": "steps"
+    },
+    {
+      "id": "functions",
+      "number": "17",
+      "title": "Functions and Properties Reference",
+      "file": "chapters/17-functions.md",
+      "generated": "functions"
+    },
+    {
+      "id": "error-codes",
+      "number": "18",
+      "title": "Error and Problem Codes",
+      "file": "chapters/18-error-codes.md",
+      "generated": "errorCodes"
+    },
+    {
+      "id": "grammar",
+      "number": "A",
+      "title": "Simple Robot Script Grammar",
+      "file": "chapters/A-grammar.md"
+    },
+    {
+      "id": "keywords",
+      "number": "B",
+      "title": "Keyword List",
+      "file": "chapters/B-keywords.md",
+      "generated": "keywords"
+    },
+    {
+      "id": "quick-reference",
+      "number": "C",
+      "title": "Quick Reference Cards",
+      "file": "chapters/C-quick-reference.md"
+    }
+  ],
+  "figures": [
+    {
+      "id": "ecosystem",
+      "file": "figures/ecosystem.svg",
+      "caption": "One program, two views: the app edits it, the controller stores, checks and runs it.",
+      "width": 760,
+      "height": 330
+    },
+    {
+      "id": "round-trip",
+      "file": "figures/round-trip.svg",
+      "caption": "Blocks and text are two views of the same stored program. Switching views never loses a field or a step id.",
+      "width": 760,
+      "height": 220
+    },
+    {
+      "id": "program-anatomy",
+      "file": "figures/program-anatomy.svg",
+      "caption": "Program kinds: a main program calls routines and starts background programs.",
+      "width": 760,
+      "height": 300
+    },
+    {
+      "id": "variable-scopes",
+      "file": "figures/variable-scopes.svg",
+      "caption": "Where a variable lives: the global store is shared by every running program; a program's variables (and its routines' parameters) belong to its run.",
+      "width": 760,
+      "height": 330
+    },
+    {
+      "id": "frames",
+      "file": "figures/frames.svg",
+      "caption": "Coordinate frames. Left (top view): the world frame and a local frame (Fixture1) offset and turned 15°; a point taught in the local frame moves with it. Right (side view): the tool frame puts the TCP at the gripper tip.",
+      "width": 760,
+      "height": 320
+    },
+    {
+      "id": "target-modifiers",
+      "file": "figures/target-modifiers.svg",
+      "caption": "How a move target is built: the base target, then offset, then override, all in the active (or step) local frame; the tool offset applies in the tool frame at the end.",
+      "width": 780,
+      "height": 210
+    },
+    {
+      "id": "grid-stack",
+      "file": "figures/grid-stack.svg",
+      "caption": "A grid addresses cells by [row, col] or by index (row-major: index = row × columns + col). A stack addresses slots base + index × offset.",
+      "width": 760,
+      "height": 300
+    },
+    {
+      "id": "linear-vs-joint",
+      "file": "figures/linear-vs-joint.svg",
+      "caption": "Move Linear keeps the tool on a straight line; Move Joint moves every joint proportionally, so the tool follows a curve — usually faster in open space.",
+      "width": 700,
+      "height": 260
+    },
+    {
+      "id": "speed-profile",
+      "file": "figures/speed-profile.svg",
+      "caption": "A move ramps up at accel, cruises at speed, and ramps down at decel. A short move never reaches full speed (dashed). Program speeds are scaled by the speed override × Set Speed Factor.",
+      "width": 700,
+      "height": 260
+    },
+    {
+      "id": "blending",
+      "file": "figures/blending.svg",
+      "caption": "Without blending the robot stops exactly on each point. With a blend radius it rounds the corner inside the radius and never stops.",
+      "width": 720,
+      "height": 260
+    },
+    {
+      "id": "arc-via",
+      "file": "figures/arc-via.svg",
+      "caption": "Move Arc follows the circle through the start, the via point and the end. It is cut into chords within tolerance= of the true arc and run as one continuous path.",
+      "width": 620,
+      "height": 270
+    },
+    {
+      "id": "jump",
+      "file": "figures/jump.svg",
+      "caption": "Jump (side view): lift straight up to zStart, traverse to above the target at zEnd, lower onto the target. z= sets both heights; the heights are absolute Z values.",
+      "width": 720,
+      "height": 280
+    },
+    {
+      "id": "stop-condition",
+      "file": "figures/stop-condition.svg",
+      "caption": "A move with a stop condition: the condition is checked every tick. stop ends the move where it is; record lets it finish and stores the pose where the condition first held.",
+      "width": 760,
+      "height": 300
+    },
+    {
+      "id": "io-pulse",
+      "file": "figures/io-pulse.svg",
+      "caption": "Set Output with pulse=250ms. blocking=on holds the program until the output has flipped back; without it the next step starts at once and the flip-back happens in the background.",
+      "width": 760,
+      "height": 300
+    },
+    {
+      "id": "io-wait",
+      "file": "figures/io-wait.svg",
+      "caption": "Wait until <condition>, timeout=5s. If the input comes on in time the program continues; otherwise timedOut= is set to 1 and onTimeout decides: continue (default) or fail with waitTimeout.",
+      "width": 760,
+      "height": 280
+    },
+    {
+      "id": "flow-if",
+      "file": "figures/flow-if.svg",
+      "caption": "if / elif / else: conditions are tested top to bottom; the first that holds runs its branch, then execution continues after end.",
+      "width": 720,
+      "height": 330
+    },
+    {
+      "id": "flow-switch",
+      "file": "figures/flow-switch.svg",
+      "caption": "switch evaluates its value once and runs the first case with an equal value (no fall-through), else default.",
+      "width": 720,
+      "height": 250
+    },
+    {
+      "id": "flow-loops",
+      "file": "figures/flow-loops.svg",
+      "caption": "The three loop forms. break leaves the loop at once; continue skips to the next pass.",
+      "width": 760,
+      "height": 290
+    },
+    {
+      "id": "flow-try",
+      "file": "figures/flow-try.svg",
+      "caption": "try retry=2: a catchable failure abandons the body and runs it again until the retries are used up; then the catch steps run with the message and code. Fatal errors and codes not in only=(…) go outward.",
+      "width": 760,
+      "height": 420
+    },
+    {
+      "id": "error-propagation",
+      "file": "figures/error-propagation.svg",
+      "caption": "A catchable error travels outward from the failing step — through loops, branches and called routines — to the nearest Try that catches its code. With none, the program ends with Error.",
+      "width": 760,
+      "height": 270
+    },
+    {
+      "id": "routine-params",
+      "file": "figures/routine-params.svg",
+      "caption": "Calling a routine: in / inout arguments are evaluated in the caller, then copied into the parameters; when the routine ends (or returns), out / inout parameters are copied back.",
+      "width": 760,
+      "height": 260
+    },
+    {
+      "id": "run-states",
+      "file": "figures/run-states.svg",
+      "caption": "Program states. Stop, a Pause Program step, a breakpoint or step mode all pause the run (Stopped) with its place kept; Continue resumes, Step runs one step and pauses again.",
+      "width": 760,
+      "height": 320
+    },
+    {
+      "id": "background-timeline",
+      "file": "figures/background-timeline.svg",
+      "caption": "A background program runs beside the main program. It shares global variables and IO, skips motion, tool and homing steps, and can be stopped or waited for.",
+      "width": 760,
+      "height": 230
+    },
+    {
+      "id": "vision-frames",
+      "file": "figures/vision-frames.svg",
+      "caption": "RunVision frame=: positions in pixels (origin top-left, y down), normalized 0–1, or robot millimetres on the camera's calibration plane.",
+      "width": 760,
+      "height": 260
+    },
+    {
+      "id": "plugins",
+      "file": "figures/plugins.svg",
+      "caption": "A plugin is a separate process the controller starts. It connects back over a local WebSocket and contributes steps, expression functions and live properties.",
+      "width": 760,
+      "height": 230
+    }
+  ],
+  "screens": [
+    {
+      "id": "builder",
+      "file": "screens/builder.png",
+      "caption": "The Program Builder in Blocks view: program settings and variables on the left, the steps on the right."
+    },
+    {
+      "id": "builder-phone",
+      "file": "screens/builder-phone.png",
+      "caption": "The Blocks editor on a phone."
+    },
+    {
+      "id": "editor-movel",
+      "file": "screens/editor-movel.png",
+      "caption": "The Move Linear step editor: target, then optional speed, offsets, blending and a stop condition."
+    },
+    {
+      "id": "editor-prompt",
+      "file": "screens/editor-prompt.png",
+      "caption": "The Prompt step editor: message, title, buttons and the result variable."
+    },
+    {
+      "id": "editor-setoutput",
+      "file": "screens/editor-setoutput.png",
+      "caption": "The Set Output step editor with a 250 ms blocking pulse."
+    },
+    {
+      "id": "editor-try",
+      "file": "screens/editor-try.png",
+      "caption": "The Try step editor: retries, delay, which codes to catch and where the message goes."
+    },
+    {
+      "id": "editor-wait",
+      "file": "screens/editor-wait.png",
+      "caption": "The Wait step editor in condition mode, with a timeout and a timed-out flag."
+    },
+    {
+      "id": "monitor",
+      "file": "screens/monitor.png",
+      "caption": "The monitor while a program runs: status, current step, monitor variables and the run controls."
+    },
+    {
+      "id": "monitor-breakpoint",
+      "file": "screens/monitor-breakpoint.png",
+      "caption": "Paused at a breakpoint: the pause reason is shown, with Continue, Step and Stop."
+    },
+    {
+      "id": "prompt-dialog",
+      "file": "screens/prompt-dialog.png",
+      "caption": "A Prompt step shows its dialog on whatever screen the operator is on."
+    },
+    {
+      "id": "ref-AuxContinuous",
+      "file": "screens/ref-AuxContinuous.png",
+      "caption": "Aux Continuous Run in the Blocks editor"
+    },
+    {
+      "id": "ref-AuxEnable",
+      "file": "screens/ref-AuxEnable.png",
+      "caption": "Aux Motor Enable in the Blocks editor"
+    },
+    {
+      "id": "ref-AuxMove",
+      "file": "screens/ref-AuxMove.png",
+      "caption": "Aux Move in the Blocks editor"
+    },
+    {
+      "id": "ref-AuxStop",
+      "file": "screens/ref-AuxStop.png",
+      "caption": "Aux Stop in the Blocks editor"
+    },
+    {
+      "id": "ref-CallRoutine",
+      "file": "screens/ref-CallRoutine.png",
+      "caption": "Call Routine in the Blocks editor"
+    },
+    {
+      "id": "ref-CaptureImage",
+      "file": "screens/ref-CaptureImage.png",
+      "caption": "Capture Image in the Blocks editor"
+    },
+    {
+      "id": "ref-ClearLocal",
+      "file": "screens/ref-ClearLocal.png",
+      "caption": "Clear Local in the Blocks editor"
+    },
+    {
+      "id": "ref-CncProgram",
+      "file": "screens/ref-CncProgram.png",
+      "caption": "CNC Program in the Blocks editor"
+    },
+    {
+      "id": "ref-ConveyorAction",
+      "file": "screens/ref-ConveyorAction.png",
+      "caption": "Conveyor in the Blocks editor"
+    },
+    {
+      "id": "ref-EndProgram",
+      "file": "screens/ref-EndProgram.png",
+      "caption": "End Program in the Blocks editor"
+    },
+    {
+      "id": "ref-ExportData",
+      "file": "screens/ref-ExportData.png",
+      "caption": "Export Data in the Blocks editor"
+    },
+    {
+      "id": "ref-GoToLabel",
+      "file": "screens/ref-GoToLabel.png",
+      "caption": "Go To Label in the Blocks editor"
+    },
+    {
+      "id": "ref-GripperAction",
+      "file": "screens/ref-GripperAction.png",
+      "caption": "Gripper in the Blocks editor"
+    },
+    {
+      "id": "ref-HttpReceive",
+      "file": "screens/ref-HttpReceive.png",
+      "caption": "HTTP Receive in the Blocks editor"
+    },
+    {
+      "id": "ref-HttpRequest",
+      "file": "screens/ref-HttpRequest.png",
+      "caption": "HTTP Request in the Blocks editor"
+    },
+    {
+      "id": "ref-IfCondition",
+      "file": "screens/ref-IfCondition.png",
+      "caption": "If Condition in the Blocks editor"
+    },
+    {
+      "id": "ref-JumpJ",
+      "file": "screens/ref-JumpJ.png",
+      "caption": "Jump Joint in the Blocks editor"
+    },
+    {
+      "id": "ref-JumpL",
+      "file": "screens/ref-JumpL.png",
+      "caption": "Jump Linear in the Blocks editor"
+    },
+    {
+      "id": "ref-Label",
+      "file": "screens/ref-Label.png",
+      "caption": "Label in the Blocks editor"
+    },
+    {
+      "id": "ref-ListOp",
+      "file": "screens/ref-ListOp.png",
+      "caption": "List in the Blocks editor"
+    },
+    {
+      "id": "ref-Loop",
+      "file": "screens/ref-Loop.png",
+      "caption": "Loop in the Blocks editor"
+    },
+    {
+      "id": "ref-LoopControl",
+      "file": "screens/ref-LoopControl.png",
+      "caption": "Break / Next in the Blocks editor"
+    },
+    {
+      "id": "ref-MoveC",
+      "file": "screens/ref-MoveC.png",
+      "caption": "Move Arc in the Blocks editor"
+    },
+    {
+      "id": "ref-MoveJ",
+      "file": "screens/ref-MoveJ.png",
+      "caption": "Move Joint in the Blocks editor"
+    },
+    {
+      "id": "ref-MoveL",
+      "file": "screens/ref-MoveL.png",
+      "caption": "Move Linear in the Blocks editor"
+    },
+    {
+      "id": "ref-Note",
+      "file": "screens/ref-Note.png",
+      "caption": "Note in the Blocks editor"
+    },
+    {
+      "id": "ref-PauseProgram",
+      "file": "screens/ref-PauseProgram.png",
+      "caption": "Pause Program in the Blocks editor"
+    },
+    {
+      "id": "ref-Plugin",
+      "file": "screens/ref-Plugin.png",
+      "caption": "Plugin in the Blocks editor"
+    },
+    {
+      "id": "ref-Prompt",
+      "file": "screens/ref-Prompt.png",
+      "caption": "Prompt in the Blocks editor"
+    },
+    {
+      "id": "ref-RaiseError",
+      "file": "screens/ref-RaiseError.png",
+      "caption": "Raise Error in the Blocks editor"
+    },
+    {
+      "id": "ref-ReadLoadCell",
+      "file": "screens/ref-ReadLoadCell.png",
+      "caption": "Read Load Cell in the Blocks editor"
+    },
+    {
+      "id": "ref-Return",
+      "file": "screens/ref-Return.png",
+      "caption": "Return in the Blocks editor"
+    },
+    {
+      "id": "ref-RotaryIndex",
+      "file": "screens/ref-RotaryIndex.png",
+      "caption": "Rotary Index in the Blocks editor"
+    },
+    {
+      "id": "ref-RunHoming",
+      "file": "screens/ref-RunHoming.png",
+      "caption": "Run Homing in the Blocks editor"
+    },
+    {
+      "id": "ref-RunVision",
+      "file": "screens/ref-RunVision.png",
+      "caption": "Run Vision in the Blocks editor"
+    },
+    {
+      "id": "ref-SaveImage",
+      "file": "screens/ref-SaveImage.png",
+      "caption": "Save Image in the Blocks editor"
+    },
+    {
+      "id": "ref-SavePosition",
+      "file": "screens/ref-SavePosition.png",
+      "caption": "Save Position in the Blocks editor"
+    },
+    {
+      "id": "ref-SetBlendRadius",
+      "file": "screens/ref-SetBlendRadius.png",
+      "caption": "Set Blend Radius in the Blocks editor"
+    },
+    {
+      "id": "ref-SetJointPosition",
+      "file": "screens/ref-SetJointPosition.png",
+      "caption": "Set Joint Position in the Blocks editor"
+    },
+    {
+      "id": "ref-SetLocal",
+      "file": "screens/ref-SetLocal.png",
+      "caption": "Set Local in the Blocks editor"
+    },
+    {
+      "id": "ref-SetOutput",
+      "file": "screens/ref-SetOutput.png",
+      "caption": "Set Output in the Blocks editor"
+    },
+    {
+      "id": "ref-SetSpeedFactor",
+      "file": "screens/ref-SetSpeedFactor.png",
+      "caption": "Set Speed Factor in the Blocks editor"
+    },
+    {
+      "id": "ref-SetSpeedJ",
+      "file": "screens/ref-SetSpeedJ.png",
+      "caption": "Set Speed (Joint) in the Blocks editor"
+    },
+    {
+      "id": "ref-SetSpeedL",
+      "file": "screens/ref-SetSpeedL.png",
+      "caption": "Set Speed (Linear) in the Blocks editor"
+    },
+    {
+      "id": "ref-SetTool",
+      "file": "screens/ref-SetTool.png",
+      "caption": "Set Tool in the Blocks editor"
+    },
+    {
+      "id": "ref-SetVariable",
+      "file": "screens/ref-SetVariable.png",
+      "caption": "Set Variable in the Blocks editor"
+    },
+    {
+      "id": "ref-StartBackground",
+      "file": "screens/ref-StartBackground.png",
+      "caption": "Start Background in the Blocks editor"
+    },
+    {
+      "id": "ref-StartRecording",
+      "file": "screens/ref-StartRecording.png",
+      "caption": "Start Recording in the Blocks editor"
+    },
+    {
+      "id": "ref-StatusUpdate",
+      "file": "screens/ref-StatusUpdate.png",
+      "caption": "Status Update in the Blocks editor"
+    },
+    {
+      "id": "ref-StopBackground",
+      "file": "screens/ref-StopBackground.png",
+      "caption": "Stop Background in the Blocks editor"
+    },
+    {
+      "id": "ref-StopRecording",
+      "file": "screens/ref-StopRecording.png",
+      "caption": "Stop Recording in the Blocks editor"
+    },
+    {
+      "id": "ref-StopwatchControl",
+      "file": "screens/ref-StopwatchControl.png",
+      "caption": "Stopwatch in the Blocks editor"
+    },
+    {
+      "id": "ref-Switch",
+      "file": "screens/ref-Switch.png",
+      "caption": "Switch in the Blocks editor"
+    },
+    {
+      "id": "ref-Tare",
+      "file": "screens/ref-Tare.png",
+      "caption": "Tare Load Cell in the Blocks editor"
+    },
+    {
+      "id": "ref-ThreadMove",
+      "file": "screens/ref-ThreadMove.png",
+      "caption": "Thread Move in the Blocks editor"
+    },
+    {
+      "id": "ref-Try",
+      "file": "screens/ref-Try.png",
+      "caption": "Try in the Blocks editor"
+    },
+    {
+      "id": "ref-Wait",
+      "file": "screens/ref-Wait.png",
+      "caption": "Wait in the Blocks editor"
+    },
+    {
+      "id": "ref-WaitForBackground",
+      "file": "screens/ref-WaitForBackground.png",
+      "caption": "Wait for Background in the Blocks editor"
+    },
+    {
+      "id": "step-picker",
+      "file": "screens/step-picker.png",
+      "caption": "Add Step opens the step picker, grouped by category."
+    },
+    {
+      "id": "text-editor",
+      "file": "screens/text-editor.png",
+      "caption": "The same program in Text view (Simple Robot Script), with syntax colouring."
+    },
+    {
+      "id": "text-problems",
+      "file": "screens/text-problems.png",
+      "caption": "In Text view the same problems are underlined on their lines."
+    },
+    {
+      "id": "validation",
+      "file": "screens/validation.png",
+      "caption": "Problems found before a run: an unknown point (warning) and a misspelt variable (error). Tap a problem to jump to its step."
+    }
+  ]
+}

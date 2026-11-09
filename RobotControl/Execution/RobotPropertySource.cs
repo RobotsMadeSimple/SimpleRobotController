@@ -28,14 +28,21 @@ namespace Controller.RobotControl.Execution
     {
         private readonly RobotController? _robot;
         private readonly IProgramRunInfo? _run;
+        private readonly IPropertySource? _plugins;
 
         /// <param name="robot">Null in tests / offline: <c>$robot.*</c> and <c>$aux.*</c> are then unknown.</param>
         /// <param name="run">Null when evaluating outside a program: <c>$program.*</c> reads 0.</param>
-        public RobotPropertySource(RobotController? robot, IProgramRunInfo? run)
+        /// <param name="plugins">Plugin properties (<c>$scale.weight</c>), consulted first — the chain
+        /// is computed → plugin → robot. Null: the robot's <see cref="RobotController.PluginManager"/>
+        /// (read at lookup time), or none without a robot.</param>
+        public RobotPropertySource(RobotController? robot, IProgramRunInfo? run, IPropertySource? plugins = null)
         {
-            _robot = robot;
-            _run   = run;
+            _robot   = robot;
+            _run     = run;
+            _plugins = plugins;
         }
+
+        private IPropertySource? Plugins => _plugins ?? _robot?.PluginManager?.Properties;
 
         private enum Group { Robot, Program, Time }
 
@@ -85,6 +92,8 @@ namespace Controller.RobotControl.Execution
             new("program.stepCount", "Total steps in this run",                 "number", Group.Program, Program: p => p.StepCount),
             new("program.elapsedMs", "Milliseconds since this run started",     "number", Group.Program, Program: p => p.ElapsedMs),
             new("program.loopDepth", "Number of loops currently executing",     "number", Group.Program, Program: p => p.LoopDepth),
+            new("program.speedFactor", "This program's Set Speed Factor (percent, 100 = full speed)", "number", Group.Program,
+                Program: p => p is ExecutionContext ctx ? ctx.Motion.SpeedFactorPercent : 100),
 
             new("time.now",       "Unix time in milliseconds",           "number", Group.Time, Time: () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
             new("time.hour",      "Local hour (0–23)",                   "number", Group.Time, Time: () => DateTime.Now.Hour),
@@ -102,7 +111,7 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>The first segment of every property name — a <c>$name.…</c> starting with one of these is a property reference.</summary>
         public static readonly IReadOnlySet<string> Roots =
-            new HashSet<string>(["robot", "program", "time", "aux", "camera"], StringComparer.OrdinalIgnoreCase);
+            new HashSet<string>(["robot", "program", "time", "aux", "camera", "device"], StringComparer.OrdinalIgnoreCase);
 
         public bool TryGet(string name, out double value)
         {
@@ -131,6 +140,14 @@ namespace Controller.RobotControl.Execution
             if (name.StartsWith("camera.", StringComparison.OrdinalIgnoreCase))
                 return TryGetCamera(name, out value);
 
+            if (name.StartsWith("device.", StringComparison.OrdinalIgnoreCase))
+                return TryGetDevice(name, out value);
+
+            // $<pluginId>.<name>. Plugin ids can never be one of the roots above (manifest
+            // rule), so asking after them is the documented computed → plugin → robot order
+            // without a plugin lookup on every $robot.x read.
+            if (Plugins is { } plugins) return plugins.TryGet(name, out value);
+
             value = 0;
             return false;
         }
@@ -153,6 +170,19 @@ namespace Controller.RobotControl.Execution
 
         private IEnumerable<string> CameraIds() =>
             _robot?.CameraManager?.GetState().Select(s => s.Id) ?? [];
+
+        // $device.<deviceId>.<channel>  — a value a phone/client pushed over /devices/{id}/ingest.
+        // The device id is the first segment (ids never contain dots); the channel is the rest,
+        // so a dotted channel like "accel.x" stays intact.
+        private bool TryGetDevice(string name, out double value)
+        {
+            value = 0;
+            if (_robot?.DeviceManager is not { } mgr) return false;
+            var rest = name["device.".Length..];
+            int dot = rest.IndexOf('.');
+            if (dot <= 0 || dot == rest.Length - 1) return false;
+            return mgr.TryGetChannel(rest[..dot], rest[(dot + 1)..], out value);
+        }
 
         // $aux.<deviceId>.<axisIndex>.position  and  $aux.<deviceId>.moving
         private bool TryGetAux(string name, out double value)
@@ -207,6 +237,12 @@ namespace Controller.RobotControl.Execution
 
             foreach (var id in CameraIds())
                 yield return ($"camera.{id}.calibrated", $"1 when camera '{id}' has a camera-to-robot calibration", "boolean");
+
+            if (_robot.DeviceManager is { } devices)
+                foreach (var (id, channel, unit) in devices.ListChannels())
+                    yield return ($"device.{id}.{channel}",
+                                  string.IsNullOrEmpty(unit) ? $"Phone channel '{channel}'" : $"Phone channel '{channel}' ({unit})",
+                                  "number");
         }
     }
 }

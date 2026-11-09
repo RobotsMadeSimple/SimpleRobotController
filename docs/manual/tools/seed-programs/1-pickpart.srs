@@ -1,0 +1,11 @@
+#!srs 1
+@program {"name": "PickPart", "isRoutine": true, "description": "Pick one part from the supply stack"}
+param in slot = 0
+param out picked: bool = off
+
+MoveJ Approach
+JumpL stack Bins[$slot], z=40, speed=150
+GripperAction close
+Wait 200ms
+MoveL here, offset=(z=30), speed=100
+$picked = true

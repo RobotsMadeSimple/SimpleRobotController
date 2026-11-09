@@ -201,6 +201,13 @@ public class ProgramVariable
     /// <summary>When true, the current runtime value of this variable is shown on the monitor page while the program runs.</summary>
     [JsonPropertyName("displayOnMonitor")]
     public bool? DisplayOnMonitor { get; set; }
+    /// <summary>
+    /// When true, a program display page may seed this variable's value at launch — StartProgram
+    /// carries a <c>variables</c> map that overrides the declared initial value before the run.
+    /// Only scalars/booleans/strings are seedable (not lists, images or computed variables).
+    /// </summary>
+    [JsonPropertyName("isInput")]
+    public bool? IsInput { get; set; }
     /// <summary>When true, this variable is a stopwatch; its value holds elapsed milliseconds at runtime.</summary>
     [JsonPropertyName("isStopwatch")]
     public bool? IsStopwatch { get; set; }
@@ -226,6 +233,22 @@ public class ProgramVariable
     /// </summary>
     [JsonPropertyName("isComputed")]
     public bool? IsComputed { get; set; }
+
+    /// <summary>
+    /// On a routine's variables: makes the variable a parameter — "in" (set from the caller's
+    /// argument before the routine runs), "out" (copied to the caller's mapped variable when it
+    /// returns) or "inOut" (both). Null = not a parameter. See docs/program-language.md §4.2.
+    /// </summary>
+    [JsonPropertyName("paramMode")]
+    public string? ParamMode { get; set; }
+}
+
+/// <summary>The <see cref="ProgramVariable.ParamMode"/> values.</summary>
+public static class ParamModes
+{
+    public const string In    = "in";
+    public const string Out   = "out";
+    public const string InOut = "inOut";
 }
 
 

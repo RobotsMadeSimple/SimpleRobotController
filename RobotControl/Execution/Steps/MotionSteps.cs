@@ -49,8 +49,10 @@ namespace Controller.RobotControl.Execution
             bool hasToolOffset = MoveTargetResolver.HasToolOffset(step);
 
             // Blended MoveL run: gather consecutive blendable MoveL steps into one
-            // continuous path so the robot rounds the corners instead of stopping.
-            if (step.Type == StepType.MoveL && MotionSteps.EffectivelyBlends(step, ctx) && !hasToolOffset)
+            // continuous path so the robot rounds the corners instead of stopping. A move
+            // with a stop condition never blends — its end point is decided mid-move.
+            if (step.Type == StepType.MoveL && MotionSteps.EffectivelyBlends(step, ctx) && !hasToolOffset
+                && !MoveStopConditions.HasCondition(step))
             {
                 if (TryDispatchBlendedRun(step, target, frame, ctx) is { } outcome) return outcome;
             }
@@ -82,6 +84,7 @@ namespace Controller.RobotControl.Execution
 
             ctx.Motion.Enqueue(cmd);
             ctx.AwaitMove(step, frame);
+            ctx.ArmMoveWatch(step);
             return StepOutcome.Yield;
         }
 
@@ -100,11 +103,17 @@ namespace Controller.RobotControl.Execution
             while (prevBlend && j < steps.Count)
             {
                 var nxt = steps[j];
-                // Only plain MoveL steps without a per-step tool offset can join the path.
-                if (nxt.Type != StepType.MoveL || MoveTargetResolver.HasToolOffset(nxt)) break;
+                // Only plain MoveL steps without a per-step tool offset or a stop condition can
+                // join the path (a watched move must be dispatched on its own).
+                // A disabled move is not part of the path (the executor skips it on its own).
+                if (nxt.Type != StepType.MoveL || !nxt.IsEnabled || MoveTargetResolver.HasToolOffset(nxt)
+                    || MoveStopConditions.HasCondition(nxt)) break;
                 // Resolve relative to the previous waypoint so "current position" moves chain
                 // off where the robot actually ends up, not where the blend started.
-                if (!ctx.ResolveMoveTarget(nxt, out Vector6 t, waypoints[^1])) return StepOutcome.Finished;
+                // A later move whose target does not resolve ends the run before it: the moves
+                // up to it still blend, and it then fails on its own turn (where a Try around
+                // it, or the error message, points at the right step).
+                if (!ctx.TryResolveMoveTarget(nxt, out Vector6 t, out _, waypoints[^1])) break;
                 run.Add(nxt);
                 waypoints.Add(t);
                 // A blend-on move with a zero radius stops here (terminates the run).
@@ -113,6 +122,8 @@ namespace Controller.RobotControl.Execution
             }
 
             if (run.Count < 2) return null; // only one move — nothing to blend
+            // The last move of a run cut short above was meant to blend into the next one; it
+            // now ends the run, so it is an exact stop (radius 0 below) — as at any run end.
 
             // Corner radius at waypoint k comes from the move arriving there; the final
             // waypoint is always an exact stop.
@@ -191,10 +202,16 @@ namespace Controller.RobotControl.Execution
                 jump.Accel    = ev.OptionalField(step, "accel", step.Accel);
                 jump.Decel    = ev.OptionalField(step, "decel", step.Decel);
 
+                // The stop condition spans every leg: armed once here, evaluated by the
+                // executor until the last leg completes (or the move is stopped).
+                ctx.ArmMoveWatch(step);
+
                 // Blended JumpL: run lift → traverse → lower as one continuous path,
                 // rounding the two apex corners instead of stopping at each leg. (JumpJ's
-                // traverse is a joint move, so it keeps the stepped behaviour for now.)
-                if (step.Type == StepType.JumpL && MotionSteps.EffectivelyBlends(step, ctx))
+                // traverse is a joint move, so it keeps the stepped behaviour for now; a
+                // JumpL with a stop condition takes the stepped path too.)
+                if (step.Type == StepType.JumpL && MotionSteps.EffectivelyBlends(step, ctx)
+                    && !MoveStopConditions.HasCondition(step))
                 {
                     double r = MotionSteps.EffectiveBlendRadius(step, ctx);
                     var s = jump.StartPos;
@@ -398,7 +415,10 @@ namespace Controller.RobotControl.Execution
     {
         public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
         {
-            ctx.Controller.ApplyTool(step.ToolName);
+            // Resolve by stable id first (rename-proof), fall back to the stored name. Applying by
+            // the resolved tool's current name keeps ApplyTool as the single apply primitive.
+            var tool = ctx.Controller.toolRepo.GetById(step.ToolId);
+            ctx.Controller.ApplyTool(tool?.Name ?? step.ToolName);
             return StepOutcome.Advance;
         }
     }
@@ -421,14 +441,17 @@ namespace Controller.RobotControl.Execution
     {
         public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
         {
-            if (string.IsNullOrEmpty(step.LocalName))
+            // No id and no name → clear the active local. Otherwise resolve by stable id first,
+            // falling back to the stored name (rename-proof link).
+            if (string.IsNullOrEmpty(step.LocalId) && string.IsNullOrEmpty(step.LocalName))
             {
                 ctx.ActiveLocal = null;
             }
             else
             {
-                var local = ctx.Locals.Get(step.LocalName);
-                if (local is null) return ctx.Finish(ProgramStatus.Error, $"Local not found: {step.LocalName}");
+                var local = ctx.Locals.GetById(step.LocalId)
+                    ?? (string.IsNullOrEmpty(step.LocalName) ? null : ctx.Locals.Get(step.LocalName));
+                if (local is null) return ctx.Finish(ProgramStatus.Error, $"Local not found: {step.LocalName ?? step.LocalId}");
                 ctx.ActiveLocal = new Vector6(local.X, local.Y, local.Z, local.RX, local.RY, local.RZ);
             }
             return StepOutcome.Advance;

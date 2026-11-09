@@ -118,7 +118,8 @@ status can detect a run that started and finished between two polls even
 though `status` reads `Complete` both times); `activeTool`, `activeLocal`;
 `backgroundPrograms`; repository update timestamps; `speedOverridePercent`; fault
 state `faulted, faultJoint, faultDirection, faultMessage, limitBypass`;
-`jointLimitsEnabled`, `robotType`, `version`, `isLinux`.
+`jointLimitsEnabled`, `robotType`, `version`, `isLinux`; `plugins` — one
+`{ id, name, state, statusState }` per installed plugin (see **Plugins**).
 
 ---
 
@@ -188,6 +189,11 @@ move targets (a `MoveL`/`MoveJ` `name` can be a grid/stack cell reference).
 | `GetBuiltProgramRevisions` | `name` | Returns saved snapshots for a program, newest first, in `revisions`. |
 | `GetBuiltProgramRevision` | `name, id` | Returns one saved snapshot as JSON in `program`. |
 | `RestoreBuiltProgramRevision` | `name, id` | Makes that snapshot the current content and returns it as JSON in `program`. |
+| `ValidateBuiltProgram` | `program` | `{ problems: [{ stepId, stepPath, field?, severity, code, message }] }` — codes in [`expressions-and-variables.md`](expressions-and-variables.md) §4, including the plugin codes (`unknownPlugin`, `unknownPluginStep`, `pluginNotRunning`, `pluginParamMissing`, `pluginParamEnum`, `pluginOutputType`, `unknownPluginFunction`). |
+| `FormatProgramText` | `program, includeIds?, includeHeader?` | The program as Simple Robot Script: `{ text, languageVersion, map: [{ stepId, stepPath, line, endLine }] }`. See [`program-text.md`](program-text.md). |
+| `ParseProgramText` | `text, base?, validate?` (default true) | `{ ok, program?, problems: [{ line, col, endLine, endCol, severity, code, message, stepId?, field?, source }], map }`. `ok` (the text parsed) replaces the ack's own `ok`: read problems even when it is false. `base` keeps its metadata and step ids. |
+| `EvaluateExpression` | `expression, programName?` | `{ ok, value, error?, isBoolean, code?, position? }`. Plugin functions (`scale.tare()`) and properties (`$scale.weight`) evaluate live. |
+| `GetExpressionSymbols` | `programName?` | `{ variables, properties, functions, io, plugins }`. Plugin functions are listed in `functions` as `{ name: "scale.tare", signature, description, pluginId }` and plugin properties in `properties` as `{ name: "scale.weight", description, type, pluginId, value }` (`value` null until known). `plugins: [{ id, name, running, functions: [{ name, fullName, signature, description, minArgs, maxArgs, timeoutMs }], properties: [{ name, fullName, description, type, value }] }]` — bare manifest names plus `fullName`. Additive: older clients ignore it. |
 
 ### Revision history
 
@@ -278,8 +284,11 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | `StopAux` | `deviceId?, axis?, decel=10000, immediate=false` | Stop an axis (or all); `immediate` halts without a decel ramp. |
 | `EnableAux` | `deviceId?, enable=true` | Enable/disable the stepper drivers. |
 | `SetAuxAxisConfig` | `deviceId?, axisIndex, name, stepsPerRev=1600, invertDirection, axisType, gearRatio=1, mmPerRev` | Configure an aux channel's physical units. |
-| `GetAuxState` | — | Returns per-axis live state (`state` JSON). |
+| `GetAuxState` | — | Returns per-device live state (`state` JSON): `connected, motorEnabled, deviceId, deviceName, portName, firmwareVersion, capabilities, axes[]`. See [Arduino firmware handshake](#arduino-firmware-handshake--capabilities). |
 | `GetAuxConfig` | — | Returns aux configuration (`config` JSON). |
+
+`MoveAux`/`JogAux` are refused (ack error) on a board whose firmware reports no `stepper`
+capability — see the handshake section below.
 
 ---
 
@@ -288,7 +297,7 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | Command | Params | Description |
 |---|---|---|
 | `SetSTBOutput` | `pin, value` | Set an STB digital output (pins 1–4). |
-| `GetIO` | — | Returns Nano card states (`nanos`) and relay state (`relay`). |
+| `GetIO` | — | Returns IO device states (`ioDevices` JSON: one row per Nano **and** per aux-stepper board, each `id, name, connected, firmwareVersion, capabilities, pins[]` — an aux board is listed even with no pins yet) and relay state (`relay`). The same `ioDevices` string rides in every `GetStatus` broadcast. |
 | `SetNanoOutput` | `nanoId, pin, value` | Set a Nano output pin. |
 | `SetNeoPixel` | `nanoId, pin, colors: [{r,g,b}, …]` | Set a NeoPixel strip's colors (one entry per pixel). |
 | `RenameNanoPin` | `nanoId, pin, name` | Give a Nano pin a friendly name. |
@@ -296,6 +305,45 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | `SetRelay` | `relay` (1–4), `value` | Set a USB relay channel. |
 | `RenameRelay` | `relay` (1–4), `name` | Name a relay channel. |
 | `GetRelayState` | — | Returns relay board state (`connected, serial, relays[], names[]`). |
+
+### Arduino firmware handshake + capabilities
+
+Every Arduino serial device (Nano edge device, aux stepper board) is discovered by
+probing COM ports with `ID?`. The reply identifies the board and, from firmware 1.1.0,
+what it can do:
+
+```
+ID:<DEVICE_ID>                                  legacy (pre-1.1.0)
+ID:<DEVICE_ID>;fw=<major.minor.patch>;caps=<cap1,cap2,...>
+```
+
+e.g. `ID:ROBOT_NANO_001;fw=1.1.0;caps=io,neopixel,loadcell` or
+`ID:AUX_STEPPER_001;fw=1.1.0;caps=stepper,io`. The id must match exactly; unknown
+`key=value` fields and surrounding whitespace are ignored. Capability names:
+
+| Capability | Meaning | Sketch |
+|---|---|---|
+| `io` | digital input/output pins (`CFG`/`SET`/`GET`) | NanoEdgeDevice, AuxStepperDriver |
+| `neopixel` | NeoPixel strips (`NEO`) | NanoEdgeDevice |
+| `loadcell` | HX711 load cell | NanoEdgeDevice |
+| `stepper` | stepper motion (`M`/`C`/`S`) | AuxStepperDriver |
+
+The controller exposes the result on every device row — `firmwareVersion` (`""` when
+unknown) and `capabilities` (string array, or `null` when unknown) — in `GetIO`
+`ioDevices`, `GetStatus` `ioDevices` and `GetAuxState`. Both are reset when the board
+disconnects, and the connect log line reads
+`[Nano:ROBOT_NANO_001] Connected on COM4 — firmware 1.1.0 (io, loadcell, neopixel)`
+or `… — firmware unknown (legacy, pre-1.1.0)`.
+
+**Gating rule.** When capabilities are known, a command that needs one the board lacks
+is refused with an ack error naming the device, its version and what to flash, e.g.
+`Load cell not supported by ROBOT_NANO_001 firmware 1.0.0 — flash NanoEdgeDevice 1.1.0 or newer`.
+When capabilities are unknown (legacy firmware) nothing is blocked — the boards in the
+field today are legacy — and the app should use the empty `firmwareVersion` to hint
+"update firmware". Gated commands: `ConfigureLoadCell` (`loadcell`), `ConfigureIoPin`
+with `type: "Neopixel"` and `SetNeoPixel` (`neopixel`), `ConfigureIoPin` with
+`Input`/`Output` and `SetIoOutput` (`io`, Nano or aux board), `MoveAux`/`JogAux`
+(`stepper`). Removing a pin (`type: "Unconfigured"`) is never gated.
 
 ---
 
@@ -437,16 +485,31 @@ when not calibrated). Programs read `$camera.<id>.calibrated` (1/0).
 
 ## Vision
 
+A vision program is image layers (filter stacks) plus a list of building-block tools —
+the model, every tool and the result shape are in [vision-tools.md](vision-tools.md).
+
 | Command | Params | Description |
 |---|---|---|
-| `GetVisionPrograms` | — | Returns vision programs and `runningIds`. |
+| `GetVisionPrograms` | — | Returns vision programs (JSON string in `programs`) and `runningIds`. |
 | `SaveVisionProgram` | a vision-program object | Create/update a vision program (auto-assigns `id` if empty). |
 | `DeleteVisionProgram` | `id` | Stop and delete a vision program. |
-| `StartVision` | `id` | Start a vision program. |
+| `StartVision` | `id` | Start a vision program on its camera. |
 | `StopVision` | `id` | Stop a vision program. |
-| `GetVisionResult` | `id` | Latest inspection result (live if running, else the last captured). |
+| `GetVisionResult` | `id` | Latest `VisionResult` (JSON string in `result`): live if running, else the last one from a RunVision step or `RunVisionOnImage`. |
+| `RunVisionOnImage` | `programId` or `program`, `image` (base64 PNG/JPEG, data URL ok), optional `includeAnnotated` | Runs the program once on the image. Returns `result` (JSON string) and, when asked, `annotated` (base64 JPEG). With a saved `programId`, a fixture reference captured on this run is saved and the result becomes the program's latest. |
+| `SetVisionToolReference` | `programId`, `toolId`, optional `clear` | Sets a pose tool's `reference` to the pose it found in the program's latest result (start the program or run it on an image first), or clears it with `clear: true` (it is then captured again on the next successful run). Saves the program; returns `reference` (JSON string). Errors when the tool makes no pose or found nothing. |
+| `TeachVisionTool` | `programId`, `toolId`, optional `image`, `region`, `preview` | Teaches a `patternMatch` (gray patch) or `contourMatch` (outline) tool from its region — or from `region` (normalized, no fixture; a rotated rect teaches the pattern's 0° angle): on `image`, else the program's newest camera frame. Earlier tools run first, so a fixtured region is cut where its fixture puts it. Stores `params.template`, saves the program and returns a `taught` summary, the `template` (JSON) and, for patternMatch, a `preview` PNG (base64). With `preview: true` nothing is changed or saved. |
 
-Annotated vision frames stream over `GET /vision/{id}/ws`.
+HTTP (JPEG unless noted; 404 for an unknown program/layer/tool, 204 while there is no frame):
+
+| Endpoint | Description |
+|---|---|
+| `GET /vision/{id}/ws` | WebSocket stream of annotated frames (base64 data URIs) of a running program. |
+| `GET /vision/{id}/snapshot` | The running program's latest raw frame. |
+| `GET /vision/{id}/annotated` | The running program's latest annotated frame. |
+| `GET /vision/{id}/layer/{layerId}?upTo=N` | Layer preview for tuning: the layer's filters applied up to and including index `N` (omit for all, `-1` for the layer's input), on the program's newest frame (its processor's, else its camera's). `layerId` `camera` = the frame itself. |
+| `GET /vision/{id}/tool/{toolId}/debug` | One tool's result (region, cells, edges, lines, pose) drawn over the tool's own input layer, with its status. Uses the running processor's latest result, else runs the program once on the camera's frame. |
+| `GET /program-vision-snapshot/{visionProgramId}` | Annotated frame captured at the end of the last RunVision step. |
 
 ---
 
@@ -455,6 +518,55 @@ Annotated vision frames stream over `GET /vision/{id}/ws`.
 | Command | Params | Description |
 |---|---|---|
 | `GetCncToolpath` | — | The resolved toolpath (anchor + variables applied) of the CNC block currently executing, or `null`. Returns `programName, paths, holes`. |
+
+---
+
+## Plugins
+
+External plugin processes the controller launches and supervises. The full
+contract (manifest, lifecycle, the plugin-side protocol, SDKs) is
+[`plugins.md`](plugins.md); this is the app-facing command set. Every command
+taking `id` answers `ok:false, error:"unknownPlugin"` for an id that is not
+installed.
+
+| Command | Params | Description |
+|---|---|---|
+| `GetPlugins` | — | `{ plugins: [PluginSummary] }`. |
+| `GetPlugin` | `id` | `{ plugin: PluginDetail }`. |
+| `GetPluginContributions` | — | `{ steps: [{ pluginId, pluginName, running, step }], functions: [{ pluginId, pluginName, running, function }], properties: [{ pluginId, pluginName, running, property, value? }] }` — the builder's step tiles and the expression assist in one call. |
+| `SetPluginEnabled` | `id, enabled` | `{ plugin }`. Disabling stops the plugin (state `disabled`); enabling an `autoStart` plugin starts it. Persisted. |
+| `StartPlugin` / `StopPlugin` / `RestartPlugin` | `id` | `{ plugin }`, returned immediately — poll for the state. A manual start resets the crash budget. `pluginDisabled` / `pluginError` when it cannot start. |
+| `SetPluginConfig` | `id, config` | `{ plugin }`. The whole config object, validated against the manifest's `configSchema`; on failure `ok:false, error:"badConfig", message, field` (the schema key). Persisted; a running plugin gets `config.changed`. |
+| `GetPluginLogs` | `id, start?, end?` | `{ totalCount, start, logs }` — same half-open absolute-index paging as `GetProgramLogs` (500-line ring). |
+| `ClearPluginLogs` | `id` | Empties the ring buffer (`plugin.log` on disk is kept). |
+| `UninstallPlugin` | `id` | Stops the plugin, deletes `plugins/<id>` and `pluginConfigs/<id>.json`. |
+| `ReloadPlugins` | — | `{ plugins }`. Rescans the plugins folder: new folders appear (and start), removed ones are stopped and vanish, manifests of inactive plugins reload. |
+| `RotatePluginToken` | `id` | `{ plugin }`. New connect token; an `external` plugin's live connection is closed and must reconnect with the new token. |
+
+`PluginSummary`: `id, name, version, description, author, runtime, state,
+message, enabled, connected, pid, startedUnixMs, restartCount, stepCount,
+functionCount, propertyCount, hasConfig, statusState, statusMessage`. `state` is
+one of `disabled | stopped | installing | starting | running | degraded |
+crashed | error`; `statusState` is the plugin's own `ok | degraded | error`.
+`PluginDetail` adds `manifest` (in effect, including a `plugin.ready`
+override), `config` (schema defaults merged in; passwords returned as-is),
+`token` (`external` runtime only), `properties` (live values), `logTail` (last
+50 lines) and `problems` (manifest validation problems, `{ code, message, field }`).
+
+In programs: the `Plugin` step type (`pluginId`, `pluginStepId`, `pluginParams`,
+`pluginOutputs`, `pluginTimeoutMs` — see [`program-blocks.md`](program-blocks.md#plugins)),
+plugin functions `id.name(…)` and properties `$id.name` in expressions, and the
+plugin parts of `ValidateBuiltProgram` / `GetExpressionSymbols` (Built programs, above).
+
+HTTP:
+
+- `POST /plugins/install[?replace=true]` — body is the zip. `plugin.json` must
+  be at the root or inside a single top-level folder. `200 { id, plugin }`;
+  `400 { error: "badZip" | "badManifest" | "idExists", message }`;
+  `413 { error: "tooLarge" }` above 200 MB.
+- `GET /plugins/{id}/download` — the plugin folder as a zip (without `.venv`
+  and `plugin.log*`).
+- `GET /plugin` — the WebSocket plugins connect to (not for apps).
 
 ---
 

@@ -29,7 +29,7 @@ public class SetRobotConfigParams
     [JsonPropertyName("m2Direction")]               public int?    M2Direction               { get; set; }
     [JsonPropertyName("m3Direction")]               public int?    M3Direction               { get; set; }
     [JsonPropertyName("m4Direction")]               public int?    M4Direction               { get; set; }
-    [JsonPropertyName("enableNanoCards")]           public bool?   EnableNanoCards           { get; set; }
+    [JsonPropertyName("enableIoDevices")]           public bool?   EnableIoDevices           { get; set; }
     [JsonPropertyName("enableRelayCard")]           public bool?   EnableRelayCard           { get; set; }
     [JsonPropertyName("enableAuxAxis")]             public bool?   EnableAuxAxis             { get; set; }
     [JsonPropertyName("enableCameras")]             public bool?   EnableCameras             { get; set; }

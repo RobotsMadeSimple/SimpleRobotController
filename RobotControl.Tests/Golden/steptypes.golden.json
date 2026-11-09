@@ -1,0 +1,11 @@
+[
+  "MoveL", "MoveJ", "JumpL", "JumpJ", "SetOutput", "Wait", "Loop", "StatusUpdate", "CallRoutine",
+  "SetSpeedL", "SetSpeedJ", "SetVariable", "PauseProgram", "Label", "GoToLabel", "IfCondition",
+  "SetTool", "RunHoming", "SetJointPosition", "AuxMove", "AuxContinuous", "AuxStop", "AuxEnable",
+  "GripperAction", "ConveyorAction", "RotaryIndex", "RunVision", "SetLocal", "ClearLocal",
+  "StartBackground", "StopBackground", "WaitForBackground", "StopwatchControl", "SaveImage",
+  "ThreadMove", "CncProgram", "SetBlendRadius", "HttpRequest", "CaptureImage", "HttpReceive",
+  "Plugin", "Tare", "ReadLoadCell", "StartRecording", "StopRecording", "ExportData", "Unknown",
+  "Note", "LoopControl", "Return", "EndProgram", "RaiseError", "Switch", "Try", "SavePosition",
+  "SetSpeedFactor", "ListOp", "Prompt", "MoveC"
+]

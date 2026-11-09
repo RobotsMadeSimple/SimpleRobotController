@@ -1,0 +1,9 @@
+<Project>
+  <!-- Standalone: deliberately does not inherit the controller's root Directory.Build.props (which pins net10.0). -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+  </PropertyGroup>
+</Project>

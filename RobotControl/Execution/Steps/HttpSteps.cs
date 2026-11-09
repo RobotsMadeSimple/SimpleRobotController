@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Controller.RobotControl.Programs;
 
 namespace Controller.RobotControl.Execution
 {
@@ -38,10 +39,17 @@ namespace Controller.RobotControl.Execution
 
                     if (http.PendingJsonTask == null || !http.PendingJsonTask.IsCompleted) return StepOutcome.Yield;
 
-                    var result = http.PendingJsonTask.IsCompletedSuccessfully ? http.PendingJsonTask.Result : null;
+                    var result = http.PendingJsonTask.IsCompletedSuccessfully
+                        ? http.PendingJsonTask.Result
+                        : new HttpResult(null, ErrorCodes.HttpFailed, "the request failed");
                     http.PendingJsonTask = null;
                     frame.WaitStarted    = false;
-                    JsonVariableCodec.ApplyInbound(ctx.Vars, step.JsonInbound, result);
+                    // A request that waits for its reply fails (catchably) when there is no
+                    // reply to read: a network error, a timeout or a non-2xx status. An empty
+                    // or non-object body is still a reply — the inbound mappings just find nothing.
+                    if (result.ErrorCode is { } code)
+                        return ctx.Fail(code, $"{ProgressReporter.StepDescription(step)} → {step.JsonUrl}: {result.Error}");
+                    JsonVariableCodec.ApplyInbound(ctx.Vars, step.JsonInbound, result.Data);
                     return StepOutcome.Advance;
                 }
 
@@ -55,10 +63,11 @@ namespace Controller.RobotControl.Execution
                     {
                         // Checked again on the loop thread: a response that lands after the
                         // run ended (or a new one started) must not write into the next run.
-                        if (t.IsCompletedSuccessfully && t.Result != null && inbound != null)
+                        // Fire and continue: a failure is not reported (the program has moved on).
+                        if (t.IsCompletedSuccessfully && t.Result.Data != null && inbound != null)
                             ctx.PendingActions.Enqueue(() =>
                             {
-                                if (runGen == ctx.RunGeneration) JsonVariableCodec.ApplyInbound(ctx.Vars, inbound, t.Result);
+                                if (runGen == ctx.RunGeneration) JsonVariableCodec.ApplyInbound(ctx.Vars, inbound, t.Result.Data);
                             });
                     });
                 return StepOutcome.Advance;
@@ -105,24 +114,35 @@ namespace Controller.RobotControl.Execution
             return body;
         }
 
-        private static async Task<Dictionary<string, JsonElement>?> FireJsonRequest(
+        /// <summary>A request's outcome: the reply object (null when the body was empty or not a
+        /// JSON object), or an error code (<c>httpFailed</c> / <c>httpTimeout</c>) and its text.</summary>
+        internal readonly record struct HttpResult(Dictionary<string, JsonElement>? Data, string? ErrorCode, string? Error);
+
+        private static async Task<HttpResult> FireJsonRequest(
             string? url, Dictionary<string, object> body, int timeoutMs)
         {
-            if (string.IsNullOrWhiteSpace(url)) return null;
+            // No URL: nothing to send (the validator reports it) — not a runtime failure.
+            if (string.IsNullOrWhiteSpace(url)) return new HttpResult(null, null, null);
+            using var cts = new CancellationTokenSource(timeoutMs);
             try
             {
                 var json    = JsonSerializer.Serialize(body);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
-                using var cts = new CancellationTokenSource(timeoutMs);
                 var response = await HttpClient.PostAsync(url, content, cts.Token).ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode) return null;
+                if (!response.IsSuccessStatusCode)
+                    return new HttpResult(null, ErrorCodes.HttpFailed, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
                 var responseBody = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
-                if (string.IsNullOrWhiteSpace(responseBody)) return null;
-                return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(responseBody);
+                if (string.IsNullOrWhiteSpace(responseBody)) return new HttpResult(null, null, null);
+                try { return new HttpResult(JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(responseBody), null, null); }
+                catch (JsonException) { return new HttpResult(null, null, null); } // not a JSON object: nothing to map
             }
-            catch
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
-                return null;
+                return new HttpResult(null, ErrorCodes.HttpTimeout, $"no reply within {timeoutMs} ms");
+            }
+            catch (Exception ex)
+            {
+                return new HttpResult(null, ErrorCodes.HttpFailed, ex.Message);
             }
         }
 
@@ -163,7 +183,7 @@ namespace Controller.RobotControl.Execution
                 frame.WaitStarted = false;
 
                 if (result == null)
-                    return ctx.Finish(ProgramStatus.Error,
+                    return ctx.Fail(ErrorCodes.ReceiveTimeout,
                         $"HttpReceive: timeout waiting for webhook '{step.HttpReceiveName}'");
 
                 JsonVariableCodec.ApplyInbound(ctx.Vars, step.HttpReceiveInbound, result);
@@ -183,7 +203,7 @@ namespace Controller.RobotControl.Execution
     /// webhook subscription awaiting a delivery.</summary>
     internal sealed class HttpState
     {
-        public Task<Dictionary<string, JsonElement>?>? PendingJsonTask;
+        public Task<HttpSteps.HttpResult>?              PendingJsonTask;
         public Task<Dictionary<string, JsonElement>?>? PendingWebhookTask;
         public (string Name, Guid Id)?                  PendingWebhookSub;
         public CancellationTokenSource?                 WebhookCts;

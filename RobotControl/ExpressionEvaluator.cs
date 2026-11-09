@@ -70,17 +70,34 @@ namespace Controller.RobotControl
         public int    MaxArgs     { get; }
         public string Signature   { get; }
         public string Description { get; }
-        /// <summary>True for the list functions (len/sum/avg/minOf/maxOf), whose one argument is a list variable.</summary>
+        /// <summary>True for the list-only functions (len/sum/avg/minOf/maxOf), whose one argument is a list
+        /// variable — <c>len($pts)</c>, or a field of each element, <c>sum($samples.v)</c>.</summary>
         public bool   TakesList   { get; }
+        /// <summary>True when a single list argument is also accepted (min/max): <c>max($vals)</c>,
+        /// <c>max($samples.v)</c>, alongside the usual <c>max(a, b, …)</c>.</summary>
+        public bool   AcceptsList => OverList != null;
+
+        /// <summary>The plugin that provides this function (dotted <c>id.name</c>), or null for a built-in.</summary>
+        public string? PluginId   { get; }
 
         internal NumericFn?          Numeric { get; }
         internal Func<ListVar, double>? OverList { get; }
+
+        /// <summary>A function resolved through <see cref="IDynamicFunctionProvider"/> (a plugin's <c>id.name</c>).
+        /// Evaluated by the provider, not by a delegate.</summary>
+        internal static ExpressionFunction Dynamic(string fullName, int min, int max, string signature, string description, string? pluginId) =>
+            new(fullName, min, max, signature, description, pluginId);
+
+        private ExpressionFunction(string name, int min, int max, string signature, string description, string? pluginId)
+        {
+            Name = name; MinArgs = min; MaxArgs = max; Signature = signature; Description = description; PluginId = pluginId;
+        }
 
         internal ExpressionFunction(string name, int min, int max, string signature, string description,
                                     NumericFn? numeric = null, Func<ListVar, double>? overList = null)
         {
             Name = name; MinArgs = min; MaxArgs = max; Signature = signature; Description = description;
-            Numeric = numeric; OverList = overList; TakesList = overList != null;
+            Numeric = numeric; OverList = overList; TakesList = overList != null && numeric == null;
         }
     }
 
@@ -99,16 +116,36 @@ namespace Controller.RobotControl
         Function,
     }
 
-    /// <summary>One reference found in an expression.</summary>
-    internal readonly record struct ExprRef(ExprRefKind Kind, string Name, string[] Parts, int Position);
+    /// <summary>One reference found in an expression. <paramref name="ArgCount"/> is the number of
+    /// arguments of a <see cref="ExprRefKind.Function"/> call (0 otherwise).</summary>
+    internal readonly record struct ExprRef(ExprRefKind Kind, string Name, string[] Parts, int Position, int ArgCount = 0);
+
+    /// <summary>
+    /// Functions outside the static table, called with a dotted name (<c>scale.tare(1)</c>) —
+    /// plugin functions (docs/plugins.md §5). Resolved when the call is evaluated, so the
+    /// parse cache never holds anything that depends on which plugins are installed.
+    /// </summary>
+    internal interface IDynamicFunctionProvider
+    {
+        /// <summary>The function named <paramref name="fullName"/> (<c>id.name</c>, case-insensitive), or null.</summary>
+        ExpressionFunction? Resolve(string fullName);
+
+        /// <summary>Whether <paramref name="root"/> is a namespace this provider owns (a plugin id) —
+        /// decides between <c>unknownPluginFunction</c> and <c>unknownFunction</c>.</summary>
+        bool IsNamespace(string root);
+
+        /// <summary>Calls <paramref name="fn"/> (arity already checked). Failures throw an
+        /// <see cref="ExpressionParseException"/> subclass so every evaluation path reports them.</summary>
+        double Call(ExpressionFunction fn, ReadOnlySpan<double> args);
+    }
 
     /// <summary>
     /// Evaluates numeric expressions that may reference program variables, IO and properties.
     ///
     /// Supported syntax:
-    ///   Literals     : 3.14  -5  100  1e3  true  false
+    ///   Literals     : 3.14  -5  100  1e3  true  false  on  off
     ///   Variables    : $varName
-    ///   IO           : $stb.in1  $relay.2  $nano.Board.pin    (dotted names, longest match wins)
+    ///   IO           : $stb.in1  $relay.2  $io.Board.pin    (dotted names, longest match wins)
     ///   Properties   : $robot.x  $program.runCount  $time.hour (read-only; see <see cref="IPropertySource"/>)
     ///   List count   : $listName.length  or  $listName.count
     ///   Number elem. : $listName[indexExpr]
@@ -120,6 +157,9 @@ namespace Controller.RobotControl
     ///   Logic        : and  or  not   (also &amp;&amp;  ||  !)
     ///   Conditional  : cond ? a : b   (lowest precedence, right-associative)
     ///   Functions    : abs(x) min(a,b,…) round(x,2) sin(deg) len($list) … — see <see cref="Functions"/>
+    ///   Plugin fns   : scale.tare(1) — dotted names, resolved at evaluation (<see cref="IDynamicFunctionProvider"/>)
+    ///   Text helpers : $s.contains("x") .startsWith .endsWith (1/0), $s.indexOf("x") (−1 absent),
+    ///                  $s.toNumber() (0 when not a number), $s.length — see <see cref="StringMethods"/>
     ///   Grouping     : (expr)       Braces { } are ignored, so "{$x + 1}" works in numeric fields.
     ///
     /// Precedence, tightest first:
@@ -152,11 +192,13 @@ namespace Controller.RobotControl
             string expr,
             Dictionary<string, double> variables,
             Dictionary<string, ListVar>? listVariables = null,
-            IPropertySource? properties = null)
+            IPropertySource? properties = null,
+            Func<string, string>? strings = null,
+            Func<string, string?>? stringVariables = null)
         {
             var node = GetOrParse(expr);
             if (node == null) return 0; // empty expression — 0, as it always was
-            return node.Eval(new Env(variables, listVariables, properties));
+            return node.Eval(new Env(variables, listVariables, properties, strings, stringVariables));
         }
 
         /// <summary>Syntax check only — no variable resolution.</summary>
@@ -232,8 +274,39 @@ namespace Controller.RobotControl
             };
         }
 
-        /// <summary>Whether <paramref name="name"/> is a function in <see cref="Functions"/> (case-insensitive).</summary>
-        public static bool IsFunctionName(string name) => FunctionsByName.ContainsKey(name);
+        /// <summary>Whether <paramref name="name"/> is a function in <see cref="Functions"/> or a dotted
+        /// dynamic (plugin) function the current provider resolves (case-insensitive). A plugin id
+        /// has no dot, so manifest id validation only ever matches the static table.</summary>
+        public static bool IsFunctionName(string name) => ResolveFunction(name) != null;
+
+        /// <summary>A built-in function, or a dotted one from the dynamic provider; null when unknown.</summary>
+        public static ExpressionFunction? ResolveFunction(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            if (FunctionsByName.TryGetValue(name, out var fn)) return fn;
+            return name.IndexOf('.') > 0 ? _dynamic?.Resolve(name) : null;
+        }
+
+        // ── Dynamic (plugin) functions ────────────────────────────────────────
+
+        private static volatile IDynamicFunctionProvider? _dynamic;
+
+        /// <summary>The provider dotted calls are resolved through (null: every dotted call is unknown).</summary>
+        public static IDynamicFunctionProvider? DynamicFunctions => _dynamic;
+
+        /// <summary>
+        /// Installs the provider for dotted calls (<c>scale.tare()</c>). Dotted calls are resolved
+        /// at evaluation, so nothing cached depends on it; the cache is still cleared so a
+        /// change of provider can never be observed half-way.
+        /// </summary>
+        public static void SetDynamicFunctions(IDynamicFunctionProvider? provider)
+        {
+            _dynamic = provider;
+            InvalidateCache();
+        }
+
+        /// <summary>Drops every cached parse (called when plugin contributions change).</summary>
+        public static void InvalidateCache() => Cache.Clear();
 
         // ── Parse cache ───────────────────────────────────────────────────────
 
@@ -273,6 +346,17 @@ namespace Controller.RobotControl
             foreach (var item in l.Items) yield return item.Scalar;
         }
 
+        /// <summary><c>$list.field</c> as a number list: one field of every element (0 where absent) —
+        /// a point's axis (<c>$pts.x</c>) or a record's field (<c>$samples.v</c>). A number list
+        /// has no fields, so it is returned as is.</summary>
+        private static ListVar Project(ListVar l, string? field)
+        {
+            if (field == null || l.HasScalarElements) return l;
+            var vals = new List<double>(l.Count);
+            foreach (var item in l.Items) vals.Add(item.TryGetValue(field, out double v) ? v : 0);
+            return ListVar.OfNumbers(vals);
+        }
+
         /// <summary>The function table, in documentation order. Names are case-insensitive.</summary>
         public static IReadOnlyList<ExpressionFunction> Functions { get; } = new List<ExpressionFunction>
         {
@@ -280,8 +364,12 @@ namespace Controller.RobotControl
             new("sign",  1, 1, "sign(x)",  "-1, 0 or 1",                          a => Math.Sign(a[0])),
             new("sqrt",  1, 1, "sqrt(x)",  "Square root",                         a => Math.Sqrt(a[0])),
             new("pow",   2, 2, "pow(x, y)", "x raised to y (same as x ^ y)",      a => Math.Pow(a[0], a[1])),
-            new("min",   1, Variadic, "min(a, b, …)", "Smallest argument",        a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Min(m, a[i]); return m; }),
-            new("max",   1, Variadic, "max(a, b, …)", "Largest argument",         a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Max(m, a[i]); return m; }),
+            new("min",   1, Variadic, "min(a, b, …) / min($list) / min($list.field)", "Smallest argument, or smallest element of a list (0 when empty)",
+                                                                                   a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Min(m, a[i]); return m; },
+                                                                                   overList: l => l.Count == 0 ? 0 : Scalars(l).Min()),
+            new("max",   1, Variadic, "max(a, b, …) / max($list) / max($list.field)", "Largest argument, or largest element of a list (0 when empty)",
+                                                                                   a => { double m = a[0]; for (int i = 1; i < a.Length; i++) m = Math.Max(m, a[i]); return m; },
+                                                                                   overList: l => l.Count == 0 ? 0 : Scalars(l).Max()),
             new("clamp", 3, 3, "clamp(x, lo, hi)", "x limited to lo…hi",          a => Math.Min(Math.Max(a[0], a[1]), a[2])),
             new("round", 1, 2, "round(x) / round(x, digits)", "Round half away from zero, optionally to digits decimals",
                                                                                    a => RoundAway(a[0], a.Length > 1 ? a[1] : 0)),
@@ -306,12 +394,13 @@ namespace Controller.RobotControl
             new("if",    3, 3, "if(cond, a, b)", "a when cond is non-zero, else b (same as cond ? a : b)",
                                                                                    a => a[0] != 0 ? a[1] : a[2]),
             new("len",   1, 1, "len($list)", "Number of elements in a list",      overList: l => l.Count),
-            new("sum",   1, 1, "sum($list)", "Sum of a number list",              overList: l => Scalars(l).Sum()),
-            new("avg",   1, 1, "avg($list)", "Average of a number list (0 when empty)",
+            new("sum",   1, 1, "sum($list) / sum($list.field)", "Sum of a number list, or of one field of each element",
+                                                                                   overList: l => Scalars(l).Sum()),
+            new("avg",   1, 1, "avg($list) / avg($list.field)", "Average of a number list, or of one field of each element (0 when empty)",
                                                                                    overList: l => l.Count == 0 ? 0 : Scalars(l).Average()),
-            new("minOf", 1, 1, "minOf($list)", "Smallest element of a number list (0 when empty)",
+            new("minOf", 1, 1, "minOf($list) / minOf($list.field)", "Smallest element of a number list (0 when empty) — same as min($list)",
                                                                                    overList: l => l.Count == 0 ? 0 : Scalars(l).Min()),
-            new("maxOf", 1, 1, "maxOf($list)", "Largest element of a number list (0 when empty)",
+            new("maxOf", 1, 1, "maxOf($list) / maxOf($list.field)", "Largest element of a number list (0 when empty) — same as max($list)",
                                                                                    overList: l => l.Count == 0 ? 0 : Scalars(l).Max()),
             new("rand",  0, 2, "rand() / rand(lo, hi)", "Uniform random number in [0, 1) or [lo, hi)",
                                                                                    a => a.Length == 0 ? Random.Shared.NextDouble()
@@ -320,7 +409,54 @@ namespace Controller.RobotControl
             new("map",   5, 5, "map(x, inLo, inHi, outLo, outHi)", "Re-map x from one range to another",
                                                                                    a => a[2] == a[1] ? a[3] : a[3] + (a[0] - a[1]) * (a[4] - a[3]) / (a[2] - a[1])),
             new("lerp",  3, 3, "lerp(a, b, t)", "a + (b - a) × t",                a => a[0] + (a[1] - a[0]) * a[2]),
+            new("inBox", 9, 9, "inBox(x, y, z, x1, y1, z1, x2, y2, z2)",
+                "1 when (x, y, z) is inside the box with opposite corners (x1, y1, z1) and (x2, y2, z2), edges included; else 0",
+                                                                                   a => InBox(a)),
+            new("inCircle", 5, 5, "inCircle(x, y, cx, cy, r)",
+                "1 when (x, y) is within r of (cx, cy), edge included; else 0",   a => InCircle(a[0], a[1], a[2], a[3], a[4])),
         };
+
+        // Small tolerance so a point taught exactly on an edge still counts as inside after the
+        // round trip through doubles (same spirit as == within 1e-9).
+        private const double ZoneEps = 1e-9;
+
+        private static double InBox(ReadOnlySpan<double> a)
+        {
+            for (int axis = 0; axis < 3; axis++)
+            {
+                double v = a[axis], lo = Math.Min(a[3 + axis], a[6 + axis]), hi = Math.Max(a[3 + axis], a[6 + axis]);
+                if (v < lo - ZoneEps || v > hi + ZoneEps) return 0;
+            }
+            return 1;
+        }
+
+        private static double InCircle(double x, double y, double cx, double cy, double r)
+        {
+            if (r < 0) return 0;
+            double dx = x - cx, dy = y - cy;
+            return dx * dx + dy * dy <= r * r + ZoneEps ? 1 : 0;
+        }
+
+        /// <summary>The string methods (<c>$s.contains("x")</c> …) and the <c>$s.length</c> property, for
+        /// symbol lists and documentation: name, signature, description, and whether it returns 1/0.</summary>
+        public static IReadOnlyList<(string Name, string Signature, string Description, bool Boolean)> StringMethods { get; } =
+        [
+            ("contains",   "$text.contains(\"x\")",   "1 when the text contains x, else 0", true),
+            ("startsWith", "$text.startsWith(\"x\")", "1 when the text starts with x, else 0", true),
+            ("endsWith",   "$text.endsWith(\"x\")",   "1 when the text ends with x, else 0", true),
+            ("indexOf",    "$text.indexOf(\"x\")",    "Position of the first x in the text (from 0), or -1 when absent", false),
+            ("toNumber",   "$text.toNumber()",        "The text as a number; 0 when it is not one", false),
+            ("length",     "$text.length",            "Number of characters in the text (on a list: its element count)", false),
+        ];
+
+        /// <summary>Text → number for <c>$s.toNumber()</c>: invariant culture, surrounding spaces
+        /// ignored; anything that is not a finite number is 0.</summary>
+        internal static double TextToNumber(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return 0;
+            return double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
+                   && double.IsFinite(v) ? v : 0;
+        }
 
         private static readonly Dictionary<string, ExpressionFunction> FunctionsByName =
             Functions.ToDictionary(f => f.Name, StringComparer.OrdinalIgnoreCase);
@@ -332,8 +468,41 @@ namespace Controller.RobotControl
             public readonly Dictionary<string, double> Vars;
             public readonly Dictionary<string, ListVar>? Lists;
             public readonly IPropertySource? Props;
-            public Env(Dictionary<string, double> vars, Dictionary<string, ListVar>? lists, IPropertySource? props)
-            { Vars = vars; Lists = lists; Props = props; }
+            /// <summary>Resolves a `$name` reference (or a plain string) to its string value — set
+            /// where string variables exist, so the string methods (.contains/.startsWith/.endsWith)
+            /// can read them. Null elsewhere; the string methods then read "".</summary>
+            public readonly Func<string, string>? Strings;
+            /// <summary>The value of a <em>string variable</em> by name (no <c>$</c>), or null when the
+            /// name is not one — lets <c>$s.length</c> tell a text variable from an unknown name.</summary>
+            public readonly Func<string, string?>? StringVars;
+            public Env(Dictionary<string, double> vars, Dictionary<string, ListVar>? lists,
+                       IPropertySource? props, Func<string, string>? strings = null,
+                       Func<string, string?>? stringVars = null)
+            { Vars = vars; Lists = lists; Props = props; Strings = strings; StringVars = stringVars; }
+
+            /// <summary>
+            /// The text of string variable <paramref name="name"/>, when it is one. Uses the exact
+            /// lookup when the caller supplied it; otherwise the <see cref="Strings"/> resolver,
+            /// which answers "$name" with the variable's text or — for a name that is not a
+            /// string variable — the reference left as written (VariableScope.Interpolate).
+            /// </summary>
+            public bool TryString(string name, out string text)
+            {
+                if (StringVars != null)
+                {
+                    var value = StringVars(name);
+                    text = value ?? "";
+                    return value != null;
+                }
+                if (Strings != null)
+                {
+                    string reference = "$" + name;
+                    text = Strings(reference);
+                    return !string.Equals(text, reference, StringComparison.Ordinal);
+                }
+                text = "";
+                return false;
+            }
         }
 
         /// <summary>Non-zero is true, matching how boolean variables are stored.</summary>
@@ -363,6 +532,19 @@ namespace Controller.RobotControl
             public override void Collect(List<ExprRef> refs) =>
                 refs.Add(new ExprRef(ExprRefKind.BareWord, _word, [_word], Pos));
         }
+
+        /// <summary>true / on — a boolean literal worth 1 (case-insensitive).</summary>
+        internal static bool IsTrueWord(string s) =>
+            s.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            s.Equals("on",   StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>false / off — a boolean literal worth 0 (case-insensitive).</summary>
+        internal static bool IsFalseWord(string s) =>
+            s.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+            s.Equals("off",   StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>A boolean literal word: true/false/on/off.</summary>
+        internal static bool IsBoolWord(string s) => IsTrueWord(s) || IsFalseWord(s);
 
         private static bool IsCountWord(string s) =>
             s.Equals("length", StringComparison.OrdinalIgnoreCase) ||
@@ -406,6 +588,12 @@ namespace Controller.RobotControl
                 // Known list variable referenced without an index — the legacy 0.
                 if (lists != null && lists.ContainsKey(_parts[0])) return 0;
 
+                // $text.length — the character count of a string variable (a list's .length
+                // was answered above; a number variable never gets here, its own value wins).
+                if (_parts.Length == 2 && _parts[1].Equals("length", StringComparison.OrdinalIgnoreCase) &&
+                    e.TryString(_parts[0], out var text))
+                    return text.Length;
+
                 // Truly unknown identifier — fail loudly. Silently coercing a typo'd
                 // variable to 0 can turn a clearance offset into a collision.
                 throw new UnknownVariableException(FullName);
@@ -413,6 +601,46 @@ namespace Controller.RobotControl
 
             public override void Collect(List<ExprRef> refs) =>
                 refs.Add(new ExprRef(ExprRefKind.Plain, FullName, _parts, Pos));
+        }
+
+        /// <summary><c>$name.contains("foo")</c> / <c>.startsWith</c> / <c>.endsWith</c> — a text
+        /// comparison on a string variable, returning 1 (true) or 0 (false); <c>.indexOf("x")</c>
+        /// (position from 0, −1 when absent) and <c>.toNumber()</c> (0 when the text is not a
+        /// number) — the string helpers that return numbers.</summary>
+        private sealed class StringMethodNode : Node
+        {
+            private readonly string _receiver;   // "$name" (or dotted)
+            private readonly string _method;     // contains | startsWith | endsWith | indexOf | toNumber
+            private readonly string _arg;         // a literal's text, or a "$var" reference ("" for toNumber)
+            private readonly bool   _argIsVar;
+
+            public StringMethodNode(string receiver, string method, string arg, bool argIsVar, int pos)
+            { _receiver = receiver; _method = method; _arg = arg; _argIsVar = argIsVar; Pos = pos; }
+
+            public override bool IsBoolean => _method is "contains" or "startsWith" or "endsWith";
+
+            public override double Eval(in Env e)
+            {
+                string hay = Resolve(e, _receiver);
+                if (_method == "toNumber") return TextToNumber(hay);
+                string needle = _argIsVar ? Resolve(e, _arg) : _arg;
+                return _method switch
+                {
+                    "contains"   => hay.Contains(needle, StringComparison.Ordinal) ? 1 : 0,
+                    "startsWith" => hay.StartsWith(needle, StringComparison.Ordinal) ? 1 : 0,
+                    "endsWith"   => hay.EndsWith(needle, StringComparison.Ordinal) ? 1 : 0,
+                    "indexOf"    => hay.IndexOf(needle, StringComparison.Ordinal),
+                    _            => 0,
+                };
+            }
+
+            /// <summary>A "$name" reference as text: the string variable's text when it is one,
+            /// otherwise whatever the caller's resolver makes of it (a number's text), else "".</summary>
+            private static string Resolve(in Env e, string reference)
+            {
+                if (reference.StartsWith('$') && e.StringVars?.Invoke(reference[1..]) is { } s) return s;
+                return e.Strings?.Invoke(reference) ?? "";
+            }
         }
 
         private sealed class IndexNode : Node
@@ -546,23 +774,73 @@ namespace Controller.RobotControl
 
             public override void Collect(List<ExprRef> refs)
             {
-                refs.Add(new ExprRef(ExprRefKind.Function, _fn.Name, [_fn.Name], Pos));
+                refs.Add(new ExprRef(ExprRefKind.Function, _fn.Name, [_fn.Name], Pos, _args.Length));
                 foreach (var a in _args) a.Collect(refs);
             }
         }
 
+        /// <summary>
+        /// A dotted call (<c>scale.tare(1)</c>): resolved through the dynamic provider each time it
+        /// is evaluated. Unknown name / wrong arity throw like a parse error would; the provider's
+        /// own failures (plugin not running, timeout) propagate as its exception.
+        /// </summary>
+        private sealed class DynamicCallNode : Node
+        {
+            private readonly string _name;
+            private readonly Node[] _args;
+            private readonly string _src;
+            public DynamicCallNode(string name, Node[] args, int pos, string src) { _name = name; _args = args; Pos = pos; _src = src; }
+
+            public override double Eval(in Env e)
+            {
+                var provider = _dynamic;
+                var fn = provider?.Resolve(_name);
+                if (fn == null)
+                {
+                    int dot = _name.IndexOf('.');
+                    bool ns = provider != null && provider.IsNamespace(_name[..dot]);
+                    throw new ExpressionParseException(
+                        ns ? $"Plugin '{_name[..dot]}' has no function '{_name[(dot + 1)..]}'" : $"Unknown function '{_name}'",
+                        Pos, ns ? "unknownPluginFunction" : "unknownFunction", _src);
+                }
+                int n = _args.Length;
+                if (n < fn.MinArgs || n > fn.MaxArgs)
+                    throw new ExpressionParseException(ArityMessage(fn, n), Pos, "badArity", _src);
+                Span<double> buf = n <= 8 ? stackalloc double[8] : new double[n];
+                buf = buf[..n];
+                for (int i = 0; i < n; i++) buf[i] = _args[i].Eval(e);
+                return provider!.Call(fn, buf);
+            }
+
+            public override void Collect(List<ExprRef> refs)
+            {
+                refs.Add(new ExprRef(ExprRefKind.Function, _name, _name.Split('.'), Pos, _args.Length));
+                foreach (var a in _args) a.Collect(refs);
+            }
+        }
+
+        private static string ArityMessage(ExpressionFunction fn, int got)
+        {
+            string want = fn.MaxArgs == int.MaxValue ? $"at least {fn.MinArgs}"
+                        : fn.MinArgs == fn.MaxArgs  ? $"{fn.MinArgs}"
+                        : $"{fn.MinArgs} to {fn.MaxArgs}";
+            return $"{fn.Name}() takes {want} argument{(want == "1" ? "" : "s")}, got {got} — {fn.Signature}";
+        }
+
+        /// <summary>A list-only function over <c>$list</c> or <c>$list.field</c>: <c>len($pts)</c>, <c>sum($samples.v)</c>.</summary>
         private sealed class ListCallNode : Node
         {
             private readonly ExpressionFunction _fn;
             private readonly string _list;
+            private readonly string? _field;
             private readonly int _argPos;
-            public ListCallNode(ExpressionFunction fn, string list, int pos, int argPos)
-            { _fn = fn; _list = list; Pos = pos; _argPos = argPos; }
+            public ListCallNode(ExpressionFunction fn, string list, string? field, int pos, int argPos)
+            { _fn = fn; _list = list; _field = field; Pos = pos; _argPos = argPos; }
 
             public override double Eval(in Env e)
             {
                 if (e.Lists != null && e.Lists.TryGetValue(_list, out var lv))
-                    return _fn.OverList!(lv);
+                    return _fn.OverList!(Project(lv, _field));
                 throw new UnknownVariableException(_list);
             }
 
@@ -573,9 +851,47 @@ namespace Controller.RobotControl
             }
         }
 
+        /// <summary>
+        /// <c>min(…)</c>/<c>max(…)</c> given exactly one <c>$name</c> or <c>$name.field</c> argument. Whether
+        /// <c>$name</c> is a list is only known at evaluation (lists are runtime state), so this decides
+        /// then: a list → the function's list form (<c>max($vals)</c>, <c>max($samples.v)</c>); anything
+        /// else → the scalar form over that one value, as <c>max($x)</c> always read.
+        /// </summary>
+        private sealed class ListOrScalarCallNode : Node
+        {
+            private readonly ExpressionFunction _fn;
+            private readonly VarNode _scalar;
+            private readonly string _name;
+            private readonly string? _field;
+            private readonly int _argPos;
+            public ListOrScalarCallNode(ExpressionFunction fn, VarNode scalar, string name, string? field, int pos, int argPos)
+            { _fn = fn; _scalar = scalar; _name = name; _field = field; Pos = pos; _argPos = argPos; }
+
+            public override double Eval(in Env e)
+            {
+                // "$list.length" is the count, a scalar — leave it to the variable lookup.
+                if (e.Lists != null && !(_field != null && IsCountWord(_field)) && e.Lists.TryGetValue(_name, out var lv))
+                    return _fn.OverList!(Project(lv, _field));
+                Span<double> one = stackalloc double[1];
+                one[0] = _scalar.Eval(e);
+                return _fn.Numeric!(one);
+            }
+
+            public override void Collect(List<ExprRef> refs)
+            {
+                refs.Add(new ExprRef(ExprRefKind.Function, _fn.Name, [_fn.Name], Pos));
+                // "$name.field" only makes sense as a list projection (a plain "$list.field" is not a
+                // value), so report it as the list argument it is; a bare "$name" may be either.
+                if (_field != null && !IsCountWord(_field))
+                    refs.Add(new ExprRef(ExprRefKind.ListArgument, _name, [_name], _argPos));
+                else
+                    _scalar.Collect(refs);
+            }
+        }
+
         // ── Tokenizer ─────────────────────────────────────────────────────────
 
-        private enum TokType { Number, Variable, Word, Op, LParen, RParen, LBracket, RBracket, Dot, Comma, Question, Colon, End }
+        private enum TokType { Number, Variable, Word, Op, LParen, RParen, LBracket, RBracket, Dot, Comma, Question, Colon, String, End }
 
         private readonly record struct Token(TokType Type, string Value, int Pos, string[]? Parts = null, double Num = 0);
 
@@ -599,8 +915,23 @@ namespace Controller.RobotControl
                 // into numeric fields, so braces have always been skipped here.
                 if (char.IsWhiteSpace(c) || c == '{' || c == '}') { i++; continue; }
 
+                // String literal: "..." — the argument to a string method, e.g.
+                // $name.contains("foo"). No escapes; a string cannot contain a double quote.
+                if (c == '"')
+                {
+                    int strStart = i;
+                    i++;
+                    int cs = i;
+                    while (i < expr.Length && expr[i] != '"') i++;
+                    if (i >= expr.Length)
+                        throw new ExpressionParseException("Unterminated string literal", strStart, expression: expr);
+                    tokens.Add(new Token(TokType.String, expr[cs..i], strStart));
+                    i++; // closing quote
+                    continue;
+                }
+
                 // Variable: $identifier with an optional dotted chain ($stb.in1, $relay.1,
-                // $nano.Board.pin, $aux.dev.0.position). The chain only continues across a
+                // $io.Board.pin, $aux.dev.0.position). The chain only continues across a
                 // '.' that is immediately followed by an identifier character.
                 if (c == '$')
                 {
@@ -620,7 +951,7 @@ namespace Controller.RobotControl
                     continue;
                 }
 
-                // Bare word — a field name after a dot, a function name, true/false, or one
+                // Bare word — a field name after a dot, a function name, true/false/on/off, or one
                 // of the word-spelled logic operators. After a dot it is always a field name:
                 // record fields are named by whatever produced the record, so "$r[0].not"
                 // has to keep working.
@@ -884,8 +1215,13 @@ namespace Controller.RobotControl
                     {
                         _i++;
                         if (Cur.Type == TokType.LParen) return ParseCall(tok);
-                        if (tok.Value.Equals("true",  StringComparison.OrdinalIgnoreCase)) return new NumNode(1, tok.Pos);
-                        if (tok.Value.Equals("false", StringComparison.OrdinalIgnoreCase)) return new NumNode(0, tok.Pos);
+                        // A dotted call: ident(.ident)+ followed by '(' — a plugin function
+                        // (scale.tare()). Anything else keeps its old meaning.
+                        if (Cur.Type == TokType.Dot && TryDottedCallName(tok, out var dotted))
+                            return ParseDottedCall(dotted, tok.Pos);
+                        // Boolean literals: true/false and the SRS value words on/off.
+                        if (IsTrueWord(tok.Value))  return new NumNode(1, tok.Pos);
+                        if (IsFalseWord(tok.Value)) return new NumNode(0, tok.Pos);
                         // Legacy: a bare word is 0. The validator flags it.
                         return new WordNode(tok.Value, tok.Pos);
                     }
@@ -901,9 +1237,40 @@ namespace Controller.RobotControl
                 }
             }
 
+            private static bool IsStringMethod(string s) =>
+                s is "contains" or "startsWith" or "endsWith" or "indexOf";
+
             private Node ParseVariableTail(Token tok)
             {
                 var parts = tok.Parts!;
+
+                // $receiver.toNumber() — no argument.
+                if (parts.Length >= 2 && parts[^1] == "toNumber" && Cur.Type == TokType.LParen)
+                {
+                    string receiver = "$" + string.Join(".", parts, 0, parts.Length - 1);
+                    _i++; // '('
+                    if (Cur.Type != TokType.RParen)
+                        throw Error($".toNumber() takes no argument, e.g. {receiver}.toNumber()", Cur.Pos);
+                    _i++;
+                    return new StringMethodNode(receiver, "toNumber", "", false, tok.Pos);
+                }
+
+                // $receiver.contains("x") / .startsWith(...) / .endsWith(...) — a string method.
+                // The tokenizer folds the dotted chain into the variable, so the method name is the
+                // last part; it is a method only when a '(' follows.
+                if (parts.Length >= 2 && IsStringMethod(parts[^1]) && Cur.Type == TokType.LParen)
+                {
+                    string receiver = "$" + string.Join(".", parts, 0, parts.Length - 1);
+                    string method   = parts[^1];
+                    _i++; // '('
+                    string arg; bool argIsVar;
+                    if (Cur.Type == TokType.String)        { arg = Cur.Value; argIsVar = false; _i++; }
+                    else if (Cur.Type == TokType.Variable)  { arg = Cur.Value; argIsVar = true;  _i++; }
+                    else throw Error($".{method}() takes a string, e.g. {receiver}.{method}(\"text\")", Cur.Pos);
+                    Expect(TokType.RParen, ")");
+                    return new StringMethodNode(receiver, method, arg, argIsVar, tok.Pos);
+                }
+
                 if (Cur.Type != TokType.LBracket)
                     return new VarNode(parts, tok.Pos);
 
@@ -929,14 +1296,33 @@ namespace Controller.RobotControl
                 return new IndexNode(name, index, field, posIdx, tok.Pos);
             }
 
-            private Node ParseCall(Token nameTok)
+            /// <summary>At a '.' after a word: when the words and dots that follow end in '(',
+            /// consumes them and returns the joined name (left positioned on the '(').</summary>
+            private bool TryDottedCallName(Token first, out string name)
             {
-                if (!FunctionsByName.TryGetValue(nameTok.Value, out var fn))
-                    throw Error($"Unknown function '{nameTok.Value}'", nameTok.Pos, "unknownFunction");
+                name = "";
+                int j = _i;
+                var parts = new List<string> { first.Value };
+                while (_t[j].Type == TokType.Dot && _t[j + 1].Type == TokType.Word)
+                {
+                    parts.Add(_t[j + 1].Value);
+                    j += 2;
+                }
+                if (parts.Count < 2 || _t[j].Type != TokType.LParen) return false;
+                _i = j;
+                name = string.Join(".", parts);
+                return true;
+            }
 
+            private Node ParseDottedCall(string name, int pos) =>
+                new DynamicCallNode(name, ParseArgs(name, out _).ToArray(), pos, _src);
+
+            /// <summary>Parses "(a, b, …)" starting at the '('.</summary>
+            private List<Node> ParseArgs(string fnName, out List<Token> argTokens)
+            {
                 _i++; // '('
                 var args = new List<Node>();
-                var argTokens = new List<Token>();
+                argTokens = new List<Token>();
                 if (Cur.Type != TokType.RParen)
                 {
                     while (true)
@@ -949,9 +1335,18 @@ namespace Controller.RobotControl
                 }
                 if (Cur.Type != TokType.RParen)
                     throw Error(Cur.Type == TokType.End
-                        ? $"Missing ')' after the arguments of {fn.Name}()"
-                        : $"Expected ',' or ')' in {fn.Name}() but found {Describe(Cur)}", Cur.Pos);
+                        ? $"Missing ')' after the arguments of {fnName}()"
+                        : $"Expected ',' or ')' in {fnName}() but found {Describe(Cur)}", Cur.Pos);
                 _i++;
+                return args;
+            }
+
+            private Node ParseCall(Token nameTok)
+            {
+                if (!FunctionsByName.TryGetValue(nameTok.Value, out var fn))
+                    throw Error($"Unknown function '{nameTok.Value}'", nameTok.Pos, "unknownFunction");
+
+                var args = ParseArgs(fn.Name, out var argTokens);
 
                 // rand() takes none or two — one bound on its own means nothing.
                 bool badRand = fn.Name == "rand" && args.Count == 1;
@@ -959,20 +1354,25 @@ namespace Controller.RobotControl
                 {
                     if (badRand)
                         throw Error($"rand() takes 0 or 2 arguments, got 1 — {fn.Signature}", nameTok.Pos, "badArity");
-                    string want = fn.MaxArgs == int.MaxValue ? $"at least {fn.MinArgs}"
-                                : fn.MinArgs == fn.MaxArgs  ? $"{fn.MinArgs}"
-                                : $"{fn.MinArgs} to {fn.MaxArgs}";
-                    throw Error($"{fn.Name}() takes {want} argument{(want == "1" ? "" : "s")}, got {args.Count} — {fn.Signature}",
-                                nameTok.Pos, "badArity");
+                    throw Error(ArityMessage(fn, args.Count), nameTok.Pos, "badArity");
                 }
 
                 if (fn.TakesList)
                 {
-                    // The one argument must be a plain list reference: len($pts), not len($pts[0]).
+                    // The one argument must be a list reference, optionally with one field:
+                    // len($pts), sum($samples.v) — not len($pts[0]).
                     var at = argTokens[0];
-                    if (args[0] is not VarNode vn || at.Type != TokType.Variable || at.Parts!.Length != 1)
+                    if (args[0] is not VarNode || at.Type != TokType.Variable || at.Parts!.Length is not (1 or 2))
                         throw Error($"{fn.Name}() takes a list variable, e.g. {fn.Signature}", at.Pos);
-                    return new ListCallNode(fn, vn.FullName, nameTok.Pos, at.Pos);
+                    return new ListCallNode(fn, at.Parts[0], at.Parts.Length == 2 ? at.Parts[1] : null, nameTok.Pos, at.Pos);
+                }
+
+                // min($vals) / max($samples.v): one variable argument may be a list — decided at evaluation.
+                if (fn.AcceptsList && args.Count == 1 && args[0] is VarNode vn &&
+                    argTokens[0].Type == TokType.Variable && argTokens[0].Parts!.Length is 1 or 2)
+                {
+                    var at = argTokens[0];
+                    return new ListOrScalarCallNode(fn, vn, at.Parts![0], at.Parts.Length == 2 ? at.Parts[1] : null, nameTok.Pos, at.Pos);
                 }
 
                 return new CallNode(fn, args.ToArray(), nameTok.Pos);

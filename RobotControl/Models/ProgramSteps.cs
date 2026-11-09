@@ -9,7 +9,9 @@ namespace Controller.RobotControl;
 // ── Program builder ───────────────────────────────────────────────────────────
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Unknown }
+public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, StartRecording, StopRecording, ExportData, Unknown,
+    // Program editor v2 (docs/program-language.md §4). Appended after Unknown so existing ordinals stay put.
+    Note, LoopControl, Return, EndProgram, RaiseError, Switch, Try, SavePosition, SetSpeedFactor, ListOp, Prompt, MoveC }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -53,6 +55,13 @@ public class JsonInboundMapping
     [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
 }
 
+/// <summary>Writes one output of a Plugin step into a program variable (docs/plugins.md §6).</summary>
+public class PluginOutputMapping
+{
+    [JsonPropertyName("key")]          public string Key          { get; set; } = "";
+    [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
+}
+
 /// <summary>Maps an image variable to a JSON key for the outbound body of a JsonExchange step (sent as a base64 JPEG string).</summary>
 public class JsonImageMapping
 {
@@ -60,56 +69,28 @@ public class JsonImageMapping
     [JsonPropertyName("variableName")] public string VariableName { get; set; } = "";
 }
 
-/// <summary>Maps one BlobInspection's outputs to program variable names.</summary>
-public class VisionStepOutput
+/// <summary>
+/// RunVision → one tool result into one variable. <c>value</c> is a key of the tool's values
+/// (a number or a string), or "passed", "cells", "items", "points", "lines" or "pose".
+/// See docs/vision-tools.md, "RunVision step".
+/// </summary>
+public class VisionToolOutput
 {
-    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
-    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
-    [JsonPropertyName("pointsVar")]    public string? PointsVar    { get; set; }
-    [JsonPropertyName("detectedVar")]  public string? DetectedVar  { get; set; }
-}
-
-/// <summary>Maps one ColorCoverageInspection's outputs to program variable names.</summary>
-public class ColorVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")]   public string  InspectionId   { get; set; } = "";
-    [JsonPropertyName("coverageVar")]    public string? CoverageVar    { get; set; }
-    [JsonPropertyName("passedVar")]      public string? PassedVar      { get; set; }
-    /// <summary>
-    /// Object-list variable to fill with one record per grid cell — fields row, col, index,
-    /// coverage, passed. Only meaningful when the inspection's zone has a grid; on an
-    /// ungridded zone it is left empty.
-    /// </summary>
-    [JsonPropertyName("cellsVar")]       public string? CellsVar       { get; set; }
-    /// <summary>Scalar variable to fill with the number of cells that passed.</summary>
-    [JsonPropertyName("cellsPassedVar")] public string? CellsPassedVar { get; set; }
-}
-
-/// <summary>Maps one PolygonInspection's outputs to program variable names.</summary>
-public class PolygonVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")] public string  InspectionId { get; set; } = "";
-    [JsonPropertyName("countVar")]     public string? CountVar     { get; set; }
-    [JsonPropertyName("foundVar")]     public string? FoundVar     { get; set; }
-    [JsonPropertyName("angleVar")]     public string? AngleVar     { get; set; }
-    [JsonPropertyName("centerXVar")]   public string? CenterXVar   { get; set; }
-    [JsonPropertyName("centerYVar")]   public string? CenterYVar   { get; set; }
-}
-
-/// <summary>Maps one ArucoInspection's outputs to program variable names.</summary>
-public class ArucoVisionStepOutput
-{
-    [JsonPropertyName("inspectionId")]    public string  InspectionId    { get; set; } = "";
-    [JsonPropertyName("countVar")]        public string? CountVar        { get; set; }
-    [JsonPropertyName("foundVar")]        public string? FoundVar        { get; set; }
-    [JsonPropertyName("firstIdVar")]      public string? FirstIdVar      { get; set; }
-    [JsonPropertyName("firstCenterXVar")] public string? FirstCenterXVar { get; set; }
-    [JsonPropertyName("firstCenterYVar")] public string? FirstCenterYVar { get; set; }
+    [JsonPropertyName("toolId")]   public string ToolId   { get; set; } = "";
+    [JsonPropertyName("value")]    public string Value    { get; set; } = "";
+    [JsonPropertyName("variable")] public string Variable { get; set; } = "";
 }
 
 public class ConditionItem
 {
     [JsonPropertyName("id")]       public string Id       { get; set; } = "";
+    /// <summary>A boolean expression (`$enabled`, `$speed &gt; 5`); true when it evaluates non-zero.
+    /// When set, it replaces the legacy left/operator/right below.</summary>
+    [JsonPropertyName("expr")]     public string? Expr    { get; set; }
+    /// <summary>How this item joins the one BEFORE it: "AND" or "OR". Null falls back to the group's
+    /// <see cref="ConditionGroup.Combinator"/>. AND binds tighter than OR (see
+    /// <c>VariableScope.EvaluateCondition</c>).</summary>
+    [JsonPropertyName("join")]     public string? Join    { get; set; }
     [JsonPropertyName("left")]     public string Left     { get; set; } = "";
     [JsonPropertyName("operator")] public string Operator { get; set; } = "==";
     [JsonPropertyName("right")]    public string Right    { get; set; } = "";
@@ -128,6 +109,15 @@ public class ElseIfBranch
     [JsonPropertyName("steps")]     public List<ProgramStep> Steps  { get; set; } = new();
 }
 
+/// <summary>One case of a Switch step (docs/program-language.md §4.2): runs when the switch value
+/// equals any of <see cref="Values"/> (each an expression, compared with == within 1e-9).</summary>
+public class SwitchCase
+{
+    [JsonPropertyName("id")]     public string            Id     { get; set; } = "";
+    [JsonPropertyName("values")] public List<string>      Values { get; set; } = new();
+    [JsonPropertyName("steps")]  public List<ProgramStep> Steps  { get; set; } = new();
+}
+
 public class ProgramStep
 {
     [JsonPropertyName("id")]
@@ -136,21 +126,20 @@ public class ProgramStep
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
-    /// <summary>
-    /// False = the executor skips this step (it still counts toward progress). Null or
-    /// true = enabled. Lets a user park a step while debugging without deleting it.
-    /// </summary>
-    [JsonPropertyName("enabled")]
-    public bool? Enabled { get; set; }
-
     /// <summary>Free-text note shown under the step in the editor. Not executed.</summary>
     [JsonPropertyName("comment")]
     public string? Comment { get; set; }
 
-    [JsonIgnore] public bool IsEnabled => Enabled != false;
-
     [JsonPropertyName("type")]
     public StepType Type { get; set; }
+
+    /// <summary>False = the step is skipped (reported as "[Skipped — disabled]"); a disabled block
+    /// step skips its whole body. Null means enabled.</summary>
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+
+    /// <summary>True unless the step is explicitly disabled.</summary>
+    [JsonIgnore] public bool IsEnabled => Enabled != false;
 
     // MoveL / MoveJ / SetSpeedL / SetSpeedJ
     [JsonPropertyName("pointName")]
@@ -207,14 +196,49 @@ public class ProgramStep
     public bool? OutputValue { get; set; }
     [JsonPropertyName("outputCard")]
     public string? OutputCard { get; set; }
-    [JsonPropertyName("outputNanoId")]
-    public string? OutputNanoId { get; set; }
+    [JsonPropertyName("outputDeviceId")]
+    public string? OutputDeviceId { get; set; }
     // Non-blocking pulse: set to OutputValue for PulseMs, then set to opposite. 0/null = hold.
     [JsonPropertyName("pulseMs")]
     public int? PulseMs { get; set; }
     // When true and PulseMs > 0, block program execution until the pulse completes before advancing.
     [JsonPropertyName("pulseBlocking")]
     public bool? PulseBlocking { get; set; }
+
+    // Load cell (Tare, ReadLoadCell) — which HX711 cell to use.
+    [JsonPropertyName("loadCellDeviceId")]
+    public string? LoadCellDeviceId { get; set; }
+    [JsonPropertyName("loadCellPin")]
+    public int? LoadCellPin { get; set; }
+    /// <summary>ReadLoadCell: unit to store into the target variable (default grams, the master unit).</summary>
+    [JsonPropertyName("loadCellUnit")]
+    public string? LoadCellUnit { get; set; }
+
+    // Move stop condition (MoveL / MoveJ / JumpL / JumpJ / AuxMove / GripperAction) — evaluated
+    // every executor tick while the move is in flight. A force limit is just the condition
+    // `$io.<nano>.<loadcell> >= <grams>` (load cells read in grams). Null / no rows = off.
+    /// <summary>Condition watched during the move; same shape as <see cref="WaitCondition"/>.</summary>
+    [JsonPropertyName("moveStopCondition")]
+    public ConditionGroup? MoveStopCondition { get; set; }
+    /// <summary>
+    /// "stop" (default): the move ends where it is the first time the condition is true and the
+    /// program continues with the next step — no pause, no error. "record": the move runs on to
+    /// its target; only the position at the first true evaluation is captured.
+    /// </summary>
+    [JsonPropertyName("moveStopMode")]
+    public string? MoveStopMode { get; set; }
+    /// <summary>
+    /// Where to write the position at the moment the condition first became true. Robot moves:
+    /// a Points list variable, replaced with exactly one element (the live TCP pose), so
+    /// <c>$var[0]</c> reads it. Aux moves: a numeric variable receiving the axis position in its
+    /// physical unit (mm / deg), or raw steps when the axis has no unit.
+    /// </summary>
+    [JsonPropertyName("moveStopPositionVariableName")]
+    public string? MoveStopPositionVariableName { get; set; }
+    /// <summary>Numeric / boolean variable set when the move step completes: 1 if the condition
+    /// fired during the move, 0 if not.</summary>
+    [JsonPropertyName("moveStopFlagVariableName")]
+    public string? MoveStopFlagVariableName { get; set; }
 
     // Wait
     [JsonPropertyName("waitMs")]
@@ -295,8 +319,10 @@ public class ProgramStep
     [JsonPropertyName("elseIfBranches")]  public List<ElseIfBranch>? ElseIfBranches { get; set; }
     [JsonPropertyName("elseSteps")]       public List<ProgramStep>?  ElseSteps      { get; set; }
 
-    // SetTool
+    // SetTool — ToolId is the stable link (rename-proof); ToolName is a display label / fallback for
+    // steps saved before tool ids existed.
     [JsonPropertyName("toolName")]        public string? ToolName { get; set; }
+    [JsonPropertyName("toolId")]          public string? ToolId { get; set; }
 
     // SetJointPosition — manually home one joint by declaring its value (no motion).
     // JointIndex: 0=J1/X, 1=Horizontal/Y, 2=Vertical/Z, 3=J4/RZ. JointValue is the literal;
@@ -304,8 +330,10 @@ public class ProgramStep
     [JsonPropertyName("jointIndex")]      public int     JointIndex { get; set; }
     [JsonPropertyName("jointValue")]      public double? JointValue { get; set; }
 
-    // SetLocal / ClearLocal — also used as per-step local override on move steps
+    // SetLocal / ClearLocal — also used as per-step local override on move steps. LocalId is the
+    // stable link (rename-proof); LocalName is a display label / fallback for pre-id steps.
     [JsonPropertyName("localName")]       public string? LocalName { get; set; }
+    [JsonPropertyName("localId")]         public string? LocalId { get; set; }
 
     // JumpL / JumpJ — Z height used for lift and lower legs (mm). JumpZStart/JumpZEnd override each leg independently.
     [JsonPropertyName("jumpZ")]      public double? JumpZ      { get; set; }
@@ -315,17 +343,14 @@ public class ProgramStep
     // RunVision
     [JsonPropertyName("visionProgramId")]   public string? VisionProgramId   { get; set; }
     [JsonPropertyName("visionProgramName")] public string? VisionProgramName { get; set; }
-    [JsonPropertyName("visionZoneId")]      public string? VisionZoneId      { get; set; }
-    [JsonPropertyName("visionZoneVar")]     public string? VisionZoneVar     { get; set; }
-    [JsonPropertyName("visionOutputs")]     public List<VisionStepOutput>?         VisionOutputs  { get; set; }
-    [JsonPropertyName("colorOutputs")]      public List<ColorVisionStepOutput>?    ColorOutputs   { get; set; }
-    [JsonPropertyName("polygonOutputs")]    public List<PolygonVisionStepOutput>?  PolygonOutputs { get; set; }
-    [JsonPropertyName("arucoOutputs")]      public List<ArucoVisionStepOutput>?    ArucoOutputs   { get; set; }
+    /// <summary>Optional: variable set to the program's overall pass (1/0).</summary>
+    [JsonPropertyName("passVariable")]      public string? PassVariable      { get; set; }
+    /// <summary>Tool results written into variables (docs/vision-tools.md, "RunVision step").</summary>
+    [JsonPropertyName("toolOutputs")]       public List<VisionToolOutput>? ToolOutputs { get; set; }
     /// <summary>
-    /// Coordinate frame of the blob points and polygon/ArUco centers written by RunVision:
-    /// "pixel", "normalized" (0–1) or "robot" (mm on the camera's calibration plane, point
-    /// Z = planeZ; needs a camera calibration). Null keeps the original mix — blob points in
-    /// pixels, polygon/ArUco centers normalized. See docs/camera-calibration.md.
+    /// Coordinate frame of positions written by RunVision (points, item and pose x/y, values
+    /// x/y): "pixel" (the default), "normalized" (0–1) or "robot" (mm on the camera's
+    /// calibration plane, point Z = planeZ; needs a camera calibration). See docs/camera-calibration.md.
     /// </summary>
     [JsonPropertyName("outputFrame")]       public string? OutputFrame { get; set; }
 
@@ -424,6 +449,17 @@ public class ProgramStep
     [JsonPropertyName("jsonOutbound")]        public List<JsonKeyValue>?       JsonOutbound        { get; set; }
     [JsonPropertyName("jsonInbound")]         public List<JsonInboundMapping>? JsonInbound         { get; set; }
     [JsonPropertyName("jsonImageOutbound")]   public List<JsonImageMapping>?   JsonImageOutbound   { get; set; }
+
+    // StartRecording — captures a load cell (loadCellDeviceId/loadCellPin above) into this list variable
+    // (filled on StopRecording as a Record list of {t,v,r}). StopRecording reuses the load-cell fields.
+    [JsonPropertyName("recordVariableName")] public string? RecordVariableName { get; set; }
+
+    // ExportData — write one or more variables to a file. exportColumns reuses the HttpRequest outbound
+    // row shape (key + expr/listVar/imageVar). exportPath supports $variable / $time_ms interpolation.
+    [JsonPropertyName("exportFormat")]   public string?             ExportFormat  { get; set; } // "csv" | "json"
+    [JsonPropertyName("exportPath")]     public string?             ExportPath    { get; set; }
+    [JsonPropertyName("exportColumns")]  public List<JsonKeyValue>? ExportColumns { get; set; }
+
     // CaptureImage
     [JsonPropertyName("captureImageVariableName")] public string? CaptureImageVariableName { get; set; }
     [JsonPropertyName("captureImageCameraId")]     public string? CaptureImageCameraId     { get; set; }
@@ -431,6 +467,99 @@ public class ProgramStep
     [JsonPropertyName("httpReceiveName")]      public string?                   HttpReceiveName      { get; set; }
     [JsonPropertyName("httpReceiveTimeoutMs")] public int?                      HttpReceiveTimeoutMs { get; set; }
     [JsonPropertyName("httpReceiveInbound")]   public List<JsonInboundMapping>? HttpReceiveInbound   { get; set; }
+
+    // Plugin — a step a plugin provides (docs/plugins.md §6)
+    /// <summary>The plugin's manifest id.</summary>
+    [JsonPropertyName("pluginId")]        public string?                     PluginId        { get; set; }
+    /// <summary>The manifest's <c>steps[].id</c>.</summary>
+    [JsonPropertyName("pluginStepId")]    public string?                     PluginStepId    { get; set; }
+    /// <summary>One text per declared param, interpreted by the param's type; absent → the manifest default.</summary>
+    [JsonPropertyName("pluginParams")]    public Dictionary<string, string>? PluginParams    { get; set; }
+    /// <summary>Which outputs to write, and into which variables.</summary>
+    [JsonPropertyName("pluginOutputs")]   public List<PluginOutputMapping>?  PluginOutputs   { get; set; }
+    /// <summary>Overrides the manifest step's timeoutMs (0 = none).</summary>
+    [JsonPropertyName("pluginTimeoutMs")] public int?                        PluginTimeoutMs { get; set; }
+
+    // ── Program editor v2 (docs/program-language.md §4.1–4.3) ──────────────────
+
+    // Note — the text lives in Comment. "note" (default) | "section" (a header that can collapse).
+    [JsonPropertyName("noteStyle")]   public string? NoteStyle   { get; set; }
+
+    // LoopControl — "break" (default) | "continue"
+    [JsonPropertyName("loopControl")] public string? LoopControl { get; set; }
+
+    // RaiseError — message template (required) and an identifier code (default "userError").
+    // EndProgram uses StatusMessage for its optional finishing message.
+    [JsonPropertyName("errorMessage")] public string? ErrorMessage { get; set; }
+    [JsonPropertyName("errorCode")]    public string? ErrorCode    { get; set; }
+
+    // Switch — evaluates SwitchExpr once; the first case with an equal value runs, else SwitchDefault.
+    [JsonPropertyName("switchExpr")]    public string?            SwitchExpr    { get; set; }
+    [JsonPropertyName("switchCases")]   public List<SwitchCase>?  SwitchCases   { get; set; }
+    [JsonPropertyName("switchDefault")] public List<ProgramStep>? SwitchDefault { get; set; }
+
+    // Try — run TrySteps; a catchable failure retries TryRetries times (TryRetryDelayMs apart), then
+    // runs CatchSteps. CatchCodes empty = every catchable code. The error variables are string variables.
+    [JsonPropertyName("trySteps")]              public List<ProgramStep>? TrySteps              { get; set; }
+    [JsonPropertyName("catchSteps")]            public List<ProgramStep>? CatchSteps            { get; set; }
+    [JsonPropertyName("tryRetries")]            public int?               TryRetries            { get; set; }
+    [JsonPropertyName("tryRetryDelayMs")]       public int?               TryRetryDelayMs       { get; set; }
+    [JsonPropertyName("catchCodes")]            public List<string>?      CatchCodes            { get; set; }
+    [JsonPropertyName("errorVariableName")]     public string?            ErrorVariableName     { get; set; }
+    [JsonPropertyName("errorCodeVariableName")] public string?            ErrorCodeVariableName { get; set; }
+
+    // Wait — what a condition wait does on timeout: "continue" (default) | "error" (fails waitTimeout).
+    [JsonPropertyName("waitTimeoutAction")] public string? WaitTimeoutAction { get; set; }
+
+    // CallRoutine parameters — routineArgs: param name → expression (template for a string param),
+    // evaluated in the caller's scope; routineOutputs: out/inOut param (key) → caller variable.
+    [JsonPropertyName("routineArgs")]    public Dictionary<string, string>? RoutineArgs    { get; set; }
+    [JsonPropertyName("routineOutputs")] public List<PluginOutputMapping>?  RoutineOutputs { get; set; }
+
+    // SetOutput — "set" (default; outputValue, or expressions.outputValue non-zero = on) | "toggle".
+    [JsonPropertyName("outputAction")] public string? OutputAction { get; set; }
+
+    // SavePosition — the TCP pose (in the active local) into a Points list (VariableName) or a saved
+    // point (PointId / PointName). Mode "replace" (default) | "append" | "insert" | "set"; the index
+    // (insert/set) may be an expression under expressions.savePositionIndex. Source "actual" | "target".
+    [JsonPropertyName("savePositionTo")]     public string? SavePositionTo     { get; set; }
+    [JsonPropertyName("savePositionMode")]   public string? SavePositionMode   { get; set; }
+    [JsonPropertyName("savePositionIndex")]  public int?    SavePositionIndex  { get; set; }
+    [JsonPropertyName("savePositionSource")] public string? SavePositionSource { get; set; }
+
+    // SetSpeedFactor — program speed percentage 1–100 (expression key speedFactor).
+    [JsonPropertyName("speedFactor")] public double? SpeedFactor { get; set; }
+
+    // MoveC — the via point (end target uses the standard target fields); arcTolerance = max chord error (mm).
+    [JsonPropertyName("viaPointId")]       public string? ViaPointId       { get; set; }
+    [JsonPropertyName("viaPointName")]     public string? ViaPointName     { get; set; }
+    [JsonPropertyName("viaPointNameExpr")] public string? ViaPointNameExpr { get; set; }
+    [JsonPropertyName("arcTolerance")]     public double? ArcTolerance     { get; set; }
+
+    // ListOp — mutates the list in VariableName. listAction: append | insert | removeAt | clear | set |
+    // setField | sort | reverse | copyFrom. listIndex may be an expression (expressions.listIndex).
+    [JsonPropertyName("listAction")]         public string?                     ListAction         { get; set; }
+    [JsonPropertyName("listIndex")]          public int?                        ListIndex          { get; set; }
+    [JsonPropertyName("listValueExpr")]      public string?                     ListValueExpr      { get; set; }
+    [JsonPropertyName("listFields")]         public Dictionary<string, string>? ListFields         { get; set; }
+    [JsonPropertyName("listSourceVariable")] public string?                     ListSourceVariable { get; set; }
+    [JsonPropertyName("listSortField")]      public string?                     ListSortField      { get; set; }
+    [JsonPropertyName("listSortDescending")] public bool?                       ListSortDescending { get; set; }
+
+    // Prompt — an operator dialog published in the program status and answered with AnswerPrompt.
+    // promptInput: "none" (default) | "number" | "text". promptTimeoutMs 0/null = wait forever;
+    // promptTimeoutButton = the button index chosen on timeout (null = fail promptTimeout).
+    [JsonPropertyName("promptTitle")]              public string?       PromptTitle              { get; set; }
+    [JsonPropertyName("promptMessage")]            public string?       PromptMessage            { get; set; }
+    [JsonPropertyName("promptButtons")]            public List<string>? PromptButtons            { get; set; }
+    [JsonPropertyName("promptInput")]              public string?       PromptInput              { get; set; }
+    [JsonPropertyName("promptDefault")]            public string?       PromptDefault            { get; set; }
+    [JsonPropertyName("promptMin")]                public double?       PromptMin                { get; set; }
+    [JsonPropertyName("promptMax")]                public double?       PromptMax                { get; set; }
+    [JsonPropertyName("promptResultVariableName")] public string?       PromptResultVariableName { get; set; }
+    [JsonPropertyName("promptInputVariableName")]  public string?       PromptInputVariableName  { get; set; }
+    [JsonPropertyName("promptTimeoutMs")]          public int?          PromptTimeoutMs          { get; set; }
+    [JsonPropertyName("promptTimeoutButton")]      public int?          PromptTimeoutButton      { get; set; }
 
     // Unknown — placeholder for steps whose type string could not be parsed
     [JsonPropertyName("unknownStepType")]

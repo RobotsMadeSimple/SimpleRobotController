@@ -34,6 +34,14 @@ namespace Controller.RobotControl.Vision
                 try
                 {
                     var text = File.ReadAllText(file);
+                    if (IsOldFormat(text))
+                    {
+                        // Zone + typed-inspection programs are not converted (docs/vision-tools.md):
+                        // left on disk untouched, but not loaded. Saving a program with the same id
+                        // overwrites the file.
+                        Console.WriteLine($"[Vision] Skipping {Path.GetFileName(file)}: old zone/inspection format — rebuild it with tools");
+                        continue;
+                    }
                     var prog = JsonSerializer.Deserialize<VisionProgram>(text, _opts);
                     if (prog != null)
                         _programs[prog.Id] = prog;
@@ -43,6 +51,21 @@ namespace Controller.RobotControl.Vision
                     Console.WriteLine($"[Vision] Failed to load {file}: {ex.Message}");
                 }
             }
+        }
+
+        /// <summary>A program saved by the zone + inspection model: no "tools", but zones or inspections.</summary>
+        internal static bool IsOldFormat(string json)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object || root.TryGetProperty("tools", out _)) return false;
+                foreach (var p in root.EnumerateObject())
+                    if (p.Name == "zones" || p.Name.EndsWith("nspections", StringComparison.Ordinal)) return true;
+                return false;
+            }
+            catch (JsonException) { return false; }
         }
 
         private string FilePath(string id)

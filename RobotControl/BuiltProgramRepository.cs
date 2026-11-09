@@ -282,20 +282,19 @@ public class BuiltProgramRepository
         }
     }
 
-    /// <summary>Counts steps recursively (loop bodies, if/else-if/else branches) without following CallRoutine.</summary>
+    /// <summary>Counts steps recursively (every block body via <see cref="StepTree"/>, legacy baked
+    /// CNC steps excluded) without following CallRoutine.</summary>
     private static int CountSteps(IEnumerable<ProgramStep>? steps)
     {
         if (steps == null) return 0;
         var count = 0;
         foreach (var s in steps)
         {
+            if (s == null) continue;
             count++;
-            count += CountSteps(s.LoopSteps);
-            count += CountSteps(s.IfSteps);
-            count += CountSteps(s.ElseSteps);
-            if (s.ElseIfBranches != null)
-                foreach (var branch in s.ElseIfBranches)
-                    count += CountSteps(branch.Steps);
+            foreach (var child in s.ChildLists())
+                if (child.Role != StepTree.Roles.CncProgramSteps)
+                    count += CountSteps(child.Steps);
         }
         return count;
     }

@@ -36,6 +36,8 @@ namespace Controller.RobotControl.Validation
         public const string UnknownLocal         = "unknownLocal";
         public const string UnknownRoutine       = "unknownRoutine";
         public const string UnknownVisionProgram = "unknownVisionProgram";
+        /// <summary>A RunVision toolOutputs entry names a tool its vision program does not have.</summary>
+        public const string UnknownVisionTool    = "unknownVisionTool";
         public const string UnknownGrid          = "unknownGrid";
         public const string UnknownStack         = "unknownStack";
         public const string UnknownLabel         = "unknownLabel";
@@ -58,6 +60,9 @@ namespace Controller.RobotControl.Validation
         public const string BadArity             = "badArity";
         /// <summary>A write (SetVariable, loop/vision/HTTP target, variable declaration) to a property or IO name.</summary>
         public const string ReadOnlyProperty     = "readOnlyProperty";
+        /// <summary>A grid/stack whose row/column (or layer) step is all zero: every cell is the same
+        /// position, so it has not been taught yet (warning).</summary>
+        public const string UntaughtGrid         = "untaughtGrid";
         /// <summary>Start/Stop/WaitForBackground naming a program that does not exist.</summary>
         public const string UnknownProgram       = "unknownProgram";
         /// <summary>A step type this controller does not know (it would be skipped) — warning.</summary>
@@ -78,6 +83,52 @@ namespace Controller.RobotControl.Validation
         public const string CameraNotCalibrated  = "cameraNotCalibrated";
         /// <summary>RunVision outputFrame that is not pixel, normalized or robot.</summary>
         public const string BadOutputFrame       = "badOutputFrame";
+
+        // Plugins (docs/plugins.md §6):
+        /// <summary>A Plugin step whose pluginId is not installed.</summary>
+        public const string UnknownPlugin         = "unknownPlugin";
+        /// <summary>A Plugin step whose plugin has no such step.</summary>
+        public const string UnknownPluginStep     = "unknownPluginStep";
+        /// <summary>Plugin installed but not running (step, function or property reference) — warning.</summary>
+        public const string PluginNotRunning      = "pluginNotRunning";
+        /// <summary>A required plugin step param with no text and no default.</summary>
+        public const string PluginParamMissing    = "pluginParamMissing";
+        /// <summary>An enum plugin step param whose text is not one of its options.</summary>
+        public const string PluginParamEnum       = "pluginParamEnum";
+        /// <summary>A plugin step output mapped to a variable of a kind that cannot hold it.</summary>
+        public const string PluginOutputType      = "pluginOutputType";
+        /// <summary><c>x.y(…)</c> where x is a plugin but y is not one of its functions.</summary>
+        public const string UnknownPluginFunction = "unknownPluginFunction";
+
+        // Program editor v2 (docs/program-language.md §4.2–4.3). The names are frozen here (package
+        // A); the checks live in ProgramValidator.Flow.cs (package B) and ProgramValidator.Steps.cs
+        // (package C).
+        /// <summary>Break / Next iteration with no enclosing loop in the same routine.</summary>
+        public const string LoopControlOutsideLoop = "loopControlOutsideLoop";
+        /// <summary>A CallRoutine argument or output naming a parameter the routine does not declare.</summary>
+        public const string UnknownParam           = "unknownParam";
+        /// <summary>An "in" parameter with no argument (its declared value is used) — warning.</summary>
+        public const string ParamMissing           = "paramMissing";
+        /// <summary>A routine output mapped to a variable of a kind that cannot hold it.</summary>
+        public const string ParamOutputType        = "paramOutputType";
+        /// <summary>Two Switch cases share a literal value (the later one can never run) — warning.</summary>
+        public const string DuplicateCaseValue     = "duplicateCaseValue";
+        /// <summary>A field the step type does not support yet (e.g. a stop condition on MoveC).</summary>
+        public const string UnsupportedOnStep      = "unsupportedOnStep";
+        /// <summary>A background program writing a saved point (SavePosition to point) — warning.</summary>
+        public const string PointWriteInBackground = "pointWriteInBackground";
+    }
+
+    /// <summary>What the validator knows about one installed plugin (docs/plugins.md §6).</summary>
+    /// <param name="LiveProperties">Property names the plugin has set (declared or not).</param>
+    internal sealed record ValidationPlugin(
+        string Id, string Name, bool Running, Plugins.PluginManifest Manifest, IReadOnlyCollection<string> LiveProperties)
+    {
+        /// <summary>From a host; null when it is not installed with a valid manifest.</summary>
+        public static ValidationPlugin? From(Plugins.PluginHost? host) =>
+            host is { Problems.Count: 0, Manifest: { } m }
+                ? new ValidationPlugin(host.Id, host.Name, host.IsRunning, m, host.Properties.Keys.ToList())
+                : null;
     }
 
     /// <summary>
@@ -86,15 +137,24 @@ namespace Controller.RobotControl.Validation
     /// </summary>
     internal sealed class ValidationContext
     {
-        public Func<string, bool>? PointExists         { get; init; }
-        public Func<string, bool>? ToolExists          { get; init; }
-        public Func<string, bool>? LocalExists         { get; init; }
+        // (id, name) → exists? Resolves by stable id first, falling back to name — so a renamed
+        // point/tool/local linked by id is not falsely flagged as missing. Expression/text call
+        // sites that only have a typed name pass (null, name).
+        public Func<string?, string?, bool>? PointExists         { get; init; }
+        public Func<string?, string?, bool>? ToolExists          { get; init; }
+        public Func<string?, string?, bool>? LocalExists         { get; init; }
         /// <summary>By grid id (what GridPointRef carries).</summary>
         public Func<string, bool>? GridExists          { get; init; }
         /// <summary>By stack id (what StackPointRef carries).</summary>
         public Func<string, bool>? StackExists         { get; init; }
+        /// <summary>A grid's (by id) base point name and whether its row/column steps are set.</summary>
+        public Func<string, (string BasePointName, bool HasSpacing)?>? GridBase  { get; init; }
+        /// <summary>A stack's (by id) base point name and whether its layer step is set.</summary>
+        public Func<string, (string BasePointName, bool HasSpacing)?>? StackBase { get; init; }
         /// <summary>By vision program id.</summary>
         public Func<string, bool>? VisionProgramExists { get; init; }
+        /// <summary>The tool ids of a vision program (null when unknown); checks RunVision toolOutputs.</summary>
+        public Func<string, IReadOnlyCollection<string>?>? VisionToolIds { get; init; }
         /// <summary>A vision program's camera and whether it has a camera-to-robot calibration; null for an unknown program.</summary>
         public Func<string, (string CameraId, bool Calibrated)?>? VisionProgramCamera { get; init; }
         /// <summary>A built program / routine by id first, then name — the executor's own order.</summary>
@@ -110,6 +170,15 @@ namespace Controller.RobotControl.Validation
         /// <summary>The expression function table.</summary>
         public IReadOnlyList<ExpressionFunction> Functions { get; init; } = ExpressionEvaluator.Functions;
 
+        /// <summary>An installed (valid) plugin by id, or null — Plugin steps, <c>id.fn(…)</c> calls and
+        /// <c>$id.prop</c> references are checked against it. Null predicate: not checked.</summary>
+        public Func<string, ValidationPlugin?>? PluginLookup { get; init; }
+
+        /// <summary>By grid name (a Plugin step's <c>grid:&lt;name&gt;[…]</c> point param).</summary>
+        public Func<string, bool>? GridNameExists  { get; init; }
+        /// <summary>By stack name (a Plugin step's <c>stack:&lt;name&gt;[…]</c> point param).</summary>
+        public Func<string, bool>? StackNameExists { get; init; }
+
         /// <summary>No repositories: names of points/tools/… are not checked.</summary>
         public static ValidationContext Offline() => new();
     }
@@ -118,14 +187,14 @@ namespace Controller.RobotControl.Validation
     /// Static checks on a <see cref="BuiltProgram"/> before it runs — the rules of
     /// docs/expressions-and-variables.md §5. Pure: reads only the program and the context.
     /// </summary>
-    internal static class ProgramValidator
+    internal static partial class ProgramValidator
     {
         public static List<ValidationProblem> Validate(BuiltProgram program, ValidationContext ctx) =>
             new Walker(program, ctx).Run();
 
         // stb.in1-4 / stb.out1-4 / relay.1-4 / nano.<board>.<pin>
         private static readonly Regex IoPattern = new(
-            @"^(stb\.(in|out)[1-4]|relay\.[1-4]|nano\.[^.\s]+\.[^.\s]+)$",
+            @"^(stb\.(in|out)[1-4]|relay\.[1-4]|io.[^.\s]+\.[^.\s]+)$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         private static readonly string[] ConditionOps =
@@ -135,7 +204,7 @@ namespace Controller.RobotControl.Validation
 
         private sealed record Sym(SymKind Kind, ListElementType ElementType = ListElementType.Record);
 
-        private sealed class Walker
+        private sealed partial class Walker
         {
             private readonly BuiltProgram _main;
             private readonly ValidationContext _ctx;
@@ -273,29 +342,14 @@ namespace Controller.RobotControl.Validation
                 }
             }
 
-            /// <summary>Every enabled step in a list, nested bodies included (routine bodies not).</summary>
-            private static IEnumerable<ProgramStep> Descend(List<ProgramStep> steps)
-            {
-                foreach (var s in steps)
-                {
-                    if (s == null || !s.IsEnabled) continue;
-                    yield return s;
-                    foreach (var child in Children(s))
-                        foreach (var c in Descend(child.Steps)) yield return c;
-                }
-            }
+            /// <summary>Every enabled step in a list, nested bodies included (routine bodies not).
+            /// A disabled step and everything inside it never runs, so it declares nothing.</summary>
+            private static IEnumerable<ProgramStep> Descend(List<ProgramStep> steps) =>
+                StepTree.Walk(steps, enabledOnly: true, executableOnly: true);
 
-            private static IEnumerable<(string Field, List<ProgramStep> Steps)> Children(ProgramStep s)
-            {
-                if (s.LoopSteps != null) yield return ("loopSteps", s.LoopSteps);
-                if (s.IfSteps   != null) yield return ("ifSteps",   s.IfSteps);
-                if (s.ElseIfBranches != null)
-                    for (int j = 0; j < s.ElseIfBranches.Count; j++)
-                        if (s.ElseIfBranches[j]?.Steps != null)
-                            yield return ($"elseIfBranches[{j}].steps", s.ElseIfBranches[j].Steps);
-                if (s.ElseSteps != null) yield return ("elseSteps", s.ElseSteps);
-                if (s.CncSpec == null && s.CncProgramSteps != null) yield return ("cncProgramSteps", s.CncProgramSteps);
-            }
+            /// <summary>The nested step lists the executor can run, with their stepPath segment.</summary>
+            private static IEnumerable<(string Field, List<ProgramStep> Steps)> Children(ProgramStep s) =>
+                s.ChildLists(executableOnly: true).Select(c => (c.Path, c.Steps));
 
             private void Implicit(string? name, SymKind kind, ListElementType et = ListElementType.Record)
             {
@@ -312,34 +366,33 @@ namespace Controller.RobotControl.Validation
                     case StepType.StopwatchControl: Implicit(s.StopwatchVariableName, SymKind.Stopwatch); break;
                     case StepType.CaptureImage:     Implicit(s.CaptureImageVariableName, SymKind.Image); break;
                     case StepType.Wait:             Implicit(s.WaitTimeoutVariableName, SymKind.Boolean); break;
+                    // A move's stop-condition flag is created like Wait's timeout flag (1 / 0).
+                    case StepType.MoveL: case StepType.MoveJ: case StepType.JumpL: case StepType.JumpJ:
+                    case StepType.AuxMove: case StepType.GripperAction:
+                        Implicit(s.MoveStopFlagVariableName, SymKind.Boolean); break;
+                    // Package C: an undeclared Prompt result/input variable is created as a number
+                    // (button index / typed number); SavePosition creates its Points list.
+                    case StepType.Prompt:
+                        Implicit(s.PromptResultVariableName, SymKind.Number);
+                        if (s.PromptInput is "number" or "text") Implicit(s.PromptInputVariableName, SymKind.Number);
+                        break;
+                    case StepType.SavePosition when s.SavePositionTo != "point":
+                        Implicit(s.VariableName, SymKind.List, ListElementType.Point); break;
                 }
-                foreach (var o in s.VisionOutputs ?? [])
+                if (s.Type == StepType.RunVision)
                 {
-                    Implicit(o.CountVar, SymKind.Number);
-                    Implicit(o.PointsVar, SymKind.List, ListElementType.Point);
-                    Implicit(o.DetectedVar, SymKind.Boolean);
+                    Implicit(s.PassVariable, SymKind.Boolean);
+                    foreach (var o in s.ToolOutputs ?? [])
+                        if (o != null) Implicit(o.Variable, VisionOutputKind(o.Value, out var et), et);
                 }
-                foreach (var o in s.ColorOutputs ?? [])
-                {
-                    Implicit(o.CoverageVar, SymKind.Number);
-                    Implicit(o.PassedVar, SymKind.Boolean);
-                    Implicit(o.CellsVar, SymKind.List, ListElementType.Record);
-                    Implicit(o.CellsPassedVar, SymKind.Number);
-                }
-                foreach (var o in s.PolygonOutputs ?? [])
-                {
-                    Implicit(o.CountVar, SymKind.Number); Implicit(o.FoundVar, SymKind.Boolean);
-                    Implicit(o.AngleVar, SymKind.Number); Implicit(o.CenterXVar, SymKind.Number);
-                    Implicit(o.CenterYVar, SymKind.Number);
-                }
-                foreach (var o in s.ArucoOutputs ?? [])
-                {
-                    Implicit(o.CountVar, SymKind.Number); Implicit(o.FoundVar, SymKind.Boolean);
-                    Implicit(o.FirstIdVar, SymKind.Number); Implicit(o.FirstCenterXVar, SymKind.Number);
-                    Implicit(o.FirstCenterYVar, SymKind.Number);
-                }
+                // A Plugin step's number/boolean outputs create their variable like Set Variable does.
+                if (s.Type == StepType.Plugin && PluginStepDef(s) is { } pdef)
+                    foreach (var m in s.PluginOutputs ?? [])
+                        if (m != null && pdef.Outputs.FirstOrDefault(o => o.Key == m.Key) is { Type: "number" or "boolean" } o)
+                            Implicit(m.VariableName, o.Type == "boolean" ? SymKind.Boolean : SymKind.Number);
                 foreach (var m in s.JsonInbound ?? [])        Implicit(m.VariableName, SymKind.Number);
                 foreach (var m in s.HttpReceiveInbound ?? []) Implicit(m.VariableName, SymKind.Number);
+                CollectImplicitFlow(s); // package B: Try error variables, routine outputs
             }
 
             private Sym? Lookup(string name)
@@ -599,13 +652,6 @@ namespace Controller.RobotControl.Validation
                         SetTerminator(s, ref unreachable, ref unreachableCause);
                     }
 
-                    if (!s.IsEnabled)
-                    {
-                        Add(at, ValidationCodes.DisabledStep, "Step is disabled and will be skipped",
-                            "enabled", ValidationSeverity.Warning);
-                        continue;
-                    }
-
                     ValidateStep(s, sp, at, chain, body);
 
                     if (!unreachable) SetTerminator(s, ref unreachable, ref unreachableCause);
@@ -613,25 +659,59 @@ namespace Controller.RobotControl.Validation
             }
 
             /// <summary>A step after which the rest of the list cannot run: an unconditional
-            /// GoToLabel, or a counted loop that runs forever.</summary>
+            /// GoToLabel, or a counted loop that runs forever with no Break of its own.</summary>
             private static void SetTerminator(ProgramStep s, ref bool unreachable, ref string? cause)
             {
-                if (!s.IsEnabled) return;
+                if (!s.IsEnabled) return; // a disabled step is skipped, so it ends nothing
                 if (s.Type == StepType.GoToLabel)
                 {
                     unreachable = true;
                     cause = $"Go To '{s.LabelName ?? s.LabelId}'";
                 }
                 else if (s.Type == StepType.Loop && (s.LoopMode is null or "count") && s.LoopCount == 0
-                         && s.Expressions?.ContainsKey("loopCount") != true && (s.LoopSteps?.Count ?? 0) > 0)
+                         && s.Expressions?.ContainsKey("loopCount") != true && (s.LoopSteps?.Count ?? 0) > 0
+                         && !BreaksLoop(s.LoopSteps))
                 {
                     unreachable = true;
                     cause = "an infinite loop";
                 }
             }
 
+            /// <summary>
+            /// Whether a loop body holds an enabled Break that exits THIS loop: anywhere in the
+            /// body, inside If / Switch / Try blocks too, but not inside a nested Loop (that Break
+            /// only ends the inner loop). A routine's body is not followed: Break never crosses a
+            /// routine boundary. GoTo out of the loop, Return and End Program do not count: none
+            /// of them carries on at the step after the loop (a jump target is a Label, which
+            /// ends the unreachable run by itself).
+            /// </summary>
+            internal static bool BreaksLoop(List<ProgramStep>? body)
+            {
+                if (body == null) return false;
+                foreach (var s in body)
+                {
+                    if (s == null || !s.IsEnabled) continue;
+                    if (s.Type == StepType.LoopControl && s.LoopControl != "continue") return true;
+                    if (s.Type == StepType.Loop) continue; // its Breaks are its own
+                    foreach (var child in s.ChildLists(executableOnly: true))
+                        if (BreaksLoop(child.Steps)) return true;
+                }
+                return false;
+            }
+
             private void ValidateStep(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body)
             {
+                // A disabled step is skipped at run time with its whole body: say so once, and do
+                // not report problems in something that will not run.
+                if (!s.IsEnabled)
+                {
+                    if (s.Type != StepType.Note)
+                        Add(at, ValidationCodes.DisabledStep,
+                            (s.ChildLists().Any() ? "This step and its body are disabled" : "This step is disabled") +
+                            " and will be skipped", "enabled", ValidationSeverity.Warning);
+                    return;
+                }
+
                 // Every step may carry numeric field expressions.
                 if (s.Expressions != null)
                     foreach (var (key, expr) in s.Expressions)
@@ -648,8 +728,22 @@ namespace Controller.RobotControl.Validation
                 {
                     case StepType.MoveL: case StepType.MoveJ: case StepType.JumpL: case StepType.JumpJ:
                         CheckMoveTarget(s, at);
-                        if (!string.IsNullOrEmpty(s.LocalName) && _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalName))
-                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName}' does not exist", "localName");
+                        if ((!string.IsNullOrEmpty(s.LocalId) || !string.IsNullOrEmpty(s.LocalName)) &&
+                            _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalId, s.LocalName))
+                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName ?? s.LocalId}' does not exist", "localName");
+                        CheckMoveStop(s, at, aux: false);
+                        break;
+
+                    case StepType.AuxMove:
+                        CheckMoveStop(s, at, aux: true);
+                        if (MoveStopConditions.HasCondition(s) && s.AuxWaitForDone == false)
+                            Add(at, ValidationCodes.MissingField,
+                                "Stop condition is ignored because the step does not wait for the move to finish (auxWaitForDone is false)",
+                                "moveStopCondition", ValidationSeverity.Warning);
+                        break;
+
+                    case StepType.GripperAction:
+                        CheckMoveStop(s, at, aux: true);
                         break;
 
                     case StepType.SetOutput:
@@ -706,14 +800,15 @@ namespace Controller.RobotControl.Validation
                         break;
 
                     case StepType.SetTool:
-                        if (!string.IsNullOrEmpty(s.ToolName) && s.ToolName != "none" &&
-                            _ctx.ToolExists != null && !_ctx.ToolExists(s.ToolName))
-                            Add(at, ValidationCodes.UnknownTool, $"Tool '{s.ToolName}' does not exist", "toolName");
+                        if ((!string.IsNullOrEmpty(s.ToolId) || (!string.IsNullOrEmpty(s.ToolName) && s.ToolName != "none")) &&
+                            _ctx.ToolExists != null && !_ctx.ToolExists(s.ToolId, s.ToolName))
+                            Add(at, ValidationCodes.UnknownTool, $"Tool '{s.ToolName ?? s.ToolId}' does not exist", "toolName");
                         break;
 
                     case StepType.SetLocal:
-                        if (!string.IsNullOrEmpty(s.LocalName) && _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalName))
-                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName}' does not exist", "localName");
+                        if ((!string.IsNullOrEmpty(s.LocalId) || !string.IsNullOrEmpty(s.LocalName)) &&
+                            _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalId, s.LocalName))
+                            Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName ?? s.LocalId}' does not exist", "localName");
                         break;
 
                     case StepType.RunVision:
@@ -722,7 +817,6 @@ namespace Controller.RobotControl.Validation
                         else if (_ctx.VisionProgramExists != null && !_ctx.VisionProgramExists(s.VisionProgramId))
                             Add(at, ValidationCodes.UnknownVisionProgram,
                                 $"Vision program '{s.VisionProgramName ?? s.VisionProgramId}' does not exist", "visionProgramId");
-                        if (!string.IsNullOrWhiteSpace(s.VisionZoneVar)) CheckRead(s.VisionZoneVar, at, "visionZoneVar");
                         CheckOutputFrame(s, at);
                         CheckVisionTargets(s, at);
                         break;
@@ -763,6 +857,18 @@ namespace Controller.RobotControl.Validation
                             CheckTarget(s.JsonInbound![j]?.VariableName, at, $"jsonInbound[{j}].variableName", requireDeclared: false);
                         break;
 
+                    case StepType.StartRecording:
+                        // The list the samples land in on StopRecording counts as a use.
+                        if (!string.IsNullOrWhiteSpace(s.RecordVariableName)) Use(s.RecordVariableName);
+                        break;
+
+                    case StepType.ExportData:
+                        if (string.IsNullOrWhiteSpace(s.ExportPath))
+                            Add(at, ValidationCodes.MissingField, "No export path is set", "exportPath");
+                        else CheckTemplate(s.ExportPath, at, "exportPath", ValidationSeverity.Warning);
+                        CheckColumns(s.ExportColumns, "exportColumns", at);
+                        break;
+
                     case StepType.HttpReceive:
                         if (string.IsNullOrWhiteSpace(s.HttpReceiveName))
                             Add(at, ValidationCodes.MissingField, "No receive name is set", "httpReceiveName");
@@ -779,6 +885,10 @@ namespace Controller.RobotControl.Validation
                                     CheckExpr(expr, at, $"cncSpec.expressions.{key}");
                         break;
 
+                    case StepType.Plugin:
+                        ValidatePluginStep(s, at);
+                        break;
+
                     case StepType.SetJointPosition:
                         if (s.JointIndex is < 0 or > 3)
                             Add(at, ValidationCodes.MissingField,
@@ -792,10 +902,22 @@ namespace Controller.RobotControl.Validation
                         break;
                 }
 
-                // Nested bodies (if/else branches, legacy CNC steps).
+                // Program editor v2 checks (partial: ProgramValidator.Flow.cs / ProgramValidator.Steps.cs).
+                CheckFlowExt(s, sp, at, chain, body);
+                CheckStepsExt(s, at);
+
+                // Nested bodies (if/else branches, switch cases, try/catch, legacy CNC steps).
                 foreach (var (field, steps) in Children(s))
                     WalkList(steps, $"{sp}.{field}", chain, body);
             }
+
+            /// <summary>Flow blocks (LoopControl, Return, EndProgram, RaiseError, Switch, Try, routine
+            /// parameters) — implemented by package B in ProgramValidator.Flow.cs.</summary>
+            partial void CheckFlowExt(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body);
+
+            /// <summary>Motion / data / operator blocks (MoveC, SavePosition, SetSpeedFactor, ListOp,
+            /// Prompt) — implemented by package C in ProgramValidator.Steps.cs.</summary>
+            partial void CheckStepsExt(ProgramStep s, At at);
 
             private void ValidateLoop(ProgramStep s, string sp, At at, List<List<ProgramStep>> chain, Body body)
             {
@@ -877,9 +999,9 @@ namespace Controller.RobotControl.Validation
                     StringComparer.OrdinalIgnoreCase));
 
                 _callStack.Add(routine);
-                // Routine frames sit on top of the caller's at run time, so a GoToLabel in the
-                // routine can reach the caller's labels too.
-                WalkList(routine.Steps ?? new(), prefix + "steps", chain, new Body());
+                // A routine is its own scope for jumps: a GoToLabel (or Break / Next) in it never
+                // reaches the caller's labels or loops (the executor's Routine frame boundary).
+                WalkList(routine.Steps ?? new(), prefix + "steps", new List<List<ProgramStep>>(), new Body());
                 _callStack.RemoveAt(_callStack.Count - 1);
             }
 
@@ -927,44 +1049,66 @@ namespace Controller.RobotControl.Validation
                     $"of vision program '{s.VisionProgramName ?? s.VisionProgramId}' has no calibration", "outputFrame");
             }
 
+            /// <summary>The kind of variable a RunVision toolOutputs entry writes, by its value key.</summary>
+            private static SymKind VisionOutputKind(string? value, out ListElementType et)
+            {
+                et = ListElementType.Record;
+                switch (value?.Trim())
+                {
+                    case "cells": case "items": case "lines": case "pose": return SymKind.List;
+                    case "points": et = ListElementType.Point; return SymKind.List;
+                    case "passed": case "found": return SymKind.Boolean;
+                    case "status": case "format": return SymKind.String;
+                    case "value": return SymKind.String;   // a barcode's text
+                    default: return SymKind.Number;
+                }
+            }
+
             private void CheckVisionTargets(ProgramStep s, At at)
             {
-                void T(string? n, string f) => CheckTarget(n, at, f, requireDeclared: false);
-                for (int j = 0; j < (s.VisionOutputs?.Count ?? 0); j++)
+                CheckTarget(s.PassVariable, at, "passVariable", requireDeclared: false);
+                var toolIds = string.IsNullOrEmpty(s.VisionProgramId) ? null : _ctx.VisionToolIds?.Invoke(s.VisionProgramId);
+                for (int j = 0; j < (s.ToolOutputs?.Count ?? 0); j++)
                 {
-                    var o = s.VisionOutputs![j]; if (o == null) continue;
-                    T(o.CountVar, $"visionOutputs[{j}].countVar"); T(o.PointsVar, $"visionOutputs[{j}].pointsVar");
-                    T(o.DetectedVar, $"visionOutputs[{j}].detectedVar");
-                }
-                for (int j = 0; j < (s.ColorOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.ColorOutputs![j]; if (o == null) continue;
-                    T(o.CoverageVar, $"colorOutputs[{j}].coverageVar"); T(o.PassedVar, $"colorOutputs[{j}].passedVar");
-                    T(o.CellsVar, $"colorOutputs[{j}].cellsVar"); T(o.CellsPassedVar, $"colorOutputs[{j}].cellsPassedVar");
-                }
-                for (int j = 0; j < (s.PolygonOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.PolygonOutputs![j]; if (o == null) continue;
-                    T(o.CountVar, $"polygonOutputs[{j}].countVar"); T(o.FoundVar, $"polygonOutputs[{j}].foundVar");
-                    T(o.AngleVar, $"polygonOutputs[{j}].angleVar"); T(o.CenterXVar, $"polygonOutputs[{j}].centerXVar");
-                    T(o.CenterYVar, $"polygonOutputs[{j}].centerYVar");
-                }
-                for (int j = 0; j < (s.ArucoOutputs?.Count ?? 0); j++)
-                {
-                    var o = s.ArucoOutputs![j]; if (o == null) continue;
-                    T(o.CountVar, $"arucoOutputs[{j}].countVar"); T(o.FoundVar, $"arucoOutputs[{j}].foundVar");
-                    T(o.FirstIdVar, $"arucoOutputs[{j}].firstIdVar"); T(o.FirstCenterXVar, $"arucoOutputs[{j}].firstCenterXVar");
-                    T(o.FirstCenterYVar, $"arucoOutputs[{j}].firstCenterYVar");
+                    var o = s.ToolOutputs![j]; if (o == null) continue;
+                    string f = $"toolOutputs[{j}]";
+                    if (string.IsNullOrWhiteSpace(o.ToolId))
+                        Add(at, ValidationCodes.MissingField, "A vision output has no tool selected", $"{f}.toolId");
+                    else if (toolIds != null && !toolIds.Contains(o.ToolId))
+                        Add(at, ValidationCodes.UnknownVisionTool,
+                            $"Vision program '{s.VisionProgramName ?? s.VisionProgramId}' has no tool '{o.ToolId}'", $"{f}.toolId", ValidationSeverity.Warning);
+                    if (string.IsNullOrWhiteSpace(o.Value))
+                        Add(at, ValidationCodes.MissingField, "A vision output has no value selected", $"{f}.value");
+                    if (string.IsNullOrWhiteSpace(o.Variable))
+                        Add(at, ValidationCodes.MissingField, "A vision output has no variable", $"{f}.variable");
+                    else
+                        CheckTarget(o.Variable, at, $"{f}.variable", requireDeclared: false);
                 }
             }
 
             private void CheckOutbound(ProgramStep s, At at)
             {
-                for (int j = 0; j < (s.JsonOutbound?.Count ?? 0); j++)
+                CheckColumns(s.JsonOutbound, "jsonOutbound", at);
+                for (int j = 0; j < (s.JsonImageOutbound?.Count ?? 0); j++)
                 {
-                    var kv = s.JsonOutbound![j];
+                    var m = s.JsonImageOutbound![j];
+                    if (m == null || string.IsNullOrWhiteSpace(m.VariableName)) continue;
+                    Use(m.VariableName);
+                    if (Lookup(m.VariableName.Trim()) is not { Kind: SymKind.Image })
+                        Add(at, ValidationCodes.UnknownVariable, $"'${m.VariableName.Trim()}' is not an image variable",
+                            $"jsonImageOutbound[{j}].variableName");
+                }
+            }
+
+            /// <summary>Key/value rows (HttpRequest's outbound body, ExportData's columns): each
+            /// reads a list, an image or an expression.</summary>
+            private void CheckColumns(List<JsonKeyValue>? cols, string field, At at)
+            {
+                for (int j = 0; j < (cols?.Count ?? 0); j++)
+                {
+                    var kv = cols![j];
                     if (kv == null || string.IsNullOrWhiteSpace(kv.Key)) continue;
-                    string f = $"jsonOutbound[{j}]";
+                    string f = $"{field}[{j}]";
                     if (!string.IsNullOrWhiteSpace(kv.ListVar))
                     {
                         Use(kv.ListVar);
@@ -980,15 +1124,20 @@ namespace Controller.RobotControl.Validation
                     else if (!string.IsNullOrWhiteSpace(kv.Expr))
                         CheckExpr(kv.Expr, at, f + ".expr");
                 }
-                for (int j = 0; j < (s.JsonImageOutbound?.Count ?? 0); j++)
-                {
-                    var m = s.JsonImageOutbound![j];
-                    if (m == null || string.IsNullOrWhiteSpace(m.VariableName)) continue;
-                    Use(m.VariableName);
-                    if (Lookup(m.VariableName.Trim()) is not { Kind: SymKind.Image })
-                        Add(at, ValidationCodes.UnknownVariable, $"'${m.VariableName.Trim()}' is not an image variable",
-                            $"jsonImageOutbound[{j}].variableName");
-                }
+            }
+
+            /// <summary>A grid/stack resolves every cell from its base point, so a missing base point
+            /// fails the move just like a missing point; all-zero steps mean it was never taught.</summary>
+            private void CheckBase((string BasePointName, bool HasSpacing)? info, string kind, string id, At at, string field)
+            {
+                if (info is not { } b) return;
+                if (string.IsNullOrWhiteSpace(b.BasePointName))
+                    Add(at, ValidationCodes.MissingField, $"{kind} '{id}' has no base point", field);
+                else if (_ctx.PointExists != null && !_ctx.PointExists(null, b.BasePointName))
+                    Add(at, ValidationCodes.UnknownPoint, $"{kind} '{id}' base point '{b.BasePointName}' does not exist", field);
+                if (!b.HasSpacing)
+                    Add(at, ValidationCodes.UntaughtGrid,
+                        $"{kind} '{id}' has no {(kind == "Grid" ? "row/column" : "layer")} spacing — every cell is the same position; teach it first", field, ValidationSeverity.Warning);
             }
 
             private void CheckMoveTarget(ProgramStep s, At at)
@@ -1000,6 +1149,8 @@ namespace Controller.RobotControl.Validation
                         Add(at, ValidationCodes.MissingField, "No grid is selected", "gridPoint.gridId");
                     else if (_ctx.GridExists != null && !_ctx.GridExists(s.GridPoint.GridId))
                         Add(at, ValidationCodes.UnknownGrid, $"Grid '{s.GridPoint.GridId}' does not exist", "gridPoint.gridId");
+                    else
+                        CheckBase(_ctx.GridBase?.Invoke(s.GridPoint.GridId), "Grid", s.GridPoint.GridId, at, "gridPoint.gridId");
                 }
                 else if (s.StackPoint != null)
                 {
@@ -1007,6 +1158,8 @@ namespace Controller.RobotControl.Validation
                         Add(at, ValidationCodes.MissingField, "No stack is selected", "stackPoint.stackId");
                     else if (_ctx.StackExists != null && !_ctx.StackExists(s.StackPoint.StackId))
                         Add(at, ValidationCodes.UnknownStack, $"Stack '{s.StackPoint.StackId}' does not exist", "stackPoint.stackId");
+                    else
+                        CheckBase(_ctx.StackBase?.Invoke(s.StackPoint.StackId), "Stack", s.StackPoint.StackId, at, "stackPoint.stackId");
                 }
                 else if (!string.IsNullOrEmpty(s.VarPointName))
                 {
@@ -1023,13 +1176,13 @@ namespace Controller.RobotControl.Validation
                     }
                     else if (expr.Contains('$') || expr.Contains('{'))
                         CheckTemplate(expr, at, "pointNameExpr", ValidationSeverity.Error);
-                    else if (_ctx.PointExists != null && !_ctx.PointExists(expr.Trim()))
+                    else if (_ctx.PointExists != null && !_ctx.PointExists(null, expr.Trim()))
                         Add(at, ValidationCodes.UnknownPoint, $"Point '{expr.Trim()}' does not exist", "pointNameExpr");
                 }
-                else if (!string.IsNullOrEmpty(s.PointName))
+                else if (!string.IsNullOrEmpty(s.PointId) || !string.IsNullOrEmpty(s.PointName))
                 {
-                    if (_ctx.PointExists != null && !_ctx.PointExists(s.PointName))
-                        Add(at, ValidationCodes.UnknownPoint, $"Point '{s.PointName}' does not exist", "pointName");
+                    if (_ctx.PointExists != null && !_ctx.PointExists(s.PointId, s.PointName))
+                        Add(at, ValidationCodes.UnknownPoint, $"Point '{s.PointName ?? s.PointId}' does not exist", "pointName");
                 }
             }
 
@@ -1043,6 +1196,204 @@ namespace Controller.RobotControl.Validation
                         sym == null ? $"Unknown points variable '${name}'" : $"'${name}' is not a points list", field);
                 else if (sym.ElementType != ListElementType.Point)
                     Add(at, ValidationCodes.UnknownVariable, $"'${name}' is a {sym.ElementType} list, not a points list", field);
+            }
+
+            // ── Plugins (docs/plugins.md §6) ──────────────────────────────────
+
+            private ValidationPlugin? Plugin(string id) =>
+                string.IsNullOrEmpty(id) ? null : _ctx.PluginLookup?.Invoke(id);
+
+            private Plugins.PluginStepDef? PluginStepDef(ProgramStep s) =>
+                Plugin(s.PluginId ?? "")?.Manifest.Steps.FirstOrDefault(d => string.Equals(d.Id, s.PluginStepId, StringComparison.Ordinal));
+
+            private void ValidatePluginStep(ProgramStep s, At at)
+            {
+                if (string.IsNullOrWhiteSpace(s.PluginId))
+                {
+                    Add(at, ValidationCodes.MissingField, "No plugin is selected", "pluginId");
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(s.PluginStepId))
+                {
+                    Add(at, ValidationCodes.MissingField, "No plugin step is selected", "pluginStepId");
+                    return;
+                }
+                if (_ctx.PluginLookup == null) return; // cannot check
+                var plugin = Plugin(s.PluginId);
+                if (plugin == null)
+                {
+                    Add(at, ValidationCodes.UnknownPlugin, $"Plugin '{s.PluginId}' is not installed", "pluginId");
+                    return;
+                }
+                var def = PluginStepDef(s);
+                if (def == null)
+                {
+                    Add(at, ValidationCodes.UnknownPluginStep, $"Plugin '{plugin.Name}' has no step '{s.PluginStepId}'", "pluginStepId");
+                    return;
+                }
+                if (!plugin.Running)
+                    Add(at, ValidationCodes.PluginNotRunning,
+                        $"Plugin '{plugin.Name}' is not running — the step fails unless it is started", "pluginId",
+                        ValidationSeverity.Warning);
+
+                foreach (var p in def.Params)
+                {
+                    string field = $"pluginParams.{p.Key}";
+                    string? text = s.PluginParams != null && s.PluginParams.TryGetValue(p.Key, out var t) ? t : null;
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        bool hasDefault = p.Default is { } d && d.ValueKind is not (System.Text.Json.JsonValueKind.Null or System.Text.Json.JsonValueKind.Undefined);
+                        if (p.Required && !hasDefault)
+                            Add(at, ValidationCodes.PluginParamMissing, $"'{p.Label ?? p.Key}' needs a value", field);
+                        continue;
+                    }
+                    switch (p.Type)
+                    {
+                        case "number": case "boolean":
+                            CheckExpr(text, at, field);
+                            break;
+                        case "string":
+                            CheckTemplate(text, at, field, ValidationSeverity.Warning);
+                            break;
+                        case "enum":
+                            if (p.Options != null && !p.Options.Contains(text.Trim(), StringComparer.Ordinal))
+                                Add(at, ValidationCodes.PluginParamEnum,
+                                    $"'{text.Trim()}' is not an option of '{p.Label ?? p.Key}' ({string.Join(", ", p.Options)})", field);
+                            break;
+                        case "point":
+                            CheckPluginPoint(text, at, field);
+                            break;
+                        case "list":
+                        {
+                            var name = text.Trim().TrimStart('$');
+                            Use(name);
+                            if (!IsList(name))
+                                Add(at, ValidationCodes.UnknownVariable,
+                                    Lookup(name) != null ? $"'${name}' is not a list" : $"Unknown list variable '${name}'", field);
+                            break;
+                        }
+                        case "image":
+                        {
+                            var name = text.Trim().TrimStart('$');
+                            Use(name);
+                            if (Lookup(name) is not { Kind: SymKind.Image })
+                                Add(at, ValidationCodes.UnknownVariable,
+                                    Lookup(name) != null ? $"'${name}' is not an image variable" : $"Unknown image variable '${name}'", field);
+                            break;
+                        }
+                        case "variable":
+                            Use(text.Trim().TrimStart('$'));
+                            break;
+                    }
+                }
+
+                for (int j = 0; j < (s.PluginOutputs?.Count ?? 0); j++)
+                {
+                    var map = s.PluginOutputs![j];
+                    if (map == null || string.IsNullOrWhiteSpace(map.VariableName)) continue;
+                    string field = $"pluginOutputs[{j}].variableName";
+                    var output = def.Outputs.FirstOrDefault(o => o.Key == map.Key);
+                    if (output == null)
+                    {
+                        Add(at, ValidationCodes.PluginOutputType, $"Step '{def.Label ?? def.Id}' has no output '{map.Key}' — it is never written",
+                            $"pluginOutputs[{j}].key", ValidationSeverity.Warning);
+                        continue;
+                    }
+                    var name = map.VariableName.Trim().TrimStart('$');
+                    if (!CheckTarget(name, at, field, requireDeclared: false)) continue;
+                    var sym = Lookup(name);
+                    string? problem = output.Type switch
+                    {
+                        "number" or "boolean" => sym is null or { Kind: SymKind.Number or SymKind.Boolean } ? null
+                                                 : $"'${name}' is {Describe(sym)} — a {output.Type} output needs a number or boolean variable",
+                        "string" => sym is { Kind: SymKind.String } ? null
+                                    : $"'${name}' is {Describe(sym)} — a string output needs a text variable",
+                        "point"  => sym is { Kind: SymKind.List, ElementType: ListElementType.Point } ? null
+                                    : $"'${name}' is {Describe(sym)} — a point output needs a points list variable",
+                        "list"   => sym is null or { Kind: SymKind.List } ? null
+                                    : $"'${name}' is {Describe(sym)} — a list output needs a list variable",
+                        "image"  => sym is null or { Kind: SymKind.Image } ? null
+                                    : $"'${name}' is {Describe(sym)} — an image output needs an image variable",
+                        _ => null,
+                    };
+                    if (problem != null) Add(at, ValidationCodes.PluginOutputType, problem, field);
+                }
+            }
+
+            private static string Describe(Sym? sym) => sym switch
+            {
+                null => "not declared",
+                { Kind: SymKind.List } => $"a {sym.ElementType} list",
+                { Kind: SymKind.String } => "a text variable",
+                { Kind: SymKind.Image } => "an image variable",
+                { Kind: SymKind.Boolean } => "a boolean variable",
+                { Kind: SymKind.Stopwatch } => "a stopwatch",
+                _ => "a number variable",
+            };
+
+            /// <summary>A point param: grid:/stack: refs, a points-variable element or a saved point name.</summary>
+            private void CheckPluginPoint(string text, At at, string field)
+            {
+                var t = text.Trim();
+                var m = PluginSteps.GridStackRef.Match(t);
+                if (m.Success)
+                {
+                    bool grid = m.Groups["kind"].Value.Equals("grid", StringComparison.OrdinalIgnoreCase);
+                    var name = m.Groups["name"].Value.Trim();
+                    var exists = grid ? _ctx.GridNameExists : _ctx.StackNameExists;
+                    if (exists != null && !exists(name))
+                        Add(at, grid ? ValidationCodes.UnknownGrid : ValidationCodes.UnknownStack,
+                            $"{(grid ? "Grid" : "Stack")} '{name}' does not exist", field);
+                    var idx = PluginSteps.SplitArgs(m.Groups["idx"].Value);
+                    if (idx.Count == 0 || idx.Count > (grid ? 2 : 1) || idx.Any(string.IsNullOrWhiteSpace))
+                        Add(at, ValidationCodes.ExpressionSyntax,
+                            grid ? $"'{t}' takes [index] or [row, col]" : $"'{t}' takes one index", field);
+                    else
+                        foreach (var e in idx) CheckExpr(e, at, field);
+                    return;
+                }
+                if (MoveTargetResolver.TryParsePointsRef(t, out var refName, out var idxExpr) && IsList(refName))
+                {
+                    CheckPointList(refName, at, field);
+                    if (!string.IsNullOrWhiteSpace(idxExpr)) CheckExpr(idxExpr, at, field);
+                }
+                else if (t.Contains('$') || t.Contains('{'))
+                    CheckTemplate(t, at, field, ValidationSeverity.Error);
+                else if (_ctx.PointExists != null && !_ctx.PointExists(null, t))
+                    Add(at, ValidationCodes.UnknownPoint, $"Point '{t}' does not exist", field);
+            }
+
+            /// <summary><c>x.y(…)</c>: x must be an installed plugin with a function y of the right arity.</summary>
+            private void CheckPluginFunction(ExprRef r, At at, string field, string severity)
+            {
+                if (_ctx.PluginLookup == null) return; // cannot check
+                var parts = r.Name.Split('.');
+                var plugin = Plugin(parts[0]);
+                if (plugin == null)
+                {
+                    Add(at, ValidationCodes.UnknownFunction, $"Unknown function '{r.Name}'", field, severity);
+                    return;
+                }
+                var fn = parts.Length == 2
+                    ? plugin.Manifest.Functions.FirstOrDefault(f => string.Equals(f.Name, parts[1], StringComparison.OrdinalIgnoreCase))
+                    : null;
+                if (fn == null)
+                {
+                    Add(at, ValidationCodes.UnknownPluginFunction,
+                        $"Plugin '{plugin.Name}' has no function '{string.Join(".", parts.Skip(1))}'", field, severity);
+                    return;
+                }
+                int min = fn.MinArgs, max = fn.EffectiveMaxArgs;
+                if (r.ArgCount < min || r.ArgCount > max)
+                {
+                    string want = min == max ? $"{min}" : $"{min} to {max}";
+                    Add(at, ValidationCodes.BadArity,
+                        $"{plugin.Id}.{fn.Name}() takes {want} argument{(want == "1" ? "" : "s")}, got {r.ArgCount}", field, severity);
+                }
+                if (!plugin.Running)
+                    Add(at, ValidationCodes.PluginNotRunning,
+                        $"{plugin.Id}.{fn.Name}(): plugin '{plugin.Name}' is not running — the call fails until it is", field,
+                        ValidationSeverity.Warning);
             }
 
             // ── Names written ─────────────────────────────────────────────────
@@ -1109,6 +1460,11 @@ namespace Controller.RobotControl.Validation
                 switch (r.Kind)
                 {
                     case ExprRefKind.Function:
+                        if (r.Name.Contains('.'))
+                        {
+                            CheckPluginFunction(r, at, field, severity);
+                            return;
+                        }
                         if (!_functionNames.Contains(r.Name))
                             Add(at, ValidationCodes.UnknownFunction, $"Unknown function '{r.Name}'", field, severity);
                         return;
@@ -1151,6 +1507,29 @@ namespace Controller.RobotControl.Validation
                             Add(at, ValidationCodes.UnknownVariable,
                                 $"'${name}' — '${parts[0]}' is a list: use ${parts[0]}[i].{parts[^1]} or ${parts[0]}.length",
                                 field, severity);
+                            return;
+                        }
+
+                        // $text.length — a string variable's character count (package C).
+                        if (parts.Length == 2 && parts[1].Equals("length", StringComparison.OrdinalIgnoreCase) &&
+                            Lookup(parts[0]) is { Kind: SymKind.String })
+                        {
+                            Use(parts[0]);
+                            return;
+                        }
+
+                        if (parts.Length > 1 && Lookup(parts[0]) == null && Plugin(parts[0]) is { } plugin)
+                        {
+                            var prop = string.Join(".", parts.Skip(1));
+                            bool known = plugin.Manifest.Properties.Any(p => string.Equals(p.Name, prop, StringComparison.OrdinalIgnoreCase))
+                                         || plugin.LiveProperties.Contains(prop, StringComparer.OrdinalIgnoreCase);
+                            if (!known)
+                                Add(at, ValidationCodes.UnknownProperty,
+                                    $"Unknown property '${name}' — plugin '{plugin.Name}' has no property '{prop}'", field, severity);
+                            else if (!plugin.Running)
+                                Add(at, ValidationCodes.PluginNotRunning,
+                                    $"'${name}': plugin '{plugin.Name}' is not running — the value is unknown until it is", field,
+                                    ValidationSeverity.Warning);
                             return;
                         }
 
@@ -1237,6 +1616,54 @@ namespace Controller.RobotControl.Validation
                 Add(at, ValidationCodes.UnknownVariable, $"Unknown variable '${name}' — it is left as written{hint}", field, severity);
             }
 
+            // ── Move stop condition ───────────────────────────────────────────
+
+            /// <summary>
+            /// A move step's optional stop condition (docs/program-blocks.md, "Stop or record on
+            /// condition"): the condition rows, the mode, and the two variables it writes — a
+            /// Points list (robot) or number (aux) for the position, a number/boolean for the flag.
+            /// Both count as uses of their variables.
+            /// </summary>
+            private void CheckMoveStop(ProgramStep s, At at, bool aux)
+            {
+                bool hasCondition = MoveStopConditions.HasCondition(s);
+                CheckCondition(s.MoveStopCondition, at, "moveStopCondition", required: false);
+
+                if (!string.IsNullOrWhiteSpace(s.MoveStopMode) && !MoveStopConditions.TryParseMode(s.MoveStopMode, out _))
+                    Add(at, ValidationCodes.MissingField,
+                        $"Stop mode must be 'stop' or 'record', not '{s.MoveStopMode}'", "moveStopMode");
+
+                if (!string.IsNullOrWhiteSpace(s.MoveStopPositionVariableName)
+                    && CheckTarget(s.MoveStopPositionVariableName, at, "moveStopPositionVariableName", requireDeclared: false))
+                {
+                    var name = s.MoveStopPositionVariableName.Trim().TrimStart('$');
+                    if (!aux)
+                        CheckPointList(name, at, "moveStopPositionVariableName");
+                    else if (Lookup(name) is not { } sym)
+                        Add(at, ValidationCodes.UnknownVariable, $"Unknown variable '${name}'", "moveStopPositionVariableName");
+                    else if (sym.Kind is not (SymKind.Number or SymKind.Boolean))
+                        Add(at, ValidationCodes.UnknownVariable,
+                            $"'${name}' is not a number variable — an aux move records its position as a number",
+                            "moveStopPositionVariableName");
+                }
+
+                if (!string.IsNullOrWhiteSpace(s.MoveStopFlagVariableName)
+                    && CheckTarget(s.MoveStopFlagVariableName, at, "moveStopFlagVariableName", requireDeclared: false))
+                {
+                    var name = s.MoveStopFlagVariableName.Trim().TrimStart('$');
+                    if (Lookup(name) is { } sym && sym.Kind is not (SymKind.Number or SymKind.Boolean))
+                        Add(at, ValidationCodes.UnknownVariable,
+                            $"'${name}' is not a number or boolean variable", "moveStopFlagVariableName");
+                }
+
+                if (!hasCondition && (!string.IsNullOrWhiteSpace(s.MoveStopMode)
+                                      || !string.IsNullOrWhiteSpace(s.MoveStopPositionVariableName)
+                                      || !string.IsNullOrWhiteSpace(s.MoveStopFlagVariableName)))
+                    Add(at, ValidationCodes.MissingField,
+                        "Stop condition has no rows — the stop mode and variables do nothing without one",
+                        "moveStopCondition", ValidationSeverity.Warning);
+            }
+
             // ── Conditions ────────────────────────────────────────────────────
 
             private void CheckCondition(ConditionGroup? g, At at, string field, bool required)
@@ -1252,6 +1679,17 @@ namespace Controller.RobotControl.Validation
                     var item = g.Items[k];
                     if (item == null) continue;
                     string f = $"{field}.items[{k}]";
+
+                    if (item.Join != null && item.Join.ToUpperInvariant() is not ("AND" or "OR"))
+                        Add(at, ValidationCodes.ExpressionSyntax, $"Unknown joiner '{item.Join}' (use AND or OR)", f + ".join");
+
+                    // Expression condition — validate the whole thing as one boolean expression.
+                    if (!string.IsNullOrWhiteSpace(item.Expr))
+                    {
+                        CheckExpr(item.Expr, at, f + ".expr");
+                        continue;
+                    }
+
                     if (Array.IndexOf(ConditionOps, item.Operator) < 0)
                         Add(at, ValidationCodes.ExpressionSyntax, $"Unknown comparison operator '{item.Operator}'", f + ".operator");
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
-using Controller.RobotControl.Nano;
+using Controller.RobotControl.Io;
+using Controller.RobotControl.Serial;
 using Controller.RobotControl.UsbRelay;
 
 namespace Controller.RobotControl.Commands;
@@ -15,13 +16,28 @@ internal sealed class IoCommands
     {
         d.Add("SetSTBOutput",     SetSTBOutput);
         d.Add("GetIO",            GetIO);
-        d.Add("SetNanoOutput",    SetNanoOutput);
+        d.Add("SetIoOutput",    SetIoOutput);
         d.Add("SetNeoPixel",      SetNeoPixel);
-        d.Add("RenameNanoPin",    RenameNanoPin);
-        d.Add("ConfigureNanoPin", ConfigureNanoPin);
+        d.Add("RenameIoPin",    RenameIoPin);
+        d.Add("ConfigureIoPin", ConfigureIoPin);
+        d.Add("ConfigureLoadCell", ConfigureLoadCell);
+        d.Add("TareLoadCell",      TareLoadCell);
+        d.Add("CalibrateLoadCell", CalibrateLoadCell);
+        d.Add("SetLoadCellUnit",   SetLoadCellUnit);
         d.Add("SetRelay",         SetRelay);
         d.Add("RenameRelay",      RenameRelay);
         d.Add("GetRelayState",    GetRelayState);
+
+        // IO value history + recordings
+        d.Add("GetIoHistoryConfig",    GetIoHistoryConfig);
+        d.Add("SetIoHistoryRetention", SetIoHistoryRetention);
+        d.Add("GetIoHistoryWindow",    GetIoHistoryWindow);
+        d.Add("StartIoRecording",      StartIoRecording);
+        d.Add("StopIoRecording",       StopIoRecording);
+        d.Add("ListIoRecordings",      ListIoRecordings);
+        d.Add("GetIoRecordingWindow",  GetIoRecordingWindow);
+        d.Add("SaveIoRecording",       SaveIoRecording);
+        d.Add("DeleteIoRecording",     DeleteIoRecording);
     }
 
     private UsbRelayState RelayState()
@@ -38,22 +54,41 @@ internal sealed class IoCommands
 
     private void SetSTBOutput(CommandMessage msg)
     {
-        var p = CommandJson.LoadParams<SetNanoOutputParams>(msg); // reuse same params shape
+        var p = CommandJson.LoadParams<SetIoOutputParams>(msg); // reuse same params shape
         _robot.stb.SetOutput(p.Pin, p.Value);
     }
 
     private object? GetIO(CommandMessage msg)
     {
-        var states   = _robot.NanoManager.GetAllStates();
-        var nanoJson = JsonSerializer.Serialize(states, CommandJson.CamelCaseWithEnums);
-        var relayJson = JsonSerializer.Serialize(RelayState(), CommandJson.CamelCase);
-        return new { nanos = nanoJson, relay = relayJson };
+        var states    = _robot.GetAllIoStates();
+        var ioJson     = JsonSerializer.Serialize(states, CommandJson.CamelCaseWithEnums);
+        var relayJson  = JsonSerializer.Serialize(RelayState(), CommandJson.CamelCase);
+        return new { ioDevices = ioJson, relay = relayJson };
     }
 
-    private void SetNanoOutput(CommandMessage msg)
+    // ── Firmware capability gating ─────────────────────────────────────────────
+    // A board that reports its capabilities (firmware 1.1.0+) is refused a feature it lacks, with an
+    // error naming the sketch/version to flash. A legacy board (capabilities unknown) is never refused.
+
+    private const string FeatureDigitalIo = "Digital IO";
+    private const string FeatureNeopixel  = "NeoPixel";
+    private const string FeatureLoadCell  = "Load cell";
+
+    private void SetIoOutput(CommandMessage msg)
     {
-        var p = CommandJson.LoadParams<SetNanoOutputParams>(msg);
-        _robot.NanoManager.SetOutput(p.NanoId, p.Pin, p.Value);
+        var p = CommandJson.LoadParams<SetIoOutputParams>(msg);
+        // Route by id: a Nano edge device, else an aux-stepper device's spare-pin IO.
+        var nano = _robot.NanoManager.GetDevice(p.DeviceId);
+        if (nano != null)
+        {
+            nano.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
+            _robot.NanoManager.SetOutput(p.DeviceId, p.Pin, p.Value);
+        }
+        else
+        {
+            _robot.AuxAxisManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
+            _robot.AuxAxisManager.SetIoOutput(p.DeviceId, p.Pin, p.Value);
+        }
     }
 
     private void SetNeoPixel(CommandMessage msg)
@@ -62,20 +97,24 @@ internal sealed class IoCommands
         var colors = p.Colors
             .Select(c => new NeoPixelColor(c.R, c.G, c.B))
             .ToArray();
-        _robot.NanoManager.SetNeoPixel(p.NanoId, p.Pin, colors);
+        _robot.NanoManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapNeopixel, FeatureNeopixel);
+        _robot.NanoManager.SetNeoPixel(p.DeviceId, p.Pin, colors);
     }
 
-    private void RenameNanoPin(CommandMessage msg)
+    private void RenameIoPin(CommandMessage msg)
     {
-        var p = CommandJson.LoadParams<RenameNanoPinParams>(msg);
-        if (!_robot.NanoManager.RenamePin(p.NanoId, p.Pin, p.Name))
+        var p  = CommandJson.LoadParams<RenameIoPinParams>(msg);
+        bool ok = _robot.NanoManager.GetDevice(p.DeviceId) != null
+            ? _robot.NanoManager.RenamePin(p.DeviceId, p.Pin, p.Name)
+            : _robot.AuxAxisManager.RenameIoPin(p.DeviceId, p.Pin, p.Name);
+        if (!ok)
             throw new InvalidOperationException(
-                $"Nano is not connected (or pin {p.Pin} is not configured) — the name was not saved.");
+                $"Device is not connected (or pin {p.Pin} is not configured) — the name was not saved.");
     }
 
-    private void ConfigureNanoPin(CommandMessage msg)
+    private void ConfigureIoPin(CommandMessage msg)
     {
-        var p    = CommandJson.LoadParams<ConfigureNanoPinParams>(msg);
+        var p    = CommandJson.LoadParams<ConfigureIoPinParams>(msg);
         var type = p.Type switch
         {
             "Output"       => PinType.Output,
@@ -83,11 +122,62 @@ internal sealed class IoCommands
             "Unconfigured" => PinType.Unconfigured,
             _              => PinType.Input,
         };
-        // SetPinType returns false when the device isn't live — surface that
-        // instead of ACKing a save that silently changed nothing.
-        if (!_robot.NanoManager.SetPinType(p.NanoId, p.Pin, type, p.PixelCount))
+        // Route by id: Nano edge device, else aux-stepper spare-pin IO (Input/Output only).
+        // Returns false when the device isn't live — surface that instead of ACKing a no-op.
+        // Removing a pin (Unconfigured) needs nothing from the firmware, so it is never gated.
+        var nano = _robot.NanoManager.GetDevice(p.DeviceId);
+        bool ok;
+        if (nano != null)
+        {
+            if (type == PinType.Neopixel)
+                nano.RequireCapability(FirmwareInfo.CapNeopixel, FeatureNeopixel);
+            else if (type != PinType.Unconfigured)
+                nano.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
+            ok = _robot.NanoManager.SetPinType(p.DeviceId, p.Pin, type, p.PixelCount);
+        }
+        else
+        {
+            if (type != PinType.Unconfigured)
+                _robot.AuxAxisManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
+            ok = _robot.AuxAxisManager.SetIoPinType(p.DeviceId, p.Pin, type);
+        }
+        if (!ok)
             throw new InvalidOperationException(
-                $"Nano is not connected — pin {p.Pin} was not saved.");
+                $"Device is not connected — pin {p.Pin} was not saved.");
+    }
+
+    private void ConfigureLoadCell(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<ConfigureLoadCellParams>(msg);
+        _robot.NanoManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapLoadCell, FeatureLoadCell);
+        if (!_robot.NanoManager.SetLoadCellConfig(p.DeviceId, p.DtPin, p.SckPin, p.Unit))
+            throw new InvalidOperationException($"Nano '{p.DeviceId}' not found — load cell was not saved.");
+    }
+
+    private object? TareLoadCell(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<LoadCellPinParams>(msg);
+        var offset = _robot.NanoManager.TareLoadCell(p.DeviceId, p.Pin);
+        if (offset == null)
+            throw new InvalidOperationException($"Load cell on pin {p.Pin} not found or not connected.");
+        return new { tareOffset = offset.Value };
+    }
+
+    private object? CalibrateLoadCell(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<CalibrateLoadCellParams>(msg);
+        var cpg = _robot.NanoManager.CalibrateLoadCell(p.DeviceId, p.Pin, p.KnownGrams);
+        if (cpg == null)
+            throw new InvalidOperationException(
+                $"Load cell on pin {p.Pin} not found, not connected, or the known weight was zero.");
+        return new { countsPerGram = cpg.Value };
+    }
+
+    private void SetLoadCellUnit(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<SetLoadCellUnitParams>(msg);
+        if (!_robot.NanoManager.SetLoadCellUnit(p.DeviceId, p.Pin, p.Unit))
+            throw new InvalidOperationException($"Load cell on pin {p.Pin} not found.");
     }
 
     private void SetRelay(CommandMessage msg)
@@ -103,4 +193,65 @@ internal sealed class IoCommands
     }
 
     private object? GetRelayState(CommandMessage msg) => RelayState();
+
+    // ── IO value history + recordings ──────────────────────────────────────────
+
+    private object? GetIoHistoryConfig(CommandMessage msg) =>
+        new { maxRetentionMs = _robot.IoHistory.MaxRetentionMs };
+
+    private object? SetIoHistoryRetention(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<SetIoHistoryRetentionParams>(msg);
+        return new { maxRetentionMs = _robot.IoHistory.SetRetention(p.MaxRetentionMs) };
+    }
+
+    private object? GetIoHistoryWindow(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoHistoryWindowParams>(msg);
+        var w = _robot.IoHistory.GetWindow(p.ChannelKey, p.FromUnixMs, p.ToUnixMs, p.MaxPoints ?? 1000);
+        return new { window = w };
+    }
+
+    private object? StartIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<StartIoRecordingParams>(msg);
+        if (string.IsNullOrWhiteSpace(p.ChannelKey))
+            throw new InvalidOperationException("A channelKey is required to start a recording.");
+        return new { recording = _robot.IoHistory.StartRecording(p.ChannelKey, p.Name) };
+    }
+
+    private object? StopIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingIdParams>(msg);
+        var rec = _robot.IoHistory.StopRecording(p.Id)
+                  ?? throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+        return new { recording = rec };
+    }
+
+    private object? ListIoRecordings(CommandMessage msg) =>
+        new { recordings = _robot.IoHistory.ListRecordings() };
+
+    private object? GetIoRecordingWindow(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingWindowParams>(msg);
+        var w = _robot.IoHistory.GetRecordingWindow(p.Id, p.FromUnixMs, p.ToUnixMs, p.MaxPoints ?? 2000)
+                ?? throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+        var meta = _robot.IoHistory.GetRecordingMeta(p.Id);
+        return new { window = w, recording = meta };
+    }
+
+    private object? SaveIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingIdParams>(msg);
+        var rec = _robot.IoHistory.SaveRecording(p.Id)
+                  ?? throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+        return new { recording = rec };
+    }
+
+    private void DeleteIoRecording(CommandMessage msg)
+    {
+        var p = CommandJson.LoadParams<IoRecordingIdParams>(msg);
+        if (!_robot.IoHistory.DeleteRecording(p.Id))
+            throw new InvalidOperationException($"Recording '{p.Id}' not found.");
+    }
 }

@@ -10,6 +10,7 @@ namespace RobotControl.Tests;
 /// The calibration commands through the dispatcher, with a synthetic camera frame and a
 /// scripted TCP instead of hardware: the whole wizard flow and the argument/error rules.
 /// </summary>
+[Collection("RobotController")]
 public sealed class CalibrationCommandsTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "calib-cmd-" + Guid.NewGuid().ToString("N"));

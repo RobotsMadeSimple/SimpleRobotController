@@ -51,6 +51,15 @@ public class RobotCommand
     public bool ApplySpeedOverride { get; set; } = false;
 
     /// <summary>
+    /// The running program's SetSpeedFactor (0.01–1, default 1), stamped by the program's
+    /// motion dispatcher on every program move. Applied together with the operator override
+    /// (effective = override × factor) and only when <see cref="ApplySpeedOverride"/> is set,
+    /// so it can only ever slow a program move down. JsonIgnore-d like the override flag.
+    /// </summary>
+    [JsonIgnore]
+    public double SpeedFactor { get; set; } = 1.0;
+
+    /// <summary>
     /// Optional status update attached to this command.
     /// When the command is dequeued and starts executing the update is applied
     /// to the named program so the mobile app sees live progress.

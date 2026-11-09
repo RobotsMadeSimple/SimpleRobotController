@@ -11,6 +11,13 @@ namespace Controller.RobotControl;
 public interface INamedVector
 {
     string? Name { get; set; }
+    /// <summary>
+    /// Stable identity assigned once on create and preserved across renames/re-teaches.
+    /// Program steps link by this id so a rename never breaks the link; Name is only a
+    /// display label / convenience alias. Backfilled for data saved before ids existed
+    /// (see NamedVectorRepository.EnsureIdentity).
+    /// </summary>
+    string? Id { get; set; }
     long LastUpdatedUnixMs { get; set; }
 }
 
@@ -39,6 +46,11 @@ public class Point : Vector6, INamedVector
 public class Tool : Vector6, INamedVector
 {
     public string? Name { get; set; }
+
+    /// <summary>Stable identity — see <see cref="INamedVector.Id"/>. Program steps link by this.</summary>
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
     public string Description { get; set; } = "";
     public long LastUpdatedUnixMs { get; set; }
 }
@@ -76,6 +88,11 @@ public class ToolNameParams
 public class Local : Vector6, INamedVector
 {
     public string? Name { get; set; }
+
+    /// <summary>Stable identity — see <see cref="INamedVector.Id"/>. Program steps link by this.</summary>
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
     public string Description { get; set; } = "";
     public long LastUpdatedUnixMs { get; set; }
 }

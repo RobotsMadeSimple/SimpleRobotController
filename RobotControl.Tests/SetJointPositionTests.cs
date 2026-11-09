@@ -9,6 +9,7 @@ namespace RobotControl.Tests;
 /// joints are referenced. A RobotController is constructed but never started — no devices,
 /// threads or motion.
 /// </summary>
+[Collection("RobotController")]
 public class SetJointPositionTests
 {
     [Fact]

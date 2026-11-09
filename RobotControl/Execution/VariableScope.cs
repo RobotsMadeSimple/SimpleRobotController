@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Controller.RobotControl.Execution
@@ -364,6 +366,113 @@ namespace Controller.RobotControl.Execution
             }
         }
 
+        // ── Routine parameters (docs/program-language.md §4.2) ────────────────
+
+        /// <summary>
+        /// The value a CallRoutine argument gives <paramref name="param"/>, evaluated now — in the
+        /// caller's scope, before the routine's variables are (re)initialised. A text parameter
+        /// takes a template; a list parameter takes a list variable reference (<c>$name</c>, copied);
+        /// a number or boolean parameter takes an expression (a boolean is stored 0 / 1).
+        /// Unknown variables and syntax errors propagate like everywhere else.
+        /// </summary>
+        public object EvaluateParamArg(ProgramVariable param, string arg)
+        {
+            if (param.IsString == true) return Interpolate(arg);
+            if (param.ToListVar() != null)
+            {
+                var name = arg.Trim().TrimStart('$');
+                if (_listVariables.TryGetValue(name, out var list)) return CloneList(list);
+                throw new InvalidOperationException(
+                    $"argument for list parameter '{param.Name}' must be a list variable, got '{arg}'");
+            }
+            double v = Eval.Evaluate(arg);
+            return param.IsBoolean == true ? (Math.Abs(v) > 1e-9 ? 1.0 : 0.0) : v;
+        }
+
+        /// <summary>Writes a value from <see cref="EvaluateParamArg"/> into the parameter.</summary>
+        public void AssignParam(ProgramVariable param, object value)
+        {
+            switch (value)
+            {
+                case string s:  SetString(param.Name, s); break;
+                case ListVar l: SetList(param.Name, l);   break;
+                case double d:  Set(param.Name, d);       break;
+            }
+        }
+
+        /// <summary>
+        /// Copies variable <paramref name="from"/> into <paramref name="to"/> (a routine's out /
+        /// inOut parameter back into the caller's variable): text → text, list → a copy of the
+        /// list, anything else as its number. False when <paramref name="from"/> holds nothing.
+        /// </summary>
+        public bool CopyVariable(string from, string to)
+        {
+            if (_stringVariables.TryGetValue(from, out var s)) { SetString(to, s); return true; }
+            if (_listVariables.TryGetValue(from, out var l))   { SetList(to, CloneList(l)); return true; }
+            if (MergedVars().TryGetValue(from, out var v) || TryEvaluateComputed(from, out v))
+            {
+                Set(to, v);
+                return true;
+            }
+            return false;
+        }
+
+        private static ListVar CloneList(ListVar l) => new()
+        {
+            ElementType = l.ElementType,
+            Items = l.Items.ConvertAll(r =>
+            {
+                var c = new ObjectRecord();
+                foreach (var kv in r) c[kv.Key] = kv.Value;
+                return c;
+            }),
+        };
+
+        /// <summary>
+        /// Override declared input variables from a launch-time seed map (StartProgram's
+        /// <c>variables</c>). Applied right after <see cref="Initialize"/>, so a seeded value wins
+        /// over the declared default. Only variables flagged <see cref="ProgramVariable.IsInput"/>
+        /// and of a seedable kind (number, boolean or string — not list, image or computed) are
+        /// touched; every other name in the map is ignored. Routing goes through the normal
+        /// setters, so a global input is seeded in the shared store.
+        /// </summary>
+        public void SeedInputs(BuiltProgram program, IReadOnlyDictionary<string, JsonElement>? seed)
+        {
+            if (seed == null || seed.Count == 0) return;
+
+            foreach (var v in program.Variables ?? [])
+            {
+                if (v.IsInput != true || v.IsComputed == true) continue;
+                if (v.IsImage == true || v.ToListVar() != null) continue;   // scalars/strings only
+                if (!seed.TryGetValue(v.Name, out var el)) continue;
+
+                if (v.IsString == true)
+                    SetString(v.Name, JsonToString(el));
+                else
+                    Set(v.Name, JsonToNumber(el));
+            }
+        }
+
+        /// <summary>A seed JSON value as a string (JSON strings verbatim, other kinds stringified).</summary>
+        private static string JsonToString(JsonElement el) => el.ValueKind switch
+        {
+            JsonValueKind.String => el.GetString() ?? "",
+            JsonValueKind.Null or JsonValueKind.Undefined => "",
+            _ => el.GetRawText(),
+        };
+
+        /// <summary>A seed JSON value as a number: numbers directly, true/false as 1/0, numeric
+        /// strings parsed (so a text input field of "5" works), anything else 0.</summary>
+        private static double JsonToNumber(JsonElement el) => el.ValueKind switch
+        {
+            JsonValueKind.Number => el.TryGetDouble(out var d) ? d : 0,
+            JsonValueKind.True   => 1,
+            JsonValueKind.False  => 0,
+            JsonValueKind.String => double.TryParse(el.GetString(), NumberStyles.Any,
+                                        CultureInfo.InvariantCulture, out var s) ? s : 0,
+            _ => 0,
+        };
+
         /// <summary>
         /// A scalar's starting value: its expression if it declares one, otherwise its plain
         /// number.
@@ -409,6 +518,28 @@ namespace Controller.RobotControl.Execution
                 existing[prefix + name] = val;
             }
             PersistentVariableStore.Write(existing);
+        }
+
+        /// <summary>
+        /// A plugin's <c>variables.get</c>: scalars (globals winning, computed variables evaluated —
+        /// left out when their formula fails; no <c>time_ms</c>), lists as JSON-ready values, and
+        /// strings. Images are left out.
+        /// </summary>
+        public Plugins.VariablesSnapshot PluginSnapshot()
+        {
+            var snap = new Plugins.VariablesSnapshot();
+            foreach (var kv in MergedVars())
+                if (!kv.Key.Equals("time_ms", StringComparison.OrdinalIgnoreCase)) snap.Variables[kv.Key] = kv.Value;
+            var computedNames = new HashSet<string>(_computed.Keys, StringComparer.OrdinalIgnoreCase);
+            computedNames.UnionWith(_globalComputedNames);
+            foreach (var name in computedNames)
+            {
+                double v = EvaluateComputedOrNaN(name);
+                if (double.IsFinite(v)) snap.Variables[name] = v;
+            }
+            foreach (var kv in _listVariables) snap.Lists[kv.Key] = JsonVariableCodec.ListToJson(kv.Value);
+            foreach (var kv in _stringVariables) snap.Strings[kv.Key] = kv.Value;
+            return snap;
         }
 
         /// <summary>
@@ -501,21 +632,49 @@ namespace Controller.RobotControl.Execution
 
         // ── Conditions ────────────────────────────────────────────────────────
 
+        /// <summary>
+        /// Items are joined pairwise: each item's <see cref="ConditionItem.Join"/> ("AND"/"OR") says how
+        /// it combines with the one before it, defaulting to the group's <c>Combinator</c>. AND binds
+        /// tighter than OR, so <c>A and B or C</c> reads as <c>(A and B) or C</c> — the group is an OR
+        /// of AND-runs. Short-circuits within a run, and as soon as any run is true.
+        /// </summary>
         public bool EvaluateCondition(ConditionGroup group, Dictionary<string, double> vars)
         {
             if (group.Items.Count == 0) return true;
-            bool isAny = group.Combinator == "ANY";
-            foreach (var item in group.Items)
+            string defaultJoin = group.Combinator == "ANY" ? "OR" : "AND";
+            bool run = EvaluateConditionItem(group.Items[0], vars);   // the current AND-run so far
+            for (int i = 1; i < group.Items.Count; i++)
             {
-                bool result = EvaluateConditionItem(item, vars);
-                if (isAny && result)  return true;
-                if (!isAny && !result) return false;
+                var item = group.Items[i];
+                string join = string.IsNullOrEmpty(item.Join) ? defaultJoin : item.Join.ToUpperInvariant();
+                if (join == "OR")
+                {
+                    if (run) return true;                       // a true run makes the whole OR true
+                    run = EvaluateConditionItem(item, vars);    // start the next run
+                }
+                else if (run)
+                {
+                    run = EvaluateConditionItem(item, vars);    // extend the run while it's still alive
+                }
             }
-            return !isAny;
+            return run;
         }
 
         private bool EvaluateConditionItem(ConditionItem item, Dictionary<string, double> vars)
         {
+            // Expression condition: evaluate the whole thing as a number; non-zero is true (so a bare
+            // `$enabled` reads as a truthiness check). Unknown vars / syntax errors propagate, like
+            // the structured path — a silently-wrong condition could branch a moving machine.
+            if (!string.IsNullOrWhiteSpace(item.Expr))
+            {
+                double v;
+                try { v = ExpressionEvaluator.Evaluate(item.Expr, vars, _listVariables, Properties, ResolveStringValue); }
+                catch (UnknownVariableException) { throw; }
+                catch (ExpressionParseException) { throw; }
+                catch { v = 0; }
+                return Math.Abs(v) > 1e-9;
+            }
+
             // String operator path — also used when left side is a string variable
             bool isStringOp = item.Operator is "contains" or "startsWith" or "endsWith";
             if (isStringOp || IsStringVarRef(item.Left))
@@ -570,14 +729,13 @@ namespace Controller.RobotControl.Execution
         internal static readonly Regex BareWord      = new(@"(?<![$.\w])[A-Za-z_]\w*");
 
         /// <summary>
-        /// A word inside {…} that is not a forgotten $: a literal (true/false), a word-spelled
+        /// A word inside {…} that is not a forgotten $: a literal (true/false/on/off), a word-spelled
         /// operator (and/or/not), or a function name followed by "(" — "{round($x, 2)}".
         /// </summary>
         internal static bool IsAllowedBareWord(string body, Match w)
         {
             var word = w.Value;
-            if (word.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-                word.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+            if (ExpressionEvaluator.IsBoolWord(word) ||
                 word.Equals("and", StringComparison.OrdinalIgnoreCase) ||
                 word.Equals("or", StringComparison.OrdinalIgnoreCase) ||
                 word.Equals("not", StringComparison.OrdinalIgnoreCase))
@@ -603,6 +761,16 @@ namespace Controller.RobotControl.Execution
         /// expression, so "{$index + 1}" and "{$row * 3 + $col}" also interpolate. The $
         /// stays required inside braces, matching expressions everywhere else.
         /// </remarks>
+        /// <summary>
+        /// A number as text for status messages and templated paths. Whole numbers print in full —
+        /// a <c>$time_ms</c> of 1793066899654 must not become "1.79307E+12", which is unreadable and
+        /// collides for every run within the same ~2.8 h. Fractions keep 6 significant digits.
+        /// </summary>
+        internal static string FormatNumber(double v) =>
+            Math.Abs(v) < 1e15 && v == Math.Floor(v)
+                ? ((long)v).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : v.ToString("G6", System.Globalization.CultureInfo.InvariantCulture);
+
         public string Interpolate(string template)
         {
             var allVarsForTemplate = Eval.Merged;
@@ -620,7 +788,7 @@ namespace Controller.RobotControl.Execution
                 {
                     // Plain $name — scalar → value, list → count, points → "N points", string → value
                     if (allVarsForTemplate.TryGetValue(name, out var sv))
-                        return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : sv.ToString("G6");
+                        return _booleanVariables.Contains(name) ? (sv != 0 ? "True" : "False") : FormatNumber(sv);
                     if (_stringVariables.TryGetValue(name, out var strVal))
                         return strVal;
                     if (_listVariables.TryGetValue(name, out var bare))
@@ -630,7 +798,7 @@ namespace Controller.RobotControl.Execution
                     try
                     {
                         if (_computedSource.TryGetComputed(name, out var cv))
-                            return _booleanVariables.Contains(name) ? (cv != 0 ? "True" : "False") : cv.ToString("G6");
+                            return _booleanVariables.Contains(name) ? (cv != 0 ? "True" : "False") : FormatNumber(cv);
                     }
                     catch { /* left as written */ }
                     return null;
@@ -651,7 +819,7 @@ namespace Controller.RobotControl.Execution
                     var item = lv.Items[idx];
 
                     if (hasComp)
-                        return item.TryGetValue(compName, out var fv) ? fv.ToString("G6") : "0";
+                        return item.TryGetValue(compName, out var fv) ? FormatNumber(fv) : "0";
 
                     // No field named — render the whole element. A point keeps its familiar
                     // axis-ordered form rather than dictionary order, which is what makes
@@ -660,10 +828,10 @@ namespace Controller.RobotControl.Execution
                     // stored as — that spelling is the reason the element type exists.
                     return lv.ElementType switch
                     {
-                        ListElementType.Number  => item.Scalar.ToString("G6"),
+                        ListElementType.Number  => FormatNumber(item.Scalar),
                         ListElementType.Boolean => item.Scalar != 0 ? "True" : "False",
                         ListElementType.Point   => FormatPoint(item.ToPoint()),
-                        _ => "(" + string.Join(", ", item.Select(kv => $"{kv.Key}={kv.Value:G6}")) + ")",
+                        _ => "(" + string.Join(", ", item.Select(kv => $"{kv.Key}={FormatNumber(kv.Value)}")) + ")",
                     };
                 }
 
@@ -693,7 +861,7 @@ namespace Controller.RobotControl.Execution
                 // Anything else is an expression. A failure leaves the braces in place,
                 // which surfaces downstream (a point lookup, say) rather than silently
                 // substituting something wrong.
-                try { return ExpressionEvaluator.Evaluate(body, allVarsForTemplate, _listVariables, Properties).ToString("G6"); }
+                try { return FormatNumber(ExpressionEvaluator.Evaluate(body, allVarsForTemplate, _listVariables, Properties)); }
                 catch { return m.Value; }
             });
         }

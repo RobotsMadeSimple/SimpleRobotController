@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Checkers</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --ink: #e8eaed; --muted: #9aa3ad;
+    --dark: #7a5230; --light: #e7c9a0; --sel: #ffd54a; --target: #46d27a;
+    --last: rgba(255, 213, 74, 0.28); --accent: #4f8cff; --danger: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 14px;
+  }
+  .bar { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 480px; }
+  .turn { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .disc { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.4); }
+  .disc.white { background: #f4f1ea; } .disc.black { background: #23262b; border-color: #000; }
+  .counts { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .status { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); }
+  .status.on { background: var(--target); }
+
+  .boardWrap { position: relative; width: 100%; max-width: 480px; aspect-ratio: 1 / 1; }
+  .board {
+    display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+    width: 100%; height: 100%; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 6px 24px rgba(0,0,0,.45); border: 2px solid #0a0c0f;
+  }
+  .cell { position: relative; }
+  .cell.light { background: var(--light); }
+  .cell.dark  { background: var(--dark); cursor: default; }
+  .cell.dark.playable { cursor: pointer; }
+  .cell.last::after {
+    content: ""; position: absolute; inset: 0; background: var(--last); pointer-events: none;
+  }
+  .piece {
+    position: absolute; inset: 14%; border-radius: 50%;
+    box-shadow: inset 0 -3px 6px rgba(0,0,0,.45), 0 2px 4px rgba(0,0,0,.5);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .piece.white { background: radial-gradient(circle at 35% 30%, #fff, #d9d2c4); }
+  .piece.black { background: radial-gradient(circle at 35% 30%, #4a4e55, #16181c); }
+  .piece.king::after { content: "\2605"; font-size: 46%; color: #ffd54a; }
+  .piece.black.king::after { color: #ffd54a; }
+  .cell.sel .piece { outline: 3px solid var(--sel); outline-offset: -1px; }
+  .cell.movable .hint { position: absolute; inset: 38%; border-radius: 50%; border: 2px solid rgba(70,210,122,.7); }
+  .cell.target .dot {
+    position: absolute; inset: 33%; border-radius: 50%; background: var(--target); opacity: .85;
+  }
+  .cell.target.occupied .dot { inset: 6%; background: none; border: 4px solid var(--target); }
+
+  .foot { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { color: var(--muted); min-height: 18px; }
+  .msg.win { color: var(--sel); font-weight: 600; }
+  .btns { display: flex; gap: 10px; }
+  button {
+    flex: 1; padding: 11px 12px; border-radius: 10px; border: 1px solid #2a2f37;
+    background: #222831; color: var(--ink); font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .offline { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(15,18,22,.72); color: var(--muted); font-weight: 600; border-radius: 10px; }
+  .offline.show { display: flex; }
+  .thinking { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="turn"><span id="turnDisc" class="disc black"></span><span id="turnText">Black to move</span></div>
+    <div id="counts" class="counts">12 vs 12</div>
+    <div id="status" class="status" title="controller connection"></div>
+  </div>
+
+  <div class="boardWrap">
+    <div id="board" class="board" aria-label="checkers board"></div>
+    <div id="offline" class="offline">Plugin offline…</div>
+  </div>
+
+  <div class="foot">
+    <div id="msg" class="msg"></div>
+    <div class="btns">
+      <button id="newBtn">New game</button>
+      <button id="aiBtn" class="primary">Robot move</button>
+    </div>
+  </div>
+
+<script src="ui-bridge.js"></script>
+<script>
+  var SQUARES = 32;
+  function rcToIdx(r, c) { return ((r + c) % 2 === 0) ? -1 : (r * 4 + Math.floor(c / 2)); }
+
+  // Build the 8x8 grid once; dark playable squares carry a data-idx and a tap handler.
+  var boardEl = document.getElementById("board");
+  var cells = {}; // idx -> cell element
+  for (var r = 0; r < 8; r++) {
+    for (var c = 0; c < 8; c++) {
+      var idx = rcToIdx(r, c);
+      var cell = document.createElement("div");
+      cell.className = "cell " + (idx >= 0 ? "dark playable" : "light");
+      if (idx >= 0) {
+        cell.dataset.idx = idx;
+        cell.addEventListener("click", onCellClick);
+        cells[idx] = cell;
+      }
+      boardEl.appendChild(cell);
+    }
+  }
+
+  var last = {};               // last rendered state
+  function onCellClick(e) {
+    var idx = parseInt(e.currentTarget.dataset.idx, 10);
+    if (last.thinking || last.gameOver) return;
+    SimpleRobot.invoke("tapSquare", { index: idx }).catch(function () {});
+  }
+
+  document.getElementById("newBtn").addEventListener("click", function () {
+    SimpleRobot.invoke("newGame", {}).catch(function () {});
+  });
+  document.getElementById("aiBtn").addEventListener("click", function () {
+    if (last.thinking || last.gameOver) return;
+    SimpleRobot.invoke("aiMove", {}).catch(function () {});
+  });
+
+  function render(s) {
+    last = s || {};
+    var board = s.board || [];
+    var sel = (typeof s.selected === "number") ? s.selected : -1;
+    var targets = s.legalTargets || [];
+    var movable = s.movable || [];
+    var lf = (typeof s.lastFrom === "number") ? s.lastFrom : -1;
+    var lt = (typeof s.lastTo === "number") ? s.lastTo : -1;
+    var showMovable = sel < 0 && !s.thinking && !s.gameOver;
+
+    for (var i = 0; i < SQUARES; i++) {
+      var cell = cells[i]; if (!cell) continue;
+      cell.className = "cell dark playable";
+      if (i === lf || i === lt) cell.classList.add("last");
+      if (i === sel) cell.classList.add("sel");
+      var code = board[i] || 0;
+      if (targets.indexOf(i) >= 0) { cell.classList.add("target"); if (code !== 0) cell.classList.add("occupied"); }
+      if (showMovable && movable.indexOf(i) >= 0) cell.classList.add("movable");
+
+      cell.innerHTML = "";
+      if (code !== 0) {
+        var p = document.createElement("div");
+        p.className = "piece " + (code > 0 ? "white" : "black") + (Math.abs(code) === 2 ? " king" : "");
+        cell.appendChild(p);
+      }
+      if (cell.classList.contains("target")) { var d = document.createElement("div"); d.className = "dot"; cell.appendChild(d); }
+      if (cell.classList.contains("movable")) { var h = document.createElement("div"); h.className = "hint"; cell.appendChild(h); }
+    }
+
+    var black = s.turn === 1;
+    document.getElementById("turnDisc").className = "disc " + (black ? "black" : "white");
+    var turnText = document.getElementById("turnText");
+    if (s.gameOver) { turnText.textContent = "Game over"; turnText.className = ""; }
+    else { turnText.textContent = (s.thinking ? "Robot thinking…" : (black ? "Black to move" : "White to move")); turnText.className = s.thinking ? "thinking" : ""; }
+    document.getElementById("counts").textContent = (s.whiteCount != null ? s.whiteCount : "–") + " vs " + (s.blackCount != null ? s.blackCount : "–");
+
+    var msg = document.getElementById("msg");
+    if (s.gameOver && s.winner) { msg.textContent = (s.winner.charAt(0).toUpperCase() + s.winner.slice(1)) + " wins"; msg.className = "msg win"; }
+    else { msg.textContent = s.moveText || ""; msg.className = "msg"; }
+
+    document.getElementById("aiBtn").disabled = !!s.thinking || !!s.gameOver;
+  }
+
+  SimpleRobot.onStatus(function (connected) {
+    document.getElementById("status").className = "status" + (connected ? " on" : "");
+    document.getElementById("offline").className = "offline" + (connected ? "" : " show");
+  });
+  SimpleRobot.onState(render);
+</script>
+</body>
+</html>

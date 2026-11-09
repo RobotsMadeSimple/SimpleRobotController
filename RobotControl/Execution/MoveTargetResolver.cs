@@ -180,11 +180,14 @@ namespace Controller.RobotControl.Execution
             finalRY = oRY ?? finalRY;
             finalRZ = oRZ ?? finalRZ;
 
-            // Apply active local offset — per-step localName overrides the program-level active local
+            // Apply active local offset — a per-step local (resolved by stable id first, name second)
+            // overrides the program-level active local. When the step names a local that no longer
+            // resolves, it overrides to no-local (preserves the prior name-only behaviour).
             Vector6? effectiveLocal;
-            if (!string.IsNullOrEmpty(step.LocalName))
+            if (!string.IsNullOrEmpty(step.LocalId) || !string.IsNullOrEmpty(step.LocalName))
             {
-                var stepLocal = src.Locals.Get(step.LocalName);
+                var stepLocal = src.Locals.GetById(step.LocalId)
+                    ?? (string.IsNullOrEmpty(step.LocalName) ? null : src.Locals.Get(step.LocalName));
                 effectiveLocal = stepLocal != null ? new Vector6(stepLocal.X, stepLocal.Y, stepLocal.Z, stepLocal.RX, stepLocal.RY, stepLocal.RZ) : null;
             }
             else

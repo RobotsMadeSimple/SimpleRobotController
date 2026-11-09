@@ -1,0 +1,8 @@
+#!srs 1
+@program {"name": "Prompt Demo", "description": "Asks the operator before starting"}
+var choice = 0
+var qty = 0
+
+prompt "Load the tray, then press Continue.", title="Setup", buttons=("Continue", "Skip"), result=$choice
+prompt "How many parts?", input=number, default=10, min=1, max=50, value=$qty
+status "Running {$qty} parts"

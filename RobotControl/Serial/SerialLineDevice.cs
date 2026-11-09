@@ -1,13 +1,16 @@
 using System.IO;
 using System.IO.Ports;
+using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Win32;
 
 namespace Controller.RobotControl.Serial
 {
     /// <summary>
     /// Shared plumbing for a device that talks ASCII newline-terminated lines over a
     /// serial port and is discovered by probing candidate ports with "ID?" until one
-    /// answers "ID:&lt;id&gt;". Both <c>NanoDevice</c> and <c>AuxAxisDevice</c> are
+    /// answers "ID:&lt;id&gt;" (optionally followed by ";fw=&lt;ver&gt;;caps=&lt;a,b,c&gt;" — see
+    /// <see cref="FirmwareInfo"/>). Both <c>NanoDevice</c> and <c>AuxAxisDevice</c> are
     /// this shape: auto-discover on a background thread, reconnect every 3s while
     /// disconnected, drain an outbound command queue every read-loop tick, and parse
     /// inbound lines with a device-specific protocol.
@@ -31,11 +34,19 @@ namespace Controller.RobotControl.Serial
     {
         // ── Shared timing constants — identical across every current subclass ──────
         protected const int BaudRate             = 115200;
-        protected const int ProbeReadTimeoutMs    = 2500;
         protected const int ProbeWriteTimeoutMs   = 1000;
-        protected const int PostOpenResetDelayMs  = 2000; // Arduino reboots on DTR toggle when a port opens; wait for boot.
         protected const int SessionReadTimeoutMs  = 100;  // short so the write queue is serviced promptly
         protected const int ReconnectDelayMs      = 3000;
+
+        // ── Probe timing — overridable per device ─────────────────────────────────
+        /// <summary>Read timeout for one "ID?" probe attempt. Short + many attempts = poll across
+        /// the boot window (catch the device the instant it answers); long + one attempt = a single
+        /// shot at a fixed offset (races a slow boot).</summary>
+        protected virtual int ProbeReadTimeoutMs   => 2500;
+
+        /// <summary>Initial grace after opening a port before the first probe — the Arduino reboots on
+        /// the DTR toggle that opening causes, so give it a head start before pinging.</summary>
+        protected virtual int PostOpenResetDelayMs => 2000;
 
         // ── Per-device knobs ────────────────────────────────────────────────────
         /// <summary>Log prefix tag, e.g. "Nano" / "AuxAxis" — lines read "[{DeviceTag}:{Id}] ...".</summary>
@@ -70,11 +81,29 @@ namespace Controller.RobotControl.Serial
         /// <summary>WriteTimeout applied when NanoDevice-style subclasses reopen a fresh session port.</summary>
         protected virtual int SessionWriteTimeoutMs => 2000;
 
+        /// <summary>Name of the Arduino sketch this device runs (e.g. "NanoEdgeDevice") — quoted in
+        /// capability-refusal errors so the operator knows what to flash.</summary>
+        public abstract string SketchName { get; }
+
         // ── Identity / public state ────────────────────────────────────────────
         public string  Id        { get; }
         public string  Name      { get; }
         public string? PortName  { get; private set; }
         public bool    Connected { get; private set; }
+
+        /// <summary>
+        /// Firmware version + capabilities from the board's "ID?" reply. <see cref="FirmwareInfo.Unknown"/>
+        /// before the first handshake, for a legacy board, and again after a disconnect. Settable from
+        /// tests only.
+        /// </summary>
+        public FirmwareInfo Firmware { get; internal set; } = FirmwareInfo.Unknown;
+
+        /// <summary>
+        /// Refuse <paramref name="feature"/> when this board is known to lack <paramref name="capability"/>
+        /// (see <see cref="FirmwareGate.Require"/>). A legacy board (capabilities unknown) is never refused.
+        /// </summary>
+        public void RequireCapability(string capability, string feature) =>
+            FirmwareGate.Require(Firmware, Id, capability, feature, SketchName);
 
         /// <summary>Fired on the device thread when the connection is established or lost.</summary>
         public event Action<bool>? ConnectionChanged;
@@ -145,6 +174,7 @@ namespace Controller.RobotControl.Serial
                 {
                     Connected = false;
                     PortName  = null;
+                    Firmware  = FirmwareInfo.Unknown;   // re-learned on the next handshake
                     ConnectionChanged?.Invoke(false);
                 }
 
@@ -153,17 +183,33 @@ namespace Controller.RobotControl.Serial
         }
 
         /// <summary>
-        /// Candidate ports in probe order. Skips built-in serial ports on Linux
-        /// (only USB adapters carry our devices) and tries the last known-good
-        /// port first so reconnects are near-instant.
+        /// Candidate ports in probe order. The OS knows each port's adapter type but not which
+        /// device's firmware is on it (every CH340 shares one USB VID/PID), so we still send "ID?"
+        /// to confirm identity — but we only probe ports that could plausibly be ours, and the most
+        /// likely first. Built-in UARTs (COM1) and Bluetooth SPP ports look identical to a silent
+        /// device while probing and each costs a full boot-window, so they go last (Windows) or are
+        /// dropped entirely (Linux, where only ttyUSB/ttyACM carry our devices). The last known-good
+        /// port is always tried first so reconnects are near-instant.
         /// </summary>
         private IEnumerable<string> CandidatePorts()
         {
             var all = SerialPort.GetPortNames();
             IEnumerable<string> ports = all;
 
-            if (!OperatingSystem.IsWindows())
+            if (OperatingSystem.IsWindows())
             {
+                // Our devices are USB-serial adapters (CH340). Windows lumps every port into "COMx"
+                // with no naming hint, and the CH340's SERIALCOMM device name ("\Device\Serial3") is
+                // indistinguishable from a built-in UART's — so identify USB ports by their presence
+                // under Enum\USB and probe those first; built-in UARTs (COM1) and Bluetooth go last.
+                var usb = WindowsUsbComPorts();
+                if (usb.Count > 0)
+                    ports = ports.OrderBy(p => usb.Contains(p) ? 0 : 1).ToList();
+            }
+            else
+            {
+                // Linux names make the distinction directly: USB adapters are ttyUSB*/ttyACM*,
+                // built-in UARTs are ttyS* (dropped). Equivalent to the Windows Enum\USB filter.
                 var usb = all.Where(p => p.Contains("ttyUSB") || p.Contains("ttyACM")).ToArray();
                 if (usb.Length > 0) ports = usb;
             }
@@ -171,6 +217,38 @@ namespace Controller.RobotControl.Serial
             if (_lastGoodPort != null)
                 ports = ports.OrderByDescending(p => p == _lastGoodPort);
 
+            return ports.ToList();
+        }
+
+        /// <summary>
+        /// The set of COM ports that belong to a USB device, read from the Windows registry
+        /// (HKLM\SYSTEM\CurrentControlSet\Enum\USB\&lt;vid&amp;pid&gt;\&lt;instance&gt;\Device Parameters\PortName).
+        /// A USB-serial adapter (CH340 etc.) appears here; a built-in 16550 UART (ACPI) and a
+        /// Bluetooth SPP port (BTHENUM) do not. Stale entries for ports not currently present are
+        /// harmless — they're intersected against the live port list by the caller. Empty on any
+        /// error, which degrades to "probe every port" (the prior behaviour).
+        /// </summary>
+        [SupportedOSPlatform("windows")]
+        private static HashSet<string> WindowsUsbComPorts()
+        {
+            var ports = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using var usb = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\USB");
+                if (usb == null) return ports;
+                foreach (var vidPid in usb.GetSubKeyNames())
+                {
+                    using var dev = usb.OpenSubKey(vidPid);
+                    if (dev == null) continue;
+                    foreach (var instance in dev.GetSubKeyNames())
+                    {
+                        using var parms = dev.OpenSubKey($@"{instance}\Device Parameters");
+                        if (parms?.GetValue("PortName") is string com && !string.IsNullOrEmpty(com))
+                            ports.Add(com);
+                    }
+                }
+            }
+            catch { }
             return ports;
         }
 
@@ -218,9 +296,11 @@ namespace Controller.RobotControl.Serial
                             try { line = probe.ReadLine().Trim(); }
                             catch (TimeoutException) { continue; }
 
-                            if (line == $"ID:{Id}")
+                            // Legacy boards answer "ID:<id>"; 1.1.0+ append ";fw=<ver>;caps=<a,b,c>".
+                            if (FirmwareInfo.TryParseHandshake(line, Id, out var firmware))
                             {
                                 matched       = true;
+                                Firmware      = firmware;
                                 _lastGoodPort = portName;
                                 SerialPortRegistry.Claim(portName, Id);
 
@@ -267,6 +347,7 @@ namespace Controller.RobotControl.Serial
             _port     = port;
             PortName  = port.PortName;
             Connected = true;
+            Console.WriteLine($"[{LogPrefix}] Connected on {port.PortName} — {Firmware.Describe()}");
             ConnectionChanged?.Invoke(true);
 
             OnSessionStarted(port);

@@ -1,0 +1,269 @@
+{
+  "id": "checkers-vision",
+  "name": "Checkers Board (camera)",
+  "cameraId": "",
+  "description": "Angled view of the checkers board: four edge lines make a perspective fixture; white pieces by colour, black pieces by their ring texture, per square.",
+  "lastUpdatedUnixMs": 0,
+  "layers": [
+    {
+      "id": "gray",
+      "name": "Gray",
+      "input": "camera",
+      "filters": [
+        {
+          "id": "g1",
+          "type": "channel",
+          "enabled": true,
+          "channel": "gray"
+        }
+      ]
+    },
+    {
+      "id": "detail",
+      "name": "Fine detail",
+      "input": "gray",
+      "filters": [
+        {
+          "id": "d1",
+          "type": "backgroundRemove",
+          "enabled": true,
+          "size": 17
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "id": "top",
+      "name": "Board top edge",
+      "type": "findLine",
+      "enabled": true,
+      "input": "gray",
+      "fixtureId": null,
+      "region": {
+        "shape": "rect",
+        "x": 0.36719,
+        "y": 0.35139,
+        "width": 0.27344,
+        "height": 0.06944,
+        "rotation": 0.0
+      },
+      "grid": null,
+      "limits": null,
+      "includeInPass": true,
+      "reference": null,
+      "params": {
+        "probes": 16,
+        "polarity": "lightToDark",
+        "contrast": 30,
+        "smoothing": 1,
+        "ignore": 4,
+        "pick": "first"
+      }
+    },
+    {
+      "id": "right",
+      "name": "Board right edge",
+      "type": "findLine",
+      "enabled": true,
+      "input": "gray",
+      "fixtureId": null,
+      "region": {
+        "shape": "rect",
+        "x": 0.67929,
+        "y": 0.56944,
+        "width": 0.28673,
+        "height": 0.06944,
+        "rotation": 38.806
+      },
+      "grid": null,
+      "limits": null,
+      "includeInPass": true,
+      "reference": null,
+      "params": {
+        "probes": 16,
+        "polarity": "lightToDark",
+        "contrast": 30,
+        "smoothing": 1,
+        "ignore": 4,
+        "pick": "first"
+      }
+    },
+    {
+      "id": "bottom",
+      "name": "Squares bottom edge",
+      "type": "findLine",
+      "enabled": true,
+      "input": "gray",
+      "fixtureId": null,
+      "region": {
+        "shape": "rect",
+        "x": 0.15625,
+        "y": 0.83194,
+        "width": 0.74219,
+        "height": 0.05,
+        "rotation": -179.879
+      },
+      "grid": null,
+      "limits": null,
+      "includeInPass": true,
+      "reference": null,
+      "params": {
+        "probes": 16,
+        "polarity": "darkToLight",
+        "contrast": 30,
+        "smoothing": 1,
+        "ignore": 4,
+        "pick": "strongest"
+      }
+    },
+    {
+      "id": "left",
+      "name": "Board left edge",
+      "type": "findLine",
+      "enabled": true,
+      "input": "gray",
+      "fixtureId": null,
+      "region": {
+        "shape": "rect",
+        "x": 0.01281,
+        "y": 0.61806,
+        "width": 0.35016,
+        "height": 0.06944,
+        "rotation": -42.016
+      },
+      "grid": null,
+      "limits": null,
+      "includeInPass": true,
+      "reference": null,
+      "params": {
+        "probes": 16,
+        "polarity": "lightToDark",
+        "contrast": 30,
+        "smoothing": 1,
+        "ignore": 4,
+        "pick": "first"
+      }
+    },
+    {
+      "id": "board",
+      "name": "Board",
+      "type": "makeFixture",
+      "enabled": true,
+      "input": "camera",
+      "fixtureId": null,
+      "region": null,
+      "grid": null,
+      "limits": null,
+      "includeInPass": true,
+      "reference": null,
+      "params": {
+        "mode": "fourLines",
+        "sources": [
+          "top",
+          "right",
+          "bottom",
+          "left"
+        ]
+      }
+    },
+    {
+      "id": "white",
+      "name": "White pieces",
+      "type": "pixelCount",
+      "enabled": true,
+      "input": "camera",
+      "fixtureId": "board",
+      "region": {
+        "shape": "quad",
+        "points": [
+          {
+            "x": 0.36531,
+            "y": 0.40278
+          },
+          {
+            "x": 0.65547,
+            "y": 0.40056
+          },
+          {
+            "x": 0.94,
+            "y": 0.85917
+          },
+          {
+            "x": 0.11602,
+            "y": 0.85611
+          }
+        ]
+      },
+      "grid": {
+        "rows": 8,
+        "cols": 8,
+        "inset": 0.15
+      },
+      "limits": {
+        "percent": {
+          "min": 30,
+          "max": null
+        }
+      },
+      "includeInPass": false,
+      "reference": null,
+      "params": {
+        "mode": "color",
+        "colors": [
+          {
+            "r": 232,
+            "g": 230,
+            "b": 200,
+            "tolerance": 20
+          }
+        ]
+      }
+    },
+    {
+      "id": "black",
+      "name": "Black pieces",
+      "type": "intensity",
+      "enabled": true,
+      "input": "detail",
+      "fixtureId": "board",
+      "region": {
+        "shape": "quad",
+        "points": [
+          {
+            "x": 0.36531,
+            "y": 0.40278
+          },
+          {
+            "x": 0.65547,
+            "y": 0.40056
+          },
+          {
+            "x": 0.94,
+            "y": 0.85917
+          },
+          {
+            "x": 0.11602,
+            "y": 0.85611
+          }
+        ]
+      },
+      "grid": {
+        "rows": 8,
+        "cols": 8,
+        "inset": 0.35
+      },
+      "limits": {
+        "stdDev": {
+          "min": 4,
+          "max": null
+        }
+      },
+      "includeInPass": false,
+      "reference": null,
+      "params": {
+        "statistic": "stdDev"
+      }
+    }
+  ]
+}

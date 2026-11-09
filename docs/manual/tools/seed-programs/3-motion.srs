@@ -1,0 +1,15 @@
+#!srs 1
+@program {"name": "Motion Demo", "description": "Linear, joint, arc and blended moves"}
+var r = 5
+
+SetTool Gripper
+SetBlendRadius 5
+MoveJ Home
+MoveL Approach, blend=on
+MoveL Pick1, offset=(z=20), blend=$r
+MoveC Place1, via=Via1, speed=80, tolerance=0.1
+JumpL Pick1, z=60, zEnd=80
+SetLocal Fixture1
+MoveL here, offset=(x=10, y=10)
+ClearLocal
+MoveJ Home

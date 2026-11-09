@@ -83,6 +83,9 @@ internal sealed class SystemCommands
             homingState,
             isHoming = homingState != HomingSequencer.IdleStateName,
             lastPointUpdate = robot.pointRepo.LastUpdatedUnixMs,
+            // Bumped whenever a recording starts/stops/saves/deletes, so the app refetches
+            // the recordings list only on change (not every poll).
+            lastRecordingUpdate = robot.IoHistory.LastRecordingUpdate,
             driverConnected = stb.connected,
             driverOk = stb.connected && stb.status != 0,
 
@@ -148,6 +151,13 @@ internal sealed class SystemCommands
                 Names     = relay.GetRelayNames(),
             },
 
+            // IO-device state (Nanos + any aux-stepper spare-pin IO) rides along in the broadcast
+            // (same shape as GetIO's `ioDevices`) so live values — load-cell readings especially,
+            // which stream at the HX711 rate — update every poll instead of only on page entry.
+            // Serialized to a JSON string so the app reuses its GetIO decoder; it change-detects
+            // before re-rendering so unchanging digital pins don't churn.
+            ioDevices = JsonSerializer.Serialize(robot.GetAllIoStates(), CommandJson.CamelCaseWithEnums),
+
             // Program cycle — the full summary now rides behind lastProgramUpdate (fetched via
             // GetPrograms), so it isn't re-sent every poll. Only a compact live block for the
             // actively-running program(s) is broadcast so the monitor view stays real-time.
@@ -164,7 +174,7 @@ internal sealed class SystemCommands
 
             // Background programs currently running
             backgroundPrograms = _background.GetStatuses()
-                .Select(s => new { name = s.Name, currentStep = s.CurrentStep })
+                .Select(s => new { id = s.Id, name = s.Name, currentStep = s.CurrentStep })
                 .ToList(),
 
             // Built program repository
@@ -189,6 +199,9 @@ internal sealed class SystemCommands
 
             version = RobotController.Version,
             isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),
+
+            // Installed plugins — summary only (docs/plugins.md §7)
+            plugins = robot.PluginManager?.GetStatusSummary() ?? new List<object>(),
         };
     }
 

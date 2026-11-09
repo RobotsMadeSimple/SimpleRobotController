@@ -17,7 +17,7 @@ namespace Controller.RobotControl.Vision
             _repo          = repo;
         }
 
-        public void StartProgram(string programId, string? zoneOverrideId = null)
+        public void StartProgram(string programId)
         {
             lock (_lock)
             {
@@ -29,27 +29,25 @@ namespace Controller.RobotControl.Vision
                 var camera = _cameraManager.GetCamera(prog.CameraId);
                 if (camera == null) { Console.WriteLine($"[Vision] Camera '{prog.CameraId}' not found"); return; }
 
-                // Runtime zone override: point every inspection at the chosen zone so the
-                // analysis — and the annotated debug frame — run in that zone instead of
-                // each inspection's saved default. Clone first so the repo copy is untouched.
-                if (!string.IsNullOrEmpty(zoneOverrideId))
-                    prog = WithZoneOverride(prog, zoneOverrideId);
-
-                var proc = new VisionProcessor(prog, camera);
+                // A reference captured on the first good frame is kept: persist the program.
+                var proc = new VisionProcessor(prog, camera, p => PersistCapturedReference(p));
                 _processors[programId] = proc;
                 proc.Start();
-                Console.WriteLine($"[Vision] Started processor for '{programId}'"
-                    + (string.IsNullOrEmpty(zoneOverrideId) ? "" : $" (zone override {zoneOverrideId})"));
+                Console.WriteLine($"[Vision] Started processor for '{programId}'");
             }
         }
 
-        /// <summary>Deep-clones a program and re-points every inspection at one zone.</summary>
-        private static VisionProgram WithZoneOverride(VisionProgram prog, string zoneId)
+        private void PersistCapturedReference(VisionProgram program)
         {
-            var clone = System.Text.Json.JsonSerializer.Deserialize<VisionProgram>(
-                System.Text.Json.JsonSerializer.Serialize(prog))!;
-            foreach (var i in clone.AllInspections()) i.ZoneId = zoneId;
-            return clone;
+            try
+            {
+                // Only when this program is still the saved one (not replaced by a save meanwhile).
+                if (ReferenceEquals(_repo.Get(program.Id), program)) _repo.Save(program);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Vision] could not save the captured reference of '{program.Id}': {ex.Message}");
+            }
         }
 
         public void StopProgram(string programId)
@@ -79,6 +77,18 @@ namespace Controller.RobotControl.Vision
         }
 
         public VisionProgram? GetProgram(string programId) => _repo.Get(programId);
+
+        /// <summary>
+        /// The newest frame for a program: its running processor's last processed frame, else
+        /// the latest frame of the program's camera. Null when neither has one.
+        /// </summary>
+        public byte[]? LatestFrame(string programId)
+        {
+            var raw = GetProcessor(programId)?.GetLatestRaw();
+            if (raw != null) return raw;
+            var prog = _repo.Get(programId);
+            return prog == null ? null : _cameraManager.GetCamera(prog.CameraId)?.GetLatestFrame();
+        }
 
         public List<string> GetRunningIds()
         {

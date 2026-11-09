@@ -29,3 +29,10 @@ jobs:
 
       - name: Test
         run: dotnet test --configuration Release --no-build
+
+      # C# plugin SDK (plugins-sdk/dotnet) has its own solution so the controller build above is unaffected.
+      - name: Build plugin SDK
+        run: dotnet build plugins-sdk/dotnet/SimpleRobot.PluginSdk.sln --configuration Release
+
+      - name: Test plugin SDK
+        run: dotnet test plugins-sdk/dotnet/SimpleRobot.PluginSdk.sln --configuration Release --no-build

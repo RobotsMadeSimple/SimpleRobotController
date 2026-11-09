@@ -31,6 +31,20 @@ namespace Controller.RobotControl
         private readonly ExecutionContext _ctx;
         private readonly VariableScope    _vars;
         private readonly bool             _isBackground;
+        private readonly ProgramCycleManager _programManager;
+
+        // ── Debugger (docs/program-language.md §4.2 "Debugging") ─────────────
+        // Breakpoints pause BEFORE a step; "pause at next step" is step mode and the Step
+        // command. A step is "fresh" the first tick it is dispatched — multi-tick steps (Wait,
+        // a Jump's legs, vision) are re-dispatched every tick and must not pause mid-way, so
+        // the last dispatched (step, frame, index) is remembered. Background executors never
+        // pause for the debugger.
+        private readonly HashSet<string> _breakpoints = new(StringComparer.Ordinal);
+        private bool           _pauseAtNextStep;
+        private ProgramStep?   _lastStep;
+        private StepListFrame? _lastFrame;
+        private int            _lastIndex = -1;
+        private int            _lastCatchGeneration;
 
         private BuiltProgram? Program => _ctx.Program;
 
@@ -46,7 +60,8 @@ namespace Controller.RobotControl
             bool isBackground = false, GlobalVariableStore? globalVars = null,
             GlobalImageStore? globalImages = null, BackgroundProgramManager? backgroundManager = null)
         {
-            _isBackground = isBackground;
+            _isBackground   = isBackground;
+            _programManager = programManager;
             _vars = new VariableScope(globalVars, globalImages, io => AddIoVariables(controller, io));
             _ctx  = new ExecutionContext(
                 controller, programManager, pointRepo, localRepo, builtProgramRepo, gridRepo, stackRepo,
@@ -96,18 +111,64 @@ namespace Controller.RobotControl
         /// <summary>
         /// Evaluates <paramref name="expr"/> against this executor's live variables, IO and
         /// properties — what a step evaluating it right now would see. Throws like
-        /// <see cref="ExpressionEvaluator.Evaluate"/>.
+        /// <see cref="ExpressionEvaluator.Evaluate"/>. Goes through the scope's
+        /// <see cref="Execution.EvalContext"/> so the text helpers (<c>$s.length</c>,
+        /// <c>$s.contains("x")</c> …) resolve string variables exactly as a running step does.
+        /// Ticks run under the same lock, so this never sees a tick's cached snapshot.
         /// </summary>
         internal double EvaluateLive(string expr)
         {
             lock (_controlLock)
-                return ExpressionEvaluator.Evaluate(expr, _vars.EvalVars(), _vars.Lists, _vars.Properties);
+                return _vars.Eval.Evaluate(expr);
         }
 
         /// <summary>Current values of every variable in scope: number, string, or a list's element count.</summary>
         internal Dictionary<string, object?> SnapshotLiveValues()
         {
             lock (_controlLock) return _vars.SnapshotValues();
+        }
+
+        // ── Plugin variables.get / variables.set (docs/plugins.md §4.3) ──────
+
+        /// <summary>Scalars (computed ones evaluated), lists as JSON-ready values, and strings.</summary>
+        internal Plugins.VariablesSnapshot PluginSnapshot()
+        {
+            lock (_controlLock) return _vars.PluginSnapshot();
+        }
+
+        /// <summary>
+        /// Validates every value, then applies the writes: queued onto the loop thread
+        /// (<see cref="ExecutionContext.PendingActions"/>, dropped if the run ends first) while
+        /// running, directly under the control lock otherwise. Returns <c>computedVariable</c>
+        /// or <c>badValue</c> (nothing is written then), or null.
+        /// </summary>
+        internal string? PluginSetVariables(Dictionary<string, JsonElement> values)
+        {
+            lock (_controlLock)
+            {
+                var writes = new List<Action<VariableScope>>();
+                foreach (var (name, value) in values)
+                {
+                    if (string.IsNullOrWhiteSpace(name)) return "badValue";
+                    if (_vars.IsComputed(name)) return "computedVariable";
+                    if (PluginVariables.Write(name, value) is not { } write) return "badValue";
+                    writes.Add(write);
+                }
+                if (!_running)
+                {
+                    foreach (var w in writes) w(_vars);
+                    return null;
+                }
+                int gen = _ctx.RunGeneration;
+                foreach (var w in writes)
+                    _ctx.PendingActions.Enqueue(() =>
+                    {
+                        if (gen != _ctx.RunGeneration) return;
+                        try { w(_vars); }
+                        catch (Exception ex) { Console.WriteLine($"[ProgramExecutor] Plugin variable write failed: {ex.Message}"); }
+                    });
+                return null;
+            }
         }
 
         // ── Public control ───────────────────────────────────────────────────
@@ -119,14 +180,174 @@ namespace Controller.RobotControl
         // or Reset() returns, the next tick sees the stopped state, and IsRunning is
         // already true when Start() returns (BackgroundProgramManager and
         // WaitForBackground rely on that).
-        public void Start(BuiltProgram program, string? imageBase64 = null)
+        public void Start(BuiltProgram program, string? imageBase64 = null,
+                          IReadOnlyDictionary<string, JsonElement>? inputs = null,
+                          DebugOptions? debug = null)
         {
-            lock (_controlLock) StartCore(program, imageBase64);
+            lock (_controlLock) StartCore(program, imageBase64, inputs, debug);
         }
 
+        /// <summary>Continue: resumes a paused program and leaves step mode (it then runs to the
+        /// next breakpoint, pause step or the end).</summary>
         public void Resume()
         {
-            lock (_controlLock) ResumeCore();
+            lock (_controlLock)
+            {
+                _pauseAtNextStep = false;
+                ResumeCore();
+            }
+        }
+
+        // ── Debugger ─────────────────────────────────────────────────────────
+
+        /// <summary>The ExecuteBuiltProgram debug options.</summary>
+        public sealed record DebugOptions(string? StartAtStepId, IReadOnlyCollection<string>? Breakpoints, bool StepMode);
+
+        /// <summary>
+        /// StepBuiltProgram: a paused program runs its next step and pauses again before the one
+        /// after (pauseReason "step"); a running one pauses before its next step. False when no
+        /// program is running or paused.
+        /// </summary>
+        public bool StepOnce()
+        {
+            lock (_controlLock)
+            {
+                if (_isPaused)
+                {
+                    _pauseAtNextStep = true;
+                    ResumeCore();
+                    return true;
+                }
+                if (!_running) return false;
+                _pauseAtNextStep = true;
+                return true;
+            }
+        }
+
+        /// <summary>SetBreakpoints: replaces the breakpoints (step ids) of this executor's run.</summary>
+        public int SetBreakpoints(IEnumerable<string>? stepIds)
+        {
+            lock (_controlLock)
+            {
+                _breakpoints.Clear();
+                foreach (var id in stepIds ?? [])
+                    if (!string.IsNullOrWhiteSpace(id)) _breakpoints.Add(id);
+                return _breakpoints.Count;
+            }
+        }
+
+        /// <summary>The current breakpoints (a copy).</summary>
+        public IReadOnlyCollection<string> Breakpoints
+        {
+            get { lock (_controlLock) return _breakpoints.ToList(); }
+        }
+
+        /// <summary>
+        /// Where <paramref name="stepId"/> sits in <paramref name="steps"/> (routine bodies are not
+        /// searched): each enclosing step with the body that holds the next level, then the step's
+        /// index in its own list. False when the id is not found.
+        /// </summary>
+        internal static bool TryFindStepPath(List<ProgramStep> steps, string stepId,
+            out List<(ProgramStep Parent, int IndexInList, StepChildList Body)> ancestors, out int index)
+        {
+            ancestors = new();
+            index = -1;
+            return Find(steps, stepId, ancestors, ref index);
+
+            static bool Find(List<ProgramStep> list, string id,
+                             List<(ProgramStep, int, StepChildList)> path, ref int found)
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var s = list[i];
+                    if (s == null) continue;
+                    if (s.Id == id) { found = i; return true; }
+                    foreach (var child in s.ChildLists(executableOnly: true))
+                    {
+                        path.Add((s, i, child));
+                        if (Find(child.Steps, id, path, ref found)) return true;
+                        path.RemoveAt(path.Count - 1);
+                    }
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Why the program cannot start at <paramref name="stepId"/>, or null when it can: the
+        /// step must be in the program itself (not a routine), and not inside a disabled step or
+        /// a CNC block's generated steps.
+        /// </summary>
+        internal static string? CheckStartAt(BuiltProgram program, string stepId)
+        {
+            if (!TryFindStepPath(program.Steps, stepId, out var ancestors, out _))
+                return $"step '{stepId}' is not in program '{program.Name}' (a routine's steps cannot be started directly)";
+            foreach (var (parent, _, body) in ancestors)
+            {
+                if (!parent.IsEnabled) return $"step '{stepId}' is inside a disabled step";
+                if (body.Role == StepTree.Roles.CncProgramSteps) return $"step '{stepId}' is inside a CNC block";
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Replaces the frame stack with one that runs from <paramref name="stepId"/>: each
+        /// enclosing block is entered without being evaluated — a loop at its first pass (count
+        /// index 0, for-each element 0, a while condition not checked), an If / Switch branch or a
+        /// Try / catch body directly. Returns an error text, or null.
+        /// </summary>
+        private string? BuildStartStack(BuiltProgram program, string stepId)
+        {
+            if (CheckStartAt(program, stepId) is { } why) return why;
+            TryFindStepPath(program.Steps, stepId, out var ancestors, out int index);
+
+            var frames = _ctx.Frames;
+            frames.Clear();
+            var root = StepListFrame.Plain(program.Steps);
+            root.Index = ancestors.Count > 0 ? ancestors[0].IndexInList + 1 : index;
+            frames.Push(root);
+
+            for (int k = 0; k < ancestors.Count; k++)
+            {
+                var (parent, _, body) = ancestors[k];
+                StepListFrame f;
+                switch (body.Role)
+                {
+                    case StepTree.Roles.LoopSteps:
+                        if (parent.LoopMode == "while" && parent.LoopWhileCondition != null)
+                            f = StepListFrame.WhileLoop(body.Steps, parent.LoopWhileCondition);
+                        else if (parent.LoopMode == "forEach" && !string.IsNullOrEmpty(parent.ForEachVariableName))
+                        {
+                            int n = _vars.Lists.TryGetValue(parent.ForEachVariableName, out var lst) ? lst.Count : 0;
+                            if (n == 0) return $"the for-each list '${parent.ForEachVariableName}' around step '{stepId}' is empty";
+                            f = StepListFrame.ForEach(body.Steps, n, 0, parent.ForEachVariableName,
+                                parent.ForEachValueVariableName ?? "", parent.ForEachIndexVariableName ?? "");
+                        }
+                        else
+                        {
+                            int count = (int)_ctx.Eval.EvalField(parent, "loopCount", parent.LoopCount ?? 1);
+                            int remaining = count == 0 ? int.MaxValue : count;
+                            string indexVar = parent.ForEachIndexVariableName ?? "";
+                            if (!string.IsNullOrEmpty(indexVar)) _vars.Set(indexVar, 0);
+                            f = StepListFrame.CountLoop(body.Steps, remaining, remaining, indexVar);
+                        }
+                        break;
+                    case StepTree.Roles.SwitchCases:
+                    case StepTree.Roles.SwitchDefault:
+                        f = StepListFrame.SwitchBody(body.Steps);
+                        break;
+                    case StepTree.Roles.TrySteps:
+                        f = StepListFrame.TryBody(parent);
+                        break;
+                    default: // if / else-if / else branches, catch steps
+                        f = StepListFrame.Plain(body.Steps);
+                        break;
+                }
+                f.Index = k + 1 < ancestors.Count ? ancestors[k + 1].IndexInList + 1 : index;
+                frames.Push(f);
+                _ctx.InjectForEachVars(f);
+            }
+            return null;
         }
 
         public void Stop()
@@ -143,8 +364,21 @@ namespace Controller.RobotControl
             lock (_controlLock) ResetCore();
         }
 
-        private void StartCore(BuiltProgram program, string? imageBase64)
+        private void StartCore(BuiltProgram program, string? imageBase64,
+                               IReadOnlyDictionary<string, JsonElement>? inputs = null,
+                               DebugOptions? debug = null)
         {
+            // Debug state belongs to one run: a plain start clears it.
+            _breakpoints.Clear();
+            _pauseAtNextStep = false;
+            ForgetLastDispatch();
+            if (debug != null && !_isBackground)
+            {
+                foreach (var id in debug.Breakpoints ?? [])
+                    if (!string.IsNullOrWhiteSpace(id)) _breakpoints.Add(id);
+                _pauseAtNextStep = debug.StepMode;
+            }
+
             // Pulses left over from a run that completed normally finish now rather than
             // being dropped (which would leave the output stuck in its pulsed state).
             if (!_isPaused) FireAllOutputFlips();
@@ -169,6 +403,7 @@ namespace Controller.RobotControl
             try
             {
                 _vars.Initialize(program);
+                _vars.SeedInputs(program, inputs); // launch-time input overrides win over defaults
             }
             catch (UnknownVariableException ex)
             {
@@ -189,10 +424,62 @@ namespace Controller.RobotControl
                 return;
             }
 
+            // Run from a step: the stack is built down its path once the variables exist (a
+            // count loop's index variable is written, a for-each reads its list).
+            if (!string.IsNullOrEmpty(debug?.StartAtStepId))
+            {
+                string? error;
+                try { error = BuildStartStack(program, debug!.StartAtStepId!); }
+                catch (UnknownVariableException ex) { error = $"unknown variable '${ex.VariableName}' in an enclosing loop count"; }
+                catch (ExpressionParseException ex) { error = ProgressReporter.DescribeParseError(ex); }
+                if (error != null)
+                {
+                    Finish(ProgramStatus.Error, $"Cannot run from this step: {error}");
+                    return;
+                }
+            }
+
             // Programs start in the robot's active local (set from the jog page);
             // SetLocal / ClearLocal steps override it during the run.
             _ctx.ActiveLocal = _ctx.Controller.ActiveLocalOffset;
             _running         = true;
+        }
+
+        private void ForgetLastDispatch()
+        {
+            _lastStep  = null;
+            _lastFrame = null;
+            _lastIndex = -1;
+        }
+
+        /// <summary>
+        /// The debugger's check before a step runs: pauses (and returns true) at a breakpoint or
+        /// in step mode, the first tick a step is dispatched. Notes and disabled steps never
+        /// pause; background programs never do.
+        /// </summary>
+        private bool PauseBeforeStep(ProgramStep step, StepListFrame frame)
+        {
+            bool fresh = !ReferenceEquals(step, _lastStep) || !ReferenceEquals(frame, _lastFrame)
+                         || frame.Index != _lastIndex || _ctx.CatchGeneration != _lastCatchGeneration;
+            _lastStep  = step;
+            _lastFrame = frame;
+            _lastIndex = frame.Index;
+            _lastCatchGeneration = _ctx.CatchGeneration;
+            if (!fresh || _isBackground || step.Type == StepType.Note || !step.IsEnabled) return false;
+
+            string? reason = _pauseAtNextStep ? PauseReasons.Step
+                           : _breakpoints.Contains(step.Id) ? PauseReasons.Breakpoint
+                           : null;
+            if (reason == null) return false;
+
+            // Paused before the step: Continue / Step dispatch it next tick, and because it is
+            // the step remembered above, it does not pause again.
+            _pauseAtNextStep = false;
+            _running  = false;
+            _isPaused = true;
+            _ctx.Progress.Paused();
+            _programManager.SetPauseState(_ctx.Progress.ProgramName, reason, step.Id);
+            return true;
         }
 
         private void ResumeCore()
@@ -238,6 +525,10 @@ namespace Controller.RobotControl
             // Snapshot the interrupted motion for Resume() and drop the move wait.
             _ctx.Motion.CaptureResumeSnapshot();
 
+            // An outstanding plugin step is cancelled (step.cancel reason "stopped"; a late
+            // reply is discarded) and re-sent when Continue reaches it again.
+            _ctx.PluginState.Reset("stopped");
+
             _vars.SavePersistent();
             _running  = false;
             _isPaused = true;
@@ -264,11 +555,18 @@ namespace Controller.RobotControl
         /// still hold (vision processor, webhook subscription, pending async work, output
         /// pulses). Called from Start(), Reset() and Finish(). Variables are not touched.
         /// </summary>
-        private void ResetRunState()
+        /// <param name="pluginCancelReason">The <c>step.cancel</c> reason for an outstanding plugin step.</param>
+        private void ResetRunState(string pluginCancelReason = "reset")
         {
             _running  = false;
             _isPaused = false;
-            _ctx.ResetRunState();
+            // A recording the run started but never stopped (an error, a reset after Stop, or
+            // no StopRecording step) ends with the run; it stays in the Recordings browser. A
+            // pause keeps it going, so a resumed test is still one recording.
+            foreach (var (_, rec) in _ctx.ProgramRecordings)
+                _ctx.Controller.IoHistory.StopRecording(rec.RecordingId);
+            _ctx.ProgramRecordings.Clear();
+            _ctx.ResetRunState(pluginCancelReason);
         }
 
         /// <summary>Fires the reverting flip of every output pulse that is due (all of them
@@ -344,6 +642,10 @@ namespace Controller.RobotControl
             // If we dispatched a robot move, wait until the queue is clear and the robot is idle
             if (motion.AwaitingMove)
             {
+                // The move's stop condition, evaluated every tick it is in flight (the
+                // snapshot is rebuilt per tick, so each evaluation sees fresh IO).
+                if (motion.Watch is { Fired: false, IsAux: false } && !_ctx.TickMoveWatch()) return;
+
                 if (!motion.MoveFinished) return;
 
                 motion.AwaitingMove = false;
@@ -352,6 +654,7 @@ namespace Controller.RobotControl
                 var motionError = _ctx.Controller.ConsumeMotionError();
                 if (motionError != null)
                 {
+                    _ctx.Progress.Failing(motion.PendingStep ?? motion.PendingSteps?.FirstOrDefault(), Programs.ErrorCodes.MotionFault);
                     Finish(ProgramStatus.Error, motionError);
                     return;
                 }
@@ -367,11 +670,14 @@ namespace Controller.RobotControl
                     foreach (var s in run) _ctx.Progress.StepCompleted(s);
                     motion.PendingSteps = null;
                 }
+                if (motion.Watch is { IsAux: false } watch) CompleteRobotMoveWatch(watch);
             }
 
             // If we dispatched an aux indexed move with WaitForDone=true, block until it completes
             if (motion.AwaitingAux)
             {
+                if (motion.Watch is { Fired: false, IsAux: true } && !_ctx.TickMoveWatch()) return;
+
                 if (_ctx.Controller.IsAuxMoving) return;
 
                 motion.AwaitingAux = false;
@@ -381,6 +687,7 @@ namespace Controller.RobotControl
                     _ctx.Progress.StepCompleted(auxStep);
                     motion.PendingAuxStep = null;
                 }
+                if (motion.Watch is { IsAux: true } watch) _ctx.CompleteMoveWatch(watch);
             }
 
             // Nothing left to execute?
@@ -399,11 +706,49 @@ namespace Controller.RobotControl
                 return; // Re-enter next tick with updated stack
             }
 
+            // A Try retry waiting out its delay.
+            if (frame.ResumeAtMs > 0)
+            {
+                if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < frame.ResumeAtMs) return;
+                frame.ResumeAtMs = 0;
+            }
+
             var step = frame.Steps[frame.Index];
+            if (PauseBeforeStep(step, frame)) return;
             if (Diag.Enabled) Diag.StepStart(frame.Index, step.Type);
             long execTs = Diag.Enabled ? Diag.Now() : 0;
             ExecuteStep(step, frame);
             if (Diag.Enabled) Diag.StepExec(step.Type, frame.Index, execTs);
+        }
+
+        /// <summary>
+        /// A robot move leg finished with a stop condition armed. A single move (or a blended
+        /// Jump) is done: write the flag and clear. A stepped Jump still has legs to dispatch
+        /// (<see cref="JumpState.SubStep"/> 1 or 2): a watch that fired in stop mode ends the
+        /// Jump here — the remaining legs are skipped and the step is completed — while an
+        /// unfired or record-mode watch stays armed across the next leg.
+        /// </summary>
+        private void CompleteRobotMoveWatch(MoveWatch watch)
+        {
+            var jump = _ctx.Jump;
+            bool legsRemain = jump.SubStep is 1 or 2;
+            if (!legsRemain)
+            {
+                _ctx.CompleteMoveWatch(watch);
+                return;
+            }
+            if (!watch.Fired || watch.Mode != MoveStopMode.Stop) return;
+
+            jump.Reset();
+            _ctx.CompleteMoveWatch(watch);
+            // The stepped Jump never advanced the frame (it re-runs its handler per leg), so
+            // the frame index still points at the step: complete it so the next step runs.
+            if (_ctx.Frames.Count > 0)
+            {
+                var frame = _ctx.Frames.Peek();
+                if (frame.Index < frame.Steps.Count && ReferenceEquals(frame.Steps[frame.Index], watch.Step))
+                    _ctx.CompleteNow(watch.Step, frame);
+            }
         }
 
         /// <summary>
@@ -451,7 +796,14 @@ namespace Controller.RobotControl
                     }
                     break;
 
+                case FrameKind.Routine:
+                    // The routine ran to its end: its out / inOut parameters go back to the caller.
+                    _ctx.LeaveRoutine(frame);
+                    break;
+
                 case FrameKind.Plain:
+                case FrameKind.Try:     // the body finished without a (caught) failure
+                case FrameKind.Switch:
                     break;
             }
         }
@@ -460,12 +812,14 @@ namespace Controller.RobotControl
 
         private void ExecuteStep(ProgramStep step, StepListFrame frame)
         {
+            _ctx.CurrentStep = step;
             try
             {
                 ExecuteStepInner(step, frame);
             }
             catch (UnknownVariableException ex)
             {
+                _ctx.Progress.Failing(step, Programs.ErrorCodes.UnknownVariable);
                 // A typo'd variable in any step field or condition stops the program with
                 // a clear error instead of silently evaluating to 0 and moving the robot.
                 Finish(ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in step: {ProgressReporter.StepDescription(step)}");
@@ -473,13 +827,24 @@ namespace Controller.RobotControl
             catch (ComputedVariableWriteException ex)
             {
                 // A computed variable is a formula; writing it would silently do nothing useful.
+                _ctx.Progress.Failing(step, Programs.ErrorCodes.ComputedVariable);
                 Finish(ProgramStatus.Error,
                     $"Cannot assign computed variable '${ex.VariableName}' in step: {ProgressReporter.StepDescription(step)}");
+            }
+            catch (PluginFunctionCallException ex)
+            {
+                // A plugin function failed (not running, timed out, returned an error) — the
+                // plugin's message, not a syntax-error framing. A runtime failure, so a Try
+                // can catch it (pluginFailed).
+                var message = $"{_ctx.Progress.Describe(step)}: {ex.Message}";
+                try { _ctx.Fail(Programs.ErrorCodes.PluginFailed, message); }
+                catch (Exception inner) { Finish(ProgramStatus.Error, $"{message} ({inner.Message})"); }
             }
             catch (ExpressionParseException ex)
             {
                 // A syntax error the validator would have reported — a clear message rather
                 // than a stack trace, and never a silent fallback value.
+                _ctx.Progress.Failing(step, Programs.ErrorCodes.ExpressionSyntax);
                 Finish(ProgramStatus.Error,
                     $"Expression error in step {ProgressReporter.StepDescription(step)}: {ProgressReporter.DescribeParseError(ex)}");
             }
@@ -492,13 +857,19 @@ namespace Controller.RobotControl
                 Console.WriteLine($"[ProgramExecutor] Step '{desc}' threw: {ex}");
                 Finish(ProgramStatus.Error, $"{desc}: {ex.Message}");
             }
+            finally
+            {
+                _ctx.CurrentStep = null;
+            }
         }
 
         private void ExecuteStepInner(ProgramStep step, StepListFrame frame)
         {
-            // A step the user disabled in the editor is skipped but still counted.
+            // A disabled step (enabled: false) is skipped with its whole body. A disabled Note is
+            // still just a note — nothing to report.
             if (!step.IsEnabled)
             {
+                if (step.Type == StepType.Note) { frame.Index++; return; }
                 _ctx.Progress.SkippedDisabled(step);
                 _ctx.CompleteNow(step, frame);
                 return;
@@ -522,16 +893,21 @@ namespace Controller.RobotControl
                 _ctx.CompleteNow(step, frame);
         }
 
-        private static bool IsRestrictedInBackground(StepType type) => type switch
+        /// <summary>Step types a background program skips (motion, tool, homing). The step catalog's
+        /// <c>background</c> flag is the negation of this.</summary>
+        internal static bool IsRestrictedInBackground(StepType type) => type switch
         {
-            StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ => true,
-            StepType.SetTool or StepType.SetSpeedL or StepType.SetSpeedJ => true,
+            StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ or StepType.MoveC => true,
+            StepType.SetTool or StepType.SetSpeedL or StepType.SetSpeedJ or StepType.SetSpeedFactor => true,
             StepType.SetLocal or StepType.ClearLocal or StepType.RunHoming or StepType.ThreadMove => true,
             _ => false,
         };
 
         private void Finish(ProgramStatus status, string description)
         {
+            // An error while a step's handler runs is that step's: the monitor marks it.
+            if (status == ProgramStatus.Error && _ctx.CurrentStep is { } failing)
+                _ctx.Progress.Failing(failing, null);
             _vars.SavePersistent();
             int finalStepIndex = _ctx.Progress.GlobalStepIndex;
 
@@ -546,7 +922,7 @@ namespace Controller.RobotControl
                 else keptFlips = new(_ctx.OutputFlips);
             }
 
-            ResetRunState();
+            ResetRunState(status == ProgramStatus.Stopped ? "stopped" : "reset");
             if (keptFlips != null) _ctx.OutputFlips.AddRange(keptFlips);
 
             // Main program finishing: optionally kill all background programs
@@ -559,7 +935,11 @@ namespace Controller.RobotControl
             _ctx.Progress.Finished(status, description, finalStepIndex);
         }
 
-        /// <summary>Writes live IO values (stb.inN/outN, relay.N, nano.name.pin) into <paramref name="io"/>.</summary>
+        /// <summary>
+        /// Writes live IO values (stb.inN/outN, relay.N, io.nano.pin) into <paramref name="io"/>.
+        /// Nano pins follow <see cref="IoVariableNames"/>: a load cell reads in grams, and a name
+        /// that is not an identifier is also published under its identifier-safe alias.
+        /// </summary>
         internal static void AddIoVariables(RobotController controller, Dictionary<string, double> io)
         {
             io["stb.in1"]  = controller.stb.Input1  ? 1.0 : 0.0;
@@ -576,11 +956,7 @@ namespace Controller.RobotControl
                 for (int ri = 0; ri < relays.Length && ri < 4; ri++)
                     io[$"relay.{ri + 1}"] = relays[ri] ? 1.0 : 0.0;
 
-            foreach (var nano in controller.NanoManager.GetAllStates())
-                if (!string.IsNullOrEmpty(nano.Name))
-                    foreach (var pin in nano.Pins)
-                        if (!string.IsNullOrEmpty(pin.Name))
-                            io[$"nano.{nano.Name}.{pin.Name}"] = pin.Value ? 1.0 : 0.0;
+            IoVariableNames.AddPins(controller.NanoManager.GetAllStates(), io);
         }
 
         // ── Static API kept for callers and tests ─────────────────────────────

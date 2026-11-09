@@ -4,7 +4,7 @@ using Controller.RobotControl.Hosting;
 using Controller.RobotControl.Persistence;
 using Controller.RobotControl.AuxAxis;
 using Controller.RobotControl.MotionProfilers;
-using Controller.RobotControl.Nano;
+using Controller.RobotControl.Io;
 using Controller.RobotControl.Robots;
 using Controller.RobotControl.Robots.ASTRO;
 using Controller.RobotControl.Robots.CNC4Axis;
@@ -99,6 +99,11 @@ namespace Controller.RobotControl
 
         // Hard-stop flag — set from any thread, consumed exclusively on the control loop thread
         private volatile bool _hardStopRequested;
+
+        // Motion-stop flag (a move step's stop condition fired) — set from the program thread,
+        // consumed exclusively on the control loop thread. Ends the program move only: no aux
+        // stop, no jog stop, no homing reset, unlike a hard stop.
+        private volatile bool _motionStopRequested;
 
         // Drain-queue flag — set from any thread, consumed exclusively on the control loop thread in RunCommands()
         private volatile bool _drainQueueRequested;
@@ -257,6 +262,14 @@ namespace Controller.RobotControl
         // Speed override: MinSpeedOverrideFactor–MaxSpeedOverrideFactor (5%–200%), default 1.0 (100%)
         public double SpeedOverrideFactor { get; internal set; } = 1.0;
 
+        /// <summary>
+        /// A program's SetSpeedFactor as carried on its move commands (<see cref="RobotCommand.SpeedFactor"/>),
+        /// limited to 1 %–100 %: it multiplies the operator override, so a program can slow itself
+        /// down but never run faster than the operator allows. A non-number reads as 100 %.
+        /// </summary>
+        internal static double ProgramSpeedFactor(double factor) =>
+            double.IsFinite(factor) ? Math.Clamp(factor, 0.01, 1.0) : 1.0;
+
         // ── Nano IO ───────────────────────────────────────────────────────────
         public NanoManager NanoManager { get; private set; } = null!;
         private long _lastStatusLightMs = 0;
@@ -267,8 +280,24 @@ namespace Controller.RobotControl
         // ── Aux Stepper Axes ──────────────────────────────────────────────────
         public AuxAxisManager AuxAxisManager { get; private set; } = null!;
 
+        /// <summary>Every IO device's live state — the Nano edge devices plus any aux-stepper
+        /// device that has spare-pin IO configured. This is the single source the GetIO response
+        /// and the GetStatus `ioDevices` field both serialize.</summary>
+        public List<Io.IoDeviceState> GetAllIoStates()
+        {
+            var states = NanoManager.GetAllStates();
+            states.AddRange(AuxAxisManager.GetAllIoStates());
+            return states;
+        }
+
         // ── USB Cameras ───────────────────────────────────────────────────────
         public Camera.CameraManager CameraManager { get; private set; } = null!;
+
+        // ── Phone / client data devices ───────────────────────────────────────
+        public Devices.DeviceManager DeviceManager { get; private set; } = null!;
+
+        // ── IO value history + recordings ─────────────────────────────────────
+        public History.IoHistoryService IoHistory { get; private set; } = null!;
 
         // ── Vision ────────────────────────────────────────────────────────────
         public Vision.VisionProgramRepository VisionRepo    { get; private set; } = null!;
@@ -280,6 +309,14 @@ namespace Controller.RobotControl
 
         // ── Webhooks ──────────────────────────────────────────────────────────
         public WebhookManager WebhookManager { get; private set; } = new();
+
+        // ── Plugins ───────────────────────────────────────────────────────────
+        /// <summary>
+        /// External plugin processes (docs/plugins.md). Rooted at the data directory (the
+        /// current directory at construction). Constructed side-effect free; Program.cs
+        /// discovers plugins and starts them once the web host is listening.
+        /// </summary>
+        public Plugins.PluginManager PluginManager { get; internal set; } = null!;
 
         // ── Program vision snapshots ──────────────────────────────────────────
         private readonly Dictionary<string, byte[]> _programVisionSnapshots = new();
@@ -324,13 +361,20 @@ namespace Controller.RobotControl
             // first motion tick and the first STB write already see the real config.
             _homing = new HomingSequencer(this);
 
-            NanoManager = new NanoManager("nano_config.json");
+            NanoManager = new NanoManager("io_devices.json");
+
+            // IO value history + recordings (in-RAM rolling buffer, opt-in disk persistence).
+            // Subscribes to the nano load-cell sample event; generic over any numeric channel.
+            IoHistory = new History.IoHistoryService("io_history");
+            IoHistory.AttachNano(NanoManager);
 
             RelayManager = new UsbRelayManager();
 
             AuxAxisManager = new AuxAxisManager("aux_config.json");
 
             CameraManager = new Camera.CameraManager("camera_config.json");
+
+            DeviceManager = new Devices.DeviceManager("device_config.json");
 
             VisionRepo    = new Vision.VisionProgramRepository("vision_programs");
             VisionManager = new Vision.VisionManager(CameraManager, VisionRepo);
@@ -345,8 +389,32 @@ namespace Controller.RobotControl
                 isBackground: false, globalVars: backgroundProgramManager.GlobalVars,
                 globalImages: backgroundProgramManager.GlobalImages, backgroundManager: backgroundProgramManager);
 
+            PluginManager = CreatePluginManager();
+            // variables.get / variables.set: the program's executor (foreground or background), or the globals.
+            PluginManager.VariablesGetter = name =>
+                Execution.PluginVariables.Get(name, programExecutor, backgroundProgramManager);
+            PluginManager.VariablesSetter = (name, values) =>
+                Execution.PluginVariables.Set(name, values, programExecutor, backgroundProgramManager);
+
             _commands = CommandDispatcher.Create(this, programManager, programExecutor, backgroundProgramManager);
         }
+
+        private Plugins.PluginManager CreatePluginManager() => new(Directory.GetCurrentDirectory(), new Plugins.PluginManagerOptions
+        {
+            // controller.command goes through the dispatcher exactly like a WebSocket client.
+            CommandHandler = async cmd => await AddCommand(cmd),
+            StatusProvider = () => _commands.TryGet("GetStatus", out var getStatus)
+                ? getStatus(new CommandMessage { Type = "Command", Id = "plugin-status", Command = "GetStatus" }).GetAwaiter().GetResult()
+                : null,
+            RobotProvider = () =>
+            {
+                var pos   = GetCurrentPosition();
+                var fault = FaultStatus;
+                return new Plugins.PluginRobotSnapshot(pos.X, pos.Y, pos.Z, pos.RX, pos.RY, pos.RZ, IsMoving,
+                                                       Homed, fault.Faulted, fault.Joint, fault.Message);
+            },
+            IoProvider = io => ProgramExecutor.AddIoVariables(this, io),
+        });
 
         private int _started;
 
@@ -399,6 +467,10 @@ namespace Controller.RobotControl
                     // Consume hard-stop flag before anything else touches the profilers
                     if (_hardStopRequested)
                         ExecuteHardStop();
+
+                    // A move step's stop condition fired: drop the program move in flight
+                    if (_motionStopRequested)
+                        ExecuteMotionStop();
 
                     // Apply motion-state changes posted from other threads (tool/local
                     // selection, StopJog, fault/bypass, SetHomed, kinematics reconfig)
@@ -1056,13 +1128,13 @@ namespace Controller.RobotControl
                             LatchMotionError($"Point '{Command.Name}' not found");
                             break;
                         }
-                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
+                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
                     }
                     break;
 
                 case "OffsetL":
                     Vector6 NewPosition = CurrentPosition + Command.Vector6;
-                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
+                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
                     break;
 
                 case "MoveJ":
@@ -1075,7 +1147,7 @@ namespace Controller.RobotControl
                             LatchMotionError($"Point '{Command.Name}' not found");
                             break;
                         }
-                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride);
+                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
                     }
                     break;
 
@@ -1084,7 +1156,7 @@ namespace Controller.RobotControl
                     // program thread mutating continuousProfiler directly.
                     if (Command.Waypoints is { Count: >= 2 })
                         StartContinuousMove(Command.Waypoints, Command.BlendRadii ?? new List<double>(),
-                            Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride);
+                            Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride, Command.SpeedFactor);
                     break;
 
                 case "SetTool":
@@ -1393,6 +1465,18 @@ namespace Controller.RobotControl
         }
 
         /// <summary>
+        /// Thread-safe: ends the program move in flight where it is (a move step's stop
+        /// condition fired). Consumed at the top of the next control loop iteration like
+        /// <see cref="HardStop"/>, but touches only the move profilers and the command queue
+        /// — aux axes, jogs and homing carry on. <c>MotionBusy</c> then clears on that tick, so
+        /// the executor sees the move complete and continues with the next step.
+        /// </summary>
+        public void RequestMotionStop()
+        {
+            _motionStopRequested = true;
+        }
+
+        /// <summary>
         /// If a different built program is currently running in the executor, stops it and
         /// resets its status to Ready so the UI returns to the Start button state.
         /// Call this before starting a new built program.
@@ -1438,6 +1522,20 @@ namespace Controller.RobotControl
         }
 
         /// <summary>
+        /// Must only be called from the control loop thread. Drops the move profilers and the
+        /// queued commands (a blended run or a jump's remaining legs) and nothing else — the
+        /// robot stays where the profile had it this tick.
+        /// </summary>
+        private void ExecuteMotionStop()
+        {
+            _motionStopRequested = false;
+            linearMotionProfiler = null;
+            jointMotionProfiler  = null;
+            continuousProfiler   = null;
+            QueuedCommands.Clear();
+        }
+
+        /// <summary>
         /// Must only be called from the control loop thread. Clears profilers,
         /// jogs, the command queue and homing state — no device I/O.
         /// </summary>
@@ -1455,7 +1553,7 @@ namespace Controller.RobotControl
             _homing.Reset();
         }
 
-        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
+        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0)
         {
             if (IsMoving)
                 return;
@@ -1466,7 +1564,7 @@ namespace Controller.RobotControl
             // The global speed override scales program moves only (applyOverride) — including
             // program steps that don't set an explicit speed. Manual point moves and jogging
             // run at their commanded speed.
-            double jointSpeed = (Speed ?? this.SpeedJ) * (applyOverride ? SpeedOverrideFactor : 1.0);
+            double jointSpeed = (Speed ?? this.SpeedJ) * (applyOverride ? SpeedOverrideFactor * ProgramSpeedFactor(programFactor) : 1.0);
             double jointAccel = Accel ??= this.AccelJ;
             double jointDecel = Decel ??= this.DecelJ;
 
@@ -1489,7 +1587,7 @@ namespace Controller.RobotControl
 
         
 
-        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false)
+        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0)
         {
             if (IsMoving)
                 return;
@@ -1498,7 +1596,7 @@ namespace Controller.RobotControl
 
             // Gather the commands motion params if there specified otherwise default to the last set ones.
             // Override scales program moves only (see MoveJ); manual/jog moves are unaffected.
-            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor : 1.0);
+            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor * ProgramSpeedFactor(programFactor) : 1.0);
             double lineAccel = Accel ??= this.AccelS;
             double lineDecel = Decel ??= this.DecelS;
 
@@ -1523,13 +1621,13 @@ namespace Controller.RobotControl
         /// single trapezoidal speed profile over its total blended length.
         /// </summary>
         public void StartContinuousMove(List<Vector6> waypoints, List<double> blendRadii,
-            double? Speed, double? Accel, double? Decel, bool applyOverride = false)
+            double? Speed, double? Accel, double? Decel, bool applyOverride = false, double programFactor = 1.0)
         {
             if (IsMoving) return;
             if (_faulted) return;  // no automatic moves while a joint-limit fault is latched
             if (waypoints == null || waypoints.Count < 2) return;
 
-            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor : 1.0);
+            double lineSpeed = (Speed ?? this.SpeedS) * (applyOverride ? SpeedOverrideFactor * ProgramSpeedFactor(programFactor) : 1.0);
             double lineAccel = Accel ?? this.AccelS;
             double lineDecel = Decel ?? this.DecelS;
 

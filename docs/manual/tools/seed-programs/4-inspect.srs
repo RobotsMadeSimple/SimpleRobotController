@@ -1,0 +1,26 @@
+#!srs 1
+@program {"name": "Inspect and Sort", "description": "Inspect a part and sort it by result"}
+var grade = 0
+monitor var passed = 0
+monitor var rejected = 0
+
+## Inspect
+SetTool Probe
+MoveJ Home
+MoveL Approach, speed=100
+Wait until $stb.in3 == 1, timeout=5s, onTimeout=error
+$grade = if($stb.in4, 1, 2)
+
+## Sort
+switch $grade
+case 1
+  MoveL Place1, blend=5
+  $passed = $passed + 1
+case 2
+  MoveL stack Bins[$rejected], offset=(z=10)
+  $rejected = $rejected + 1
+default
+  raise "Unknown grade {$grade}", code=badGrade
+end
+SetOutput stb 1 on, pulse=250ms
+MoveJ Home

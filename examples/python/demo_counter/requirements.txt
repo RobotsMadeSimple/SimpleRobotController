@@ -1,0 +1,4 @@
+# Development: the SDK from this repository (relative path, resolved from the plugin folder when pip runs there).
+# For a release, replace the next line with a pin, e.g.:  simplerobot-plugin==0.1.0
+# or a path/URL install:  simplerobot-plugin @ file:///absolute/path/to/plugins-sdk/python
+../../../plugins-sdk/python

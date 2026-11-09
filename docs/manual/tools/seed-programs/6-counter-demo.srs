@@ -1,0 +1,14 @@
+#!srs 1
+@program {"name": "Counter Demo", "description": "Counts cycles and shows them on the monitor"}
+monitor var cycles = 0          # Completed cycles
+monitor var target = 100        # Cycles to run
+monitor var lap: stopwatch
+
+## Count
+stopwatch start $lap
+while $cycles < $target
+  $cycles = $cycles + 1
+  status "Cycle {$cycles} of {$target}"
+  Wait 400ms
+end
+stopwatch stop $lap

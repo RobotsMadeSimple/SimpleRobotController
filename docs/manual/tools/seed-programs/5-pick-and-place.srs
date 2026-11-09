@@ -1,0 +1,48 @@
+#!srs 1
+@program {"name": "Pick and Place", "description": "Pick parts and place them into a tray"}
+var count = 0              # Parts placed this run
+var ok: bool = off
+var choice = 0
+var msg: string
+monitor var cycleMs = 0
+var lap: stopwatch
+var parts: list point
+
+## Setup
+SetTool Gripper
+SetSpeedL 200, accel=800, decel=800
+SetSpeedJ 60
+prompt "Load the tray and press Start", title="Setup", buttons=("Start", "Cancel"), result=$choice
+if $choice == 1
+  exit "Cancelled by operator"
+end
+StartBackground Conveyor_Watch
+
+## Find parts
+try retry=2, delay=1s
+  RunVision Detect_Parts, pass=$ok
+    Top_edge.points -> $parts
+  end
+  if not $ok
+    raise "No parts found", code=noParts
+  end
+catch $msg
+  status error "Vision failed: {$msg}"
+  exit
+end
+
+## Pick and place
+stopwatch start $lap
+repeat 12 as $i
+  call PickPart(slot=$i), out picked=$ok
+  if not $ok
+    status warning "Slot {$i} empty"
+    continue
+  end
+  JumpL grid Tray[$count], z=40
+  GripperAction open
+  $count = $count + 1
+end
+stopwatch stop $lap
+$cycleMs = $lap
+status "Placed {$count} parts in {round($lap / 1000, 1)} s"

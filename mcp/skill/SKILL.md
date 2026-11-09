@@ -10,6 +10,12 @@ setup: `SimpleRobotController/mcp/README.md`. Full command reference:
 `SimpleRobotController/docs/websocket-api.md`. Semantics of every block:
 `SimpleRobotController/docs/program-blocks.md`.
 
+**Before writing or editing a program, read `SimpleRobotController/docs/AGENT-PROGRAMMING.md`**
+— the agent context file: Simple Robot Script syntax, every step with every field (generated
+from the step catalog), expressions, variables and scopes, Try/error codes, routine parameters,
+background programs, the round-trip rules (`@with`, `@off`, `Pick_1` names), pitfalls, how to
+verify with `robot_program_text_set(dry_run=true)`, and worked examples that parse cleanly.
+
 ## Order of operations
 
 1. **`robot_status`** first, always. It tells you the pose, whether the robot is homed
@@ -20,10 +26,21 @@ setup: `SimpleRobotController/mcp/README.md`. Full command reference:
 3. **`robot_step_schema`** before writing steps you have not written before. Call it
    with no arguments for the type list, then with `types=['MoveL','Loop']` for fields.
    Guessing field names produces steps the executor silently ignores.
-4. **Editing an existing program: `robot_get_program` first.** `robot_save_program`
-   replaces the program wholesale. Fetch, modify, save — never reconstruct from memory.
-5. **`robot_save_program`** validates and refuses on errors. It does **not** run anything.
-6. **`robot_run_program`** only when the operator has asked for it and is watching.
+4. **Editing an existing program: `robot_get_program`, then `robot_modify_program`.** It
+   applies targeted edits by step id (set/replace/insert/remove, setVariable, …) and
+   shows the problems your edit introduced (`newProblems`) or fixed. Use `dry_run: true`
+   to preview. Never reconstruct a program from memory and re-save it wholesale.
+5. **`robot_save_program`** validates on the controller and refuses on errors. Points,
+   grids or routines that will be taught later: `allow_untaught: true` (they come back
+   as `pending` — tell the operator what to teach). Check `droppedFields` after every
+   save: anything listed there was silently discarded (a misspelt field). It does
+   **not** run anything.
+6. **Text is often easier: `robot_program_text_get` / `robot_program_text_set`.** The
+   program as Simple Robot Script (`MoveL Pick1, speed=200`, `if $n > 3 … end`,
+   `$count = $count + 1`; reference `docs/program-text.md`). Edit the text and set it
+   back: step ids are kept by matching, parse problems come back as `line:col`, and the
+   save is validated like `robot_save_program`. Keep `@with {…}` lines as they are.
+7. **`robot_run_program`** only when the operator has asked for it and is watching.
 
 ## The `$` rule — the one that bites
 
@@ -149,25 +166,27 @@ Nested steps live in `loopSteps`, `ifSteps`, `elseSteps`, and
 
 ## Vision grids and object variables
 
-A vision **zone** can carry a `grid` of `{ rows, cols }`. A color coverage
-inspection on that zone is then measured once per cell instead of once overall.
-Only color coverage reads the grid — the other inspection types ignore it.
+A vision program is image layers plus building-block **tools** (docs/vision-tools.md).
+A presence tool (`pixelCount`, `intensity`, `edgePixels`, `polygon`) can carry a
+`grid` of `{ rows, cols, inset }` and is then measured once per cell, each cell judged
+on the tool's limit for its main value.
 
-The grid lives on the zone, which the app's vision editor owns. You do not create
-it from a program; you consume its results in `colorOutputs`:
+The grid lives on the tool, which the app's vision editor owns. You do not create
+it from a program; you consume its results in RunVision `toolOutputs`:
 
 ```json
-{ "inspectionId": "...", "coverageVar": "cov", "passedVar": "allOk",
-  "cellsVar": "cells", "cellsPassedVar": "nOk" }
+{ "passVariable": "visionOk",
+  "toolOutputs": [ { "toolId": "...", "value": "cells", "variable": "cells" },
+                   { "toolId": "...", "value": "cellsPassed", "variable": "nOk" } ] }
 ```
 
-- `coverageVar` is still the **whole-zone** percentage.
-- `passedVar` on a gridded zone means **every cell passed**, not the zone average.
-- `cellsVar` needs a **`Record` list**: declare it as `{"id": "...", "name": "cells",
+- `value: "percent"` (or the tool's other values) is the **whole-region** value.
+- `value: "passed"` on a gridded tool means **every cell passed**.
+- `value: "cells"` needs a **`Record` list**: declare it as `{"id": "...", "name": "cells",
   "items": [], "elementType": "Record"}`. It is filled row-major with one record per
-  cell — fields `row`, `col`, `index`, `coverage`, `passed` (1/0).
+  cell — fields `row`, `col`, `index`, `value`, `passed` (1/0).
 
-Read a record with `$cells[$i].coverage`; count them with `$cells.length`. An
+Read a record with `$cells[$i].value`; count them with `$cells.length`. An
 out-of-range index or unknown field reads `0`, not an error. Fields are numbers
 only, so a boolean is `0`/`1`.
 

@@ -57,6 +57,17 @@ internal sealed class BuiltProgramCommands
     private void SaveBuiltProgram(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<SaveBuiltProgramParams>(msg);
+
+        // A save that says nothing about the display page (no displayPage* keys at all — the step
+        // builder, older apps, scripts) keeps the page the program already has. Only a save that
+        // carries the keys (the display-page editor) replaces or clears it.
+        bool mentionsPage = Param(msg, "displayPageHtml")   != null
+                         || Param(msg, "displayPageMode")   != null
+                         || Param(msg, "displayPageLayout") != null;
+        var saved = (!string.IsNullOrEmpty(p.Id) ? _robot.builtProgramRepo.GetById(p.Id) : null)
+                    ?? _robot.builtProgramRepo.Get(p.Name);
+        var prior = mentionsPage ? null : saved;
+
         _robot.builtProgramRepo.Save(new BuiltProgram
         {
             Id                  = p.Id,
@@ -64,9 +75,14 @@ internal sealed class BuiltProgramCommands
             Description         = p.Description,
             Steps               = p.Steps,
             Variables           = p.Variables,
+            DisplayPageHtml     = mentionsPage ? p.DisplayPageHtml   : prior?.DisplayPageHtml,
+            DisplayPageMode     = mentionsPage ? p.DisplayPageMode   : prior?.DisplayPageMode,
+            DisplayPageLayout   = mentionsPage ? p.DisplayPageLayout : prior?.DisplayPageLayout,
             IsRoutine           = p.IsRoutine,
             IsBackground        = p.IsBackground,
             KillBackgroundOnStop = p.KillBackgroundOnStop,
+            // A save that does not mention the editor view (older apps, scripts) keeps it.
+            EditorMode          = p.EditorMode ?? saved?.EditorMode,
         });
     }
 
@@ -86,8 +102,21 @@ internal sealed class BuiltProgramCommands
 
     private void ExecuteBuiltProgram(CommandMessage msg)
     {
-        var p    = CommandJson.LoadParams<BuiltProgramNameParams>(msg);
+        var p    = CommandJson.LoadParams<ExecuteBuiltProgramParams>(msg);
         var prog = _robot.builtProgramRepo.Get(p.Name);
+
+        // Run from a step, breakpoints and step mode (docs/program-language.md §4.2). A start
+        // step that cannot be reached is refused here, before anything moves — never silently
+        // run from the top instead.
+        ProgramExecutor.DebugOptions? debug = null;
+        if (p.HasDebugOptions)
+        {
+            if (prog == null) throw new InvalidOperationException($"Program '{p.Name}' not found");
+            if (!string.IsNullOrEmpty(p.StartAtStepId) && ProgramExecutor.CheckStartAt(prog, p.StartAtStepId) is { } why)
+                throw new InvalidOperationException($"Cannot run from this step: {why}");
+            debug = new ProgramExecutor.DebugOptions(p.StartAtStepId, p.Breakpoints, p.StepMode == true);
+        }
+
         if (prog != null)
         {
             _robot.DisplaceRunningBuiltProgram(p.Name);
@@ -96,14 +125,16 @@ internal sealed class BuiltProgramCommands
             // delaying the program's first move by a second or more.
             _robot.StopJog();
             var imgBytes = _robot.builtProgramRepo.GetImage(p.Name);
-            _executor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null);
+            _executor?.Start(prog, imgBytes != null ? Convert.ToBase64String(imgBytes) : null, debug: debug);
         }
     }
 
     private void StartBackgroundProgram(CommandMessage msg)
     {
         var p     = CommandJson.LoadParams<ProgramActionParams>(msg);
-        var built = _robot.builtProgramRepo.Get(p.ProgramName);
+        // Id first (rename-proof), then name.
+        var built = (!string.IsNullOrEmpty(p.ProgramId) ? _robot.builtProgramRepo.GetById(p.ProgramId) : null)
+                    ?? _robot.builtProgramRepo.Get(p.ProgramName);
         if (built != null && built.IsBackground)
             _background.TryStart(built);
     }
@@ -111,8 +142,12 @@ internal sealed class BuiltProgramCommands
     private void StopBackgroundProgram(CommandMessage msg)
     {
         var p     = CommandJson.LoadParams<ProgramActionParams>(msg);
-        var built = _robot.builtProgramRepo.Get(p.ProgramName);
-        if (built != null) _background.Stop(built.Id);
+        // Id first (rename-proof), then name — the same lookup as Start. A bare id with no
+        // saved program (deleted while running) still stops the run it names.
+        var built = (!string.IsNullOrEmpty(p.ProgramId) ? _robot.builtProgramRepo.GetById(p.ProgramId) : null)
+                    ?? _robot.builtProgramRepo.Get(p.ProgramName);
+        var id    = built?.Id ?? (string.IsNullOrEmpty(p.ProgramId) ? null : p.ProgramId);
+        if (id != null) _background.Stop(id);
     }
 
     private bool IsForeground(string name) =>
@@ -205,9 +240,12 @@ internal sealed class BuiltProgramCommands
         return new { problems };
     }
 
-    // The arrays that hold steps; only their elements are step objects.
+    // The arrays that hold steps; only their elements are step objects. "steps" also covers
+    // elseIfBranches[i].steps and switchCases[i].steps (StepTree.Roles).
     private static readonly HashSet<string> StepArrays =
-        new(["steps", "loopSteps", "ifSteps", "elseSteps", "cncProgramSteps"], StringComparer.OrdinalIgnoreCase);
+        new(["steps", StepTree.Roles.LoopSteps, StepTree.Roles.IfSteps, StepTree.Roles.ElseSteps,
+             StepTree.Roles.SwitchDefault, StepTree.Roles.TrySteps, StepTree.Roles.CatchSteps,
+             StepTree.Roles.CncProgramSteps], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Same idea as the repository's loader: a step whose "type" this controller
     /// does not know becomes Unknown (with the original kept in unknownStepType).</summary>
@@ -235,23 +273,34 @@ internal sealed class BuiltProgramCommands
         }
     }
 
-    private ValidationContext BuildValidationContext()
+    internal ValidationContext BuildValidationContext()
     {
         var repo   = _robot.builtProgramRepo;
         var vision = _robot.VisionRepo;
         return new ValidationContext
         {
-            PointExists         = n => _robot.pointRepo.Get(n) != null,
-            ToolExists          = n => _robot.toolRepo.Get(n) != null,
-            LocalExists         = n => _robot.localRepo.Get(n) != null,
+            // Id first (rename-proof), name as fallback/convenience.
+            PointExists         = (id, n) => _robot.pointRepo.GetById(id) != null || (!string.IsNullOrEmpty(n) && _robot.pointRepo.Get(n) != null),
+            ToolExists          = (id, n) => _robot.toolRepo.GetById(id)  != null || (!string.IsNullOrEmpty(n) && _robot.toolRepo.Get(n)  != null),
+            LocalExists         = (id, n) => _robot.localRepo.GetById(id) != null || (!string.IsNullOrEmpty(n) && _robot.localRepo.Get(n) != null),
             GridExists          = id => _robot.gridRepo.Get(id) != null,
             StackExists         = id => _robot.stackRepo.Get(id) != null,
+            GridBase            = id => _robot.gridRepo.Get(id) is { } g
+                ? (g.BasePointName, g.RowOffsetX != 0 || g.RowOffsetY != 0 || g.RowOffsetZ != 0 || g.ColOffsetX != 0 || g.ColOffsetY != 0 || g.ColOffsetZ != 0)
+                : null,
+            StackBase           = id => _robot.stackRepo.Get(id) is { } st
+                ? (st.BasePointName, st.OffsetX != 0 || st.OffsetY != 0 || st.OffsetZ != 0)
+                : null,
             VisionProgramExists = vision == null ? null : id => vision.Get(id) != null,
+            VisionToolIds       = vision == null ? null : id => vision.Get(id)?.Tools?.Select(t => t.Id).ToList(),
             VisionProgramCamera = vision == null || _robot.CalibrationRepo == null ? null
                 : id => vision.Get(id) is { } vp ? (vp.CameraId, _robot.CalibrationRepo.IsCalibrated(vp.CameraId)) : null,
             FindProgram         = (id, name) =>
                 (!string.IsNullOrEmpty(id) ? repo.GetById(id) : null)
                 ?? (!string.IsNullOrEmpty(name) ? repo.Get(name) : null),
+            GridNameExists  = n => _robot.gridRepo.GetAll().Any(g => string.Equals(g.Name, n, StringComparison.OrdinalIgnoreCase)) || _robot.gridRepo.Get(n) != null,
+            StackNameExists = n => _robot.stackRepo.GetAll().Any(s => string.Equals(s.Name, n, StringComparison.OrdinalIgnoreCase)) || _robot.stackRepo.Get(n) != null,
+            PluginLookup  = _robot.PluginManager is { } plugins ? id => ValidationPlugin.From(plugins.Get(id)) : null,
             IoNames       = new HashSet<string>(IoSymbols().Select(i => i.Name), StringComparer.OrdinalIgnoreCase),
             PropertyNames = new HashSet<string>(new RobotPropertySource(_robot, null).List().Select(p => p.Name),
                                                 StringComparer.OrdinalIgnoreCase),
@@ -326,18 +375,82 @@ internal sealed class BuiltProgramCommands
             io => ProgramExecutor.AddIoVariables(_robot, io), new RobotPropertySource(_robot, null));
         var variables = VariableSymbols(program, live, _background.GlobalVars, globalProps);
 
+        // RobotPropertySource.List() never includes plugin properties; PluginSymbols adds them with pluginId.
         var properties = new RobotPropertySource(_robot, null).List()
-            .Select(p => new { name = p.Name, description = p.Description, type = p.Type })
+            .Select(p => (object)new { name = p.Name, description = p.Description, type = p.Type })
             .Append(new { name = "time_ms", description = "Unix time in milliseconds (built-in variable; same as $time.now)", type = "number" })
             .ToList();
 
         var functions = ExpressionEvaluator.Functions
-            .Select(f => new { name = f.Name, signature = f.Signature, description = f.Description })
+            .Select(f => (object)new { name = f.Name, signature = f.Signature, description = f.Description })
             .ToList();
+        functions.AddRange(TextHelperSymbols());
 
         var io = IoSymbols().Select(i => new { name = i.Name, description = i.Description }).ToList();
 
-        return new { variables, properties, functions, io };
+        var plugins = PluginSymbols(_robot.PluginManager, functions, properties);
+
+        return new { variables, properties, functions, io, plugins };
+    }
+
+    /// <summary>
+    /// The text helpers (<see cref="ExpressionEvaluator.StringMethods"/>) as function entries for
+    /// the helper panel. Named with a leading dot (<c>.contains</c>) since they follow a text
+    /// variable rather than standing alone; <c>kind = "textMethod"</c> tells them apart.
+    /// </summary>
+    internal static IEnumerable<object> TextHelperSymbols() =>
+        ExpressionEvaluator.StringMethods.Select(m => (object)new
+        {
+            name = "." + m.Name, signature = m.Signature, description = m.Description, kind = "textMethod",
+        });
+
+    /// <summary>
+    /// GetExpressionSymbols' plugin parts (docs/plugins.md §6): appends every installed plugin's
+    /// functions (<c>scale.tare</c>, with <c>pluginId</c>) to <paramref name="functions"/> and its
+    /// properties (<c>scale.weight</c>, with <c>pluginId</c> and the live <c>value</c> when known) to
+    /// <paramref name="properties"/>, and returns <c>plugins: [{ id, name, running, functions, properties }]</c>
+    /// whose entries are the manifest objects (bare names) plus <c>fullName</c>.
+    /// </summary>
+    internal static List<object> PluginSymbols(Plugins.PluginManager? manager, List<object> functions, List<object> properties)
+    {
+        var plugins = new List<object>();
+        if (manager == null) return plugins;
+        foreach (var host in manager.Plugins)
+        {
+            if (host.Problems.Count > 0 || host.Manifest is not { } m) continue;
+            bool running = host.IsRunning;
+            var fns = new List<object>();
+            foreach (var f in m.Functions)
+            {
+                string full = $"{host.Id}.{f.Name}";
+                string sig  = string.IsNullOrWhiteSpace(f.Signature) ? $"{full}(…)" : f.Signature!;
+                functions.Add(new { name = full, signature = sig, description = f.Description ?? "", pluginId = host.Id });
+                fns.Add(new
+                {
+                    name = f.Name, fullName = full, signature = sig, description = f.Description ?? "",
+                    minArgs = f.MinArgs, maxArgs = f.EffectiveMaxArgs, timeoutMs = f.EffectiveTimeoutMs,
+                });
+            }
+            var props = new List<object>();
+            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void AddProperty(string name, string description, string type)
+            {
+                string full = $"{host.Id}.{name}";
+                double? value = running && host.Properties.TryGetValue(name, out var v) ? v : null;
+                properties.Add(new { name = full, description, type, pluginId = host.Id, value });
+                props.Add(new { name, fullName = full, description, type, value });
+            }
+            foreach (var p in m.Properties)
+            {
+                declared.Add(p.Name);
+                AddProperty(p.Name, p.Description ?? "", p.Type);
+            }
+            foreach (var name in host.Properties.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase))
+                if (!declared.Contains(name))
+                    AddProperty(name, Plugins.PluginPropertySource.Undocumented, "number");
+            plugins.Add(new { id = host.Id, name = host.Name, running, functions = fns, properties = props });
+        }
+        return plugins;
     }
 
     /// <summary>
@@ -442,11 +555,9 @@ internal sealed class BuiltProgramCommands
         for (int n = 1; n <= 4; n++) list.Add(($"relay.{n}",  $"USB relay {n}"));
         try
         {
-            foreach (var nano in _robot.NanoManager.GetAllStates())
-                if (!string.IsNullOrEmpty(nano.Name))
-                    foreach (var pin in nano.Pins)
-                        if (!string.IsNullOrEmpty(pin.Name))
-                            list.Add(($"nano.{nano.Name}.{pin.Name}", $"Nano '{nano.Name}' pin {pin.Pin} ({pin.Type})"));
+            // Same naming as the executor's AddIoVariables (IoVariableNames): a name with
+            // spaces is listed in its identifier-safe form only, since that is what can be typed.
+            list.AddRange(IoVariableNames.Symbols(_robot.NanoManager.GetAllStates()));
         }
         catch { /* no nano manager yet — the fixed names still stand */ }
         return list;

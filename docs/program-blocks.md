@@ -13,7 +13,14 @@ block's `type` are used.
   from the list, only runnable via `CallRoutine`), or a **background** program
   (runs in parallel with the main program; motion / tool / homing blocks are
   skipped in background).
-- **Every step has:** `id` (string), `name` (optional label), and `type`.
+- **Every step has:** `id` (string), `name` (optional label), `type`, `comment`
+  (free text, not executed) and `enabled` (optional; `false` skips the step —
+  and a block's whole body — at run time, logged as `[Skipped — disabled]`; it
+  still counts as a step, and the validator reports it once as a
+  `disabledStep` warning without checking anything inside it).
+- **Step catalog:** `GetStepCatalog` describes every block type below — category,
+  label, typed fields (kind, unit, default, range, expression key, visibility)
+  and text syntax. See [program-language.md §5](program-language.md#5-the-step-catalog).
 
 ---
 
@@ -74,8 +81,8 @@ even though the storage is the same:
 
 `Number` and `Boolean` lists are the ones authored by hand — the variable editor
 gives the first value rows and the second toggles. `Point` and `Record` lists are
-normally declared empty and filled at run time by `RunVision`: blob results fill
-a `Point` list, and a color inspection on a [gridded zone](#zone-grids) fills a
+normally declared empty and filled at run time by `RunVision`: a tool's `points`
+fill a `Point` list, and the `cells` of a [gridded tool](#runvision) fill a
 `Record` list with one record per cell.
 
 A `forEach` loop works on any element type, but only `Number` and `Boolean` lists
@@ -153,6 +160,10 @@ Names are case-insensitive. Angles are in **degrees**, in and out.
 | `len($list)` `sum($list)` `avg($list)` `minOf($list)` `maxOf($list)` | over a list variable; `len` works on any list, the others on number/boolean lists (an empty list gives 0). The argument must be a bare list reference. |
 | `rand()` `rand(lo, hi)` | uniform random number in [0, 1) or [lo, hi) |
 | `map(x, inLo, inHi, outLo, outHi)` `lerp(a, b, t)` | range re-mapping and linear interpolation |
+| `inBox(x, y, z, x1, y1, z1, x2, y2, z2)` | 1 when (x, y, z) is inside the box with opposite corners (x1, y1, z1) and (x2, y2, z2) — corners in any order, faces count as inside — else 0 |
+| `inCircle(x, y, cx, cy, r)` | 1 when (x, y) is within r of (cx, cy), edge included, else 0 |
+| `$text.length` `$text.indexOf("x")` `$text.toNumber()` | on a text variable: its length, the position of the first `x` (from 0; -1 when absent; the argument may be a text variable), and the text as a number (0 when it is not one). Alongside `$text.contains("x")` / `.startsWith` / `.endsWith` (1 / 0), they work in every expression field and condition. |
+| `<pluginId>.<name>(…)` | a plugin's function, e.g. `scale.tare()` — see [Plugin](#plugin--a-step-a-plugin-provides). Blocks the program up to the function's timeout (default 250 ms); a failure (not running, timeout, error) stops the program with the plugin's message. |
 
 #### Properties
 
@@ -172,6 +183,7 @@ loop, vision or HTTP target named like one (`readOnlyProperty`).
 | `$program.runCount` `stepIndex` `stepCount` `elapsedMs` `loopDepth` | the current run |
 | `$time.now` (unix ms) `hour` `minute` `second` `dayOfWeek` (0 = Sunday) `dayOfYear` | local wall clock |
 | `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes (steps, 1/0) |
+| `$<pluginId>.<name>` | a running plugin's live property, e.g. `$scale.weight` (unknown until the plugin sets it) |
 
 A name that is a variable or IO value wins over a property of the same name.
 
@@ -352,6 +364,39 @@ target. `JumpL` uses linear legs, `JumpJ` joint legs.
 
 Blend fields apply to the traverse leg.
 
+### Stop or record on condition (MoveL, MoveJ, JumpL, JumpJ, AuxMove, GripperAction)
+
+Any of these move blocks can watch a condition while the move is in flight —
+"move with force" is the common case: push until a load cell reads a limit, then
+stop there. All four fields are optional; no `moveStopCondition` rows = off.
+
+| Field | Meaning |
+|---|---|
+| `moveStopCondition` | A ConditionGroup (same shape as `waitCondition`), evaluated every executor tick while the move runs, against live IO. |
+| `moveStopMode` | `"stop"` (default) or `"record"`. **stop**: the move ends where it is the first time the condition is true and the program continues with the next step — no pause, no error. **record**: the move runs on to its target; only the position at the first true evaluation is captured. |
+| `moveStopPositionVariableName` | Where to write the position at the moment the condition first became true. Robot moves: a **Points list** variable, replaced with exactly one element (the live TCP pose), so `$var[0]` / `$var[0].z` read it. Aux moves: a **number** variable receiving the axis position in its physical unit (mm / deg), or raw steps when the axis has no unit. |
+| `moveStopFlagVariableName` | A number / boolean variable set when the step completes: `1` if the condition fired during the move, `0` if not. Created on first use, like `waitTimeoutVariableName`. |
+
+A force limit is just the condition `$io.Arduino_Nano.Load_Cell >= 2000` — load
+cells read in grams, and a nano or pin name with spaces is reachable through its
+underscore alias (see [expressions-and-variables.md](expressions-and-variables.md) §2).
+
+Rules:
+- A `MoveL` with a stop condition never blends, and a blended run stops gathering
+  before one; a `JumpL` with a stop condition takes the stepped (non-blended)
+  path. The watch on a Jump spans all three legs: in stop mode the remaining legs
+  are skipped; in record mode the Jump finishes normally.
+- `AuxMove` only watches when `auxWaitForDone` is true (the validator warns
+  otherwise). An aux stop is a smooth stop at the move's own deceleration.
+- A user Stop / Continue mid-move keeps the watch (a fired record-mode watch does
+  not fire again after Continue).
+- An unknown variable or a syntax error in the condition ends the program with
+  `Stop condition on <step>: …`, like a while-loop condition.
+
+The old `MoveWithForce` block (press along an axis until a load cell reads a target)
+was removed in favour of this; a program still holding one loads it as an `Unknown`
+step, which the executor skips.
+
 ### ThreadMove — synchronized rotary/linear thread
 Drives a coordinated threading move (e.g. screwing into a hole).
 
@@ -461,7 +506,8 @@ the configured aux board; `auxAxisIndex` selects the channel.
 
 | Block | Key params | Description |
 |---|---|---|
-| `AuxMove` | `auxSteps` **or** `auxDistance`+`auxUnit`; `auxVelocity`, `auxAccel`, `auxDecel`; `auxWaitForDone`; `auxAbsolute` | Indexed move. Sign of steps/distance = direction. `auxWaitForDone` (default true) blocks the program until the motor finishes; false = fire-and-forget. `auxAbsolute` moves to an absolute position instead of relative. |
+| `AuxMove` | `auxSteps` **or** `auxDistance`+`auxUnit`; `auxVelocity`, `auxAccel`, `auxDecel`; `auxWaitForDone`; `auxAbsolute`; `moveStop*` | Indexed move. Sign of steps/distance = direction. `auxWaitForDone` (default true) blocks the program until the motor finishes; false = fire-and-forget. `auxAbsolute` moves to an absolute position instead of relative. Takes the [stop-condition fields](#stop-or-record-on-condition-movel-movej-jumpl-jumpj-auxmove-gripperaction) when it waits. |
+| `GripperAction` | `gripperAction` (`Open` / `Close` / `GripTo`), `gripTargetMm`, `auxVelocity`, `auxAccel`; `moveStop*` | Drive a gripper-role axis to its open / closed gap or to `gripTargetMm`. Takes the stop-condition fields — e.g. close until a load cell reads a grip force. |
 | `AuxContinuous` | `auxVelocity`, `auxAccel` | Start continuous jogging at a velocity until stopped. |
 | `AuxStop` | `auxDecel`, `auxImmediate` | Stop the axis; `auxImmediate` halts without a decel ramp. |
 | `AuxEnable` | `auxEnable` (bool) | Enable or disable the stepper drivers. |
@@ -471,61 +517,51 @@ the configured aux board; `auxAxisIndex` selects the channel.
 ## Vision & camera
 
 ### RunVision
-Runs a vision program on the current camera frame and writes results into
-program variables.
+Runs a vision program on the current camera frame and writes its results into
+program variables. A vision program is image layers plus a list of building-block
+tools (find a line / corner / circle, blobs, pattern and contour match, ArUco, fixtures,
+calipers, distances and angles, pixel counts, intensity, edges, polygons, barcodes); the
+model, every tool, its values and how fixtures move regions are in
+[vision-tools.md](vision-tools.md).
+
 | Field | Meaning |
 |---|---|
 | `visionProgramId` / `visionProgramName` | Which vision program to run. |
-| `visionZoneId` / `visionZoneVar` | Optional inspection zone (fixed or from a variable). |
-| `visionOutputs` | Blob/measurement outputs → `{ inspectionId, countVar, pointsVar, detectedVar }`. `pointsVar` receives a `Point` list. |
-| `colorOutputs` | Color-coverage → `{ inspectionId, coverageVar, passedVar, cellsVar, cellsPassedVar }`. |
-| `polygonOutputs` | Polygon/shape → `{ inspectionId, countVar, foundVar, angleVar, centerXVar, centerYVar }`. |
-| `arucoOutputs` | ArUco markers → `{ inspectionId, countVar, foundVar, firstIdVar, firstCenterXVar, firstCenterYVar }`. |
-| `outputFrame` | Frame of the positions written above (blob `pointsVar` points, polygon `centerXVar`/`centerYVar`, ArUco `firstCenterXVar`/`firstCenterYVar`): `"pixel"`, `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Unset keeps the original mix: blob points in pixels, polygon/ArUco centers normalized. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
+| `passVariable` | Optional: set to the program's overall pass (1/0) — every enabled tool with `includeInPass` passed. |
+| `toolOutputs` | `[{ toolId, value, variable }]`: one tool result into one variable (below). |
+| `outputFrame` | Frame of the positions written (`points`, `pose`, item and line coordinates, and a tool's `x`/`y` values): `"pixel"` (the default), `"normalized"` (0–1) or `"robot"` (mm on the camera's calibration plane; points get `z = planeZ`). Other values — widths, radii, distances — stay in pixels. `"robot"` needs a calibrated camera ([camera-calibration.md](camera-calibration.md)): validation reports `cameraNotCalibrated`, and at run time the step fails if the camera has no calibration or now runs at a different resolution than it was calibrated at. Any other value is `badOutputFrame`. |
 | `waitTimeoutMs` | Max time to wait for a fresh vision result (default 30 000 ms; `0` or less waits forever). Expiry ends the program with an error. |
 
-Each `*Var` names a program variable that receives that result (counts, points,
-booleans, angles, coordinates).
+`value` picks what is written:
 
-If an inspection throws while processing a frame, the vision result carries an
-`errors` entry (`"<inspectionId>: <message>"`) and that inspection reports no
-detections for the frame; check the vision program's editor card or the
-controller log when an output stays at zero unexpectedly.
+| `value` | Variable | Written |
+|---|---|---|
+| any key of the tool's `values` (`angle`, `count`, `percent`, `distance`, `radius`, …) | Number (String for text such as a barcode's `value`) | The value; `x` / `y` converted by `outputFrame`. |
+| `passed` | Boolean | 1 when the tool's status is ok and every limit is met. |
+| `found` | Boolean | The tool's `found` value. |
+| `status` | String | `ok`, `fail`, `notRun` or `error`. |
+| `cells` | Record list | One record per grid cell, row-major: `row`, `col`, `index` (= `row * cols + col`), `value` (the tool's main value: `percent`, the chosen `statistic`, `density`, `count`), `passed` (1/0). |
+| `items` | Record list | The tool's list records (blobs, matches, markers, codes…), numeric fields only (`x`, `y` converted). |
+| `points` | Point list | The tool's points (edge points, corners, caliper edges…). |
+| `lines` | Record list | `{ x1, y1, x2, y2 }` per line. |
+| `pose` | Record list | One record `{ x, y, z, angle }` when the tool found its object, else empty — read `$pose[0].x`. |
 
-#### Zone grids
-
-A vision zone can carry a `grid` of `{ rows, cols }`, a lattice laid over the
-zone's bounding box. Cells are clipped to the zone shape, so a corner cell of a
-circular zone only covers the part inside the circle. No grid, or a 1×1 one,
-leaves behaviour unchanged.
-
-A rectangle zone can also carry a `rotation` in degrees, and its lattice turns
-with the rectangle rather than sitting on the bounding box — so a tray that is
-not square to the camera still gets one cell per pocket. Rotation is a
-rectangle-only idea: circles ignore it, and a polygon's points are already
-absolute. A zone saved before rotation existed has none, which reads as 0 and
-takes the original untilted path.
-
-Only **color coverage** inspections measure per cell today; the other inspection
-types ignore the grid.
-
-On a gridded zone the color output changes shape:
-
-| Field | Meaning |
-|---|---|
-| `coverageVar` | Still the whole-zone percentage. |
-| `passedVar` | **Every cell passed**, not the zone average. A zone-wide average hides half-full cells, which is the thing a grid exists to catch. |
-| `cellsVar` | A [list variable](#list-variables) with `elementType: "Record"`, filled with one record per cell, row-major: `row`, `col`, `index` (= `row * cols + col`), `coverage`, `passed` (1/0). |
-| `cellsPassedVar` | How many cells passed. |
-
-`cellsVar` is emptied rather than left alone when the zone has no grid, so a
-stale lattice from a previous run cannot be read as current.
+A tool with no result (disabled) or that did not run empties its lists and writes 0 for
+`passed` / `found` / `count`; other values are left unchanged. Variables named in
+`toolOutputs` and `passVariable` are created by the step if not declared. Validation
+warns (`unknownVisionTool`) when a `toolId` is not in the vision program, and reports a
+`toolOutputs` entry with no tool, value or variable (`missingField`).
 
 ```
-$cells.length            → number of cells
-$cells[0].coverage       → coverage % of the top-left cell
-$cells[$i].passed == 1   → condition on the cell a forEach loop is on
+$whiteCells.length            → number of cells
+$whiteCells[0].value          → main value of the top-left cell
+$whiteCells[$i].passed == 1   → condition on the cell a forEach loop is on
+$partPose[0].angle            → a located part's angle
 ```
+
+When a tool's fixture is not found, the tool does not run that frame (status `notRun`,
+`passed` 0, its cells empty) rather than measure at a guessed position. If a tool throws,
+the result carries an `errors` entry (`"<toolId>: <message>"`) and its status is `error`.
 
 ### SaveImage
 Saves the current camera frame to disk.
@@ -570,6 +606,319 @@ Pushes a message to the program monitor / logs.
 | `statusWarning` | Warning text. |
 | `statusError` | Error text. |
 | `statusSeverity` | `"Info"`, `"Warning"`, or `"Error"` hint. |
+
+---
+
+## Plugins
+
+### Plugin — a step a plugin provides
+
+Runs one of the steps an installed plugin declares in its manifest
+([plugins.md](plugins.md) §6). The program waits (without blocking anything else)
+until the plugin answers, then writes the mapped outputs and moves on.
+
+| Field | Meaning |
+|---|---|
+| `pluginId` | The plugin's manifest `id` (e.g. `"scale"`). |
+| `pluginStepId` | The manifest step `id` (e.g. `"weigh"`). |
+| `pluginParams` | `{ key: text }`, one entry per param; how the text is read depends on the param's type (below). A missing or blank entry uses the manifest default; a `required` param without a default stops the program. |
+| `pluginOutputs` | `[{ key, variableName }]` — which outputs to write, and where. |
+| `pluginTimeoutMs` | Overrides the manifest step's `timeoutMs` (0 = no timeout). |
+
+| Param type | Text | Sent to the plugin |
+|---|---|---|
+| `number` | an expression (`5`, `$count * 2`) | number |
+| `boolean` | an expression (`true`, `$a > 3`); non-zero is true | boolean |
+| `string` | a template (`Bin {$i}`) | string |
+| `enum` | one of the param's `options`, taken literally | string |
+| `point` | a saved point name (`P1`), `grid:<grid name>[row, col]` or `grid:<grid name>[index]`, `stack:<stack name>[index]` (indices are expressions), `$pts[$i]`, or a template naming a point — like a move's `pointNameExpr`; the local frame is **not** applied | `{x,y,z,rx,ry,rz}` |
+| `list` | a list variable name (`history` or `$history`) | array (numbers, or objects for points/records) |
+| `image` | an image variable name | base64 JPEG string |
+| `variable` | a variable name | the name itself |
+
+| Output type | Written to |
+|---|---|
+| `number` / `boolean` | a number or boolean variable (created when undeclared) |
+| `string` | a text variable |
+| `point` | a points list variable — replaced by a one-element list, read as `$var[0].x` |
+| `list` | a list variable (a declared list keeps its element type; a new one takes numbers / points / records from the data) |
+| `image` | an image variable |
+
+An output the plugin does not return is skipped. A value that does not fit its
+variable stops the program (`pluginOutputType`). While the step runs the monitor
+shows `<plugin name>: <step label>`, followed by `: <message>` (and `(n%)`) when
+the plugin reports progress. The program stops with an error when the plugin is
+not running (`Plugin '<id>' is not running`), when it answers with an error
+(`<plugin name>: <step label>: <message>`), or on timeout
+(`Plugin step '<label>' timed out after N ms`; the plugin gets `step.cancel`).
+A Stop while the step is outstanding cancels it (`step.cancel`, reason
+`stopped`); Continue sends it again. Background programs run Plugin steps too.
+
+---
+
+## Program editor v2 blocks
+
+New blocks from the program-editor order (design: [program-language.md](program-language.md)
+§4). The step types, fields and enum strings are fixed (see the catalog and the
+goldens); each section is filled in by the package that implements the block
+(the letter in brackets), with small, section-scoped edits. A run that reaches a
+block whose package has not landed yet ends with "… not implemented on this
+controller yet".
+
+### Note — note or section header (A)
+
+`type: "Note"`. Not executed and not counted as a step. The text is in `comment`;
+`noteStyle` is `"note"` (default) or `"section"` (a header; the editor can
+collapse the steps up to the next section).
+
+### LoopControl — break / next iteration (B)
+
+`type: "LoopControl"`, `loopControl: "break"` (default) | `"continue"`. **Break** leaves the
+nearest enclosing loop; the step after the loop runs next. **Next iteration** ends this pass:
+a count loop counts it, a for-each moves to the next element, a while loop re-checks its
+condition. Branches and Try bodies between the step and the loop are simply left. It never
+crosses a routine boundary: a Break in a routine called from a loop is an error at run time
+and `loopControlOutsideLoop` (error) in the validator.
+
+### Return (B)
+
+`type: "Return"`. In a routine: leave it now; its out / inOut parameters are copied back (see
+CallRoutine — parameters). In a main or background program: the program finishes `Complete`.
+
+### EndProgram (B)
+
+`type: "EndProgram"`, optional `statusMessage` (a template). Finishes the program `Complete`
+from any depth (inside loops, routines, Try), with the message as the final status text. A
+background program ends only itself.
+
+### RaiseError (B)
+
+`type: "RaiseError"`, `errorMessage` (template, required), `errorCode` (identifier, default
+`userError`). Fails with that code and message: an enclosing Try that catches the code takes
+over, otherwise the program ends `Error` with the message. A code of your own is always
+catchable; raising a fatal catalog code (e.g. `motionFault`) is a validator warning, as no Try
+can catch it.
+
+### Switch (B)
+
+`type: "Switch"`, `switchExpr` (expression, required), `switchCases: [{id, values: [expr…],
+steps}]`, `switchDefault` (steps). `switchExpr` is evaluated once; the first case with a value
+equal to it (`==` within 1e-9) runs, otherwise the default; no fall-through. Numbers only —
+test text with `If $s.contains(…)`. Validator: `duplicateCaseValue` (warning) when two cases
+share a literal value, `missingField` for a case with no value, `emptyBranch` when no case and
+no default has steps.
+
+### Try / Catch (B)
+
+`type: "Try"`, `trySteps`, `catchSteps`, `tryRetries` (default 0), `tryRetryDelayMs` (default
+0), `catchCodes` (empty = every catchable code), `errorVariableName` / `errorCodeVariableName`
+(text variables; created if not declared).
+
+When a step inside `trySteps` fails with a **catchable** code — at any depth, inside loops,
+branches and called routines:
+
+1. everything inside the Try is abandoned (a routine that did not finish copies no outputs);
+2. while retries are left, the body runs again from the top after `tryRetryDelayMs`;
+3. then the error message and code go into the two variables and `catchSteps` run; an empty
+   catch ignores the error. The program carries on after the Try either way.
+
+A code not in `catchCodes` goes on to the next enclosing Try. A failure inside `catchSteps`
+also goes outward. Each catch is logged (`[Caught <code>] <message> — retry 1 of 2`).
+
+**Catchable codes:** `waitTimeout`, `visionTimeout`, `visionFailed`, `httpFailed`,
+`httpTimeout`, `receiveTimeout`, `pluginFailed`, `pluginTimeout`, `pluginNotRunning`,
+`promptTimeout`, `pointNotFound`, `arcDegenerate`, `indexOutOfRange`, `userError` and any
+RaiseError code of your own. **Fatal, never caught:** motion faults and joint limits, driver
+disconnects, e-stop, a user Stop, unknown variables, expression syntax errors and writes to
+computed variables — these are authoring or hardware problems a Try must not hide. What the
+existing steps fail with:
+
+| Step | Catchable failure |
+|---|---|
+| Wait (condition, `waitTimeoutAction: "error"`) | `waitTimeout` |
+| RunVision | `visionTimeout` (no result in time), `visionFailed` (processor lost, output frame not available) |
+| CaptureImage / SaveImage | `visionFailed` (no camera frame) |
+| HttpRequest (waits for the reply) | `httpFailed` (network error, non-2xx status), `httpTimeout`. An empty or non-JSON reply is not a failure; fire-and-continue requests never fail. |
+| HttpReceive | `receiveTimeout` |
+| Plugin step, plugin functions in expressions | `pluginFailed`, `pluginTimeout`, `pluginNotRunning` |
+| MoveL / MoveJ / JumpL / JumpJ with a `pointNameExpr` target | `pointNotFound` (the template names no saved point, or the points list is empty) |
+
+A program that ends `Error` reports `errorCode` in its status (when the failure has one), and
+its `currentStepId` is the step that failed.
+
+Validator: `emptyBranch` (no try steps), negative retries or delay, catch codes that are not
+identifiers (error) or are fatal (warning), and `paramOutputType` when an error variable is
+declared as something other than text.
+
+### Wait — on timeout (B)
+
+A condition Wait with a timeout takes `waitTimeoutAction`: `"continue"` (default — carry on;
+the timed-out flag says what happened) or `"error"` — fail with `waitTimeout` ("Wait …: timed
+out after N ms waiting for <condition>"), which a Try can catch. The timed-out flag is written
+either way. A condition that holds on the tick the timeout falls due counts as met.
+
+### CallRoutine — parameters (B)
+
+A routine's variables become parameters with `paramMode`: `"in"`, `"out"` or `"inOut"`. The
+call gives `routineArgs: {param: expr}` and `routineOutputs: [{key: param, variableName}]`.
+
+- Each `in` / `inOut` argument is evaluated in the **caller's** scope before the routine's
+  variables are initialised (so `n = $n + 1` reads the caller's `$n`). A text parameter takes a
+  template, a boolean one stores 0 / 1, a list parameter takes a list variable (`$pts`, copied).
+  A parameter with no argument keeps its declared value (`paramMissing`, warning).
+- When the routine ends — its last step, or a Return — each mapped `out` / `inOut` parameter is
+  copied into the caller's variable (an undeclared target is created with the parameter's
+  kind). An `in` parameter is never copied back.
+- Parameters live in the shared variable scope (as routine variables always have), so name them
+  distinctly from the caller's variables.
+- A routine is a boundary: GoToLabel and Break / Next inside it never reach the caller's labels
+  or loops (validator: `unknownLabel`, `loopControlOutsideLoop`).
+
+Validator: `unknownParam` (an argument or output naming no parameter, or an output from an `in`
+parameter; an argument to an `out` parameter is a warning), `paramMissing`, `paramOutputType`
+(an output into a variable of a kind that cannot hold it), and the argument expressions and
+templates themselves.
+
+### SetOutput — toggle and expression value (B)
+
+`outputAction: "set"` (default) | `"toggle"`. Toggle flips the output's current state (as
+`$stb.out2`, `$relay.3` or the IO device pin reads it). Set takes `expressions.outputValue` when
+present (non-zero = on), otherwise the literal `outputValue`. A pulse always reverts to the
+opposite of the state the step set, so a toggle pulse flips and flips back.
+
+### Debugging — run from step, breakpoints, step mode (B)
+
+`ExecuteBuiltProgram { name, startAtStepId?, breakpoints?: [stepId], stepMode?: bool }`:
+
+- **Breakpoints** pause the program *before* the step (status `Stopped`, `pauseReason:
+  "breakpoint"`, `pausedAtStepId`). Continue (`StartProgram` on the paused program) runs on; a
+  breakpoint in a loop pauses on every pass.
+- **Step mode** pauses before every step (`pauseReason: "step"`). `StepBuiltProgram {}` runs the
+  paused step and pauses before the next one; on a running program it pauses before its next
+  step. Continue leaves step mode. Notes and disabled steps never pause, and a multi-tick step
+  (Wait, Jump legs, vision) is never paused half-way.
+- **`SetBreakpoints { stepIds }`** replaces the running program's breakpoints → `{ count }`.
+- **Run from step** builds the frame stack down to the step: enclosing loops start at their
+  first pass (count index 0, for-each element 0, a while condition not checked), an If / Switch
+  branch, Try body or catch is entered without evaluating anything, and the steps before it do
+  not run (variables start at their declared values). A step inside a routine, a disabled step
+  or a CNC block is refused (`ok: false`, "Cannot run from this step: …").
+
+Background programs ignore all of this. A plain start clears the debug state.
+
+### SavePosition (C)
+
+`type: "SavePosition"` — store where the robot is ("Here"). The pose is expressed in the
+program's **active local frame**, so a later move to it under the same local lands on the same
+spot (the same rule TeachPoint uses).
+
+| Field | Meaning |
+|---|---|
+| `savePositionTo` | `"variable"` (default) — a Points list; `"point"` — a saved point |
+| `variableName` | the Points list (created if not declared) |
+| `savePositionMode` | `"replace"` (default: the list becomes exactly this pose, like a stop condition's position variable), `"append"`, `"insert"` (at the index, 0…count), `"set"` (replace the element at the index) |
+| `savePositionIndex` | index for insert / set; an expression in `expressions.savePositionIndex` |
+| `pointId` / `pointName` | the saved point — by id first, then by name; a name that does not exist yet is **created**. Written through the point repository, so the points history records it. |
+| `savePositionSource` | `"actual"` (default, the live TCP) or `"target"` (the last commanded target) |
+
+Failures: an index outside the list → `indexOutOfRange` (catchable); a list that is not a Points
+list → `badListOperation`; a point linked only by an id that no longer exists → `pointNotFound`.
+Validator: destination, mode, source, negative index, a non-Points variable, and
+`pointWriteInBackground` (warning) when a background program overwrites a saved point.
+
+### SetSpeedFactor (C)
+
+`type: "SetSpeedFactor"`, `speedFactor` (percent, 1–100, default 100; an expression in
+`expressions.speedFactor`). Every later move of **this program** — single moves, blended runs,
+Jump legs, arcs, and a move resumed after a Stop — runs at *operator override × factor / 100*.
+It can only slow a program down: values are clamped to 1–100 %, and it multiplies the
+operator's override rather than replacing it. Manual moves and jogging are never affected.
+Readable as `$program.speedFactor`; back to 100 when the run ends, is reset, or starts again.
+Validator: a literal outside 1–100 or no value (warnings — it is clamped / 100 is used).
+
+### MoveC — arc move (C)
+
+`type: "MoveC"` — move along the circle through the current position, a **via** point and the
+end target, in 3D (any plane).
+
+| Field | Meaning |
+|---|---|
+| target fields (`pointId` / `pointName` / `pointNameExpr` …) | the end, exactly as for MoveL |
+| `viaPointId` / `viaPointName` / `viaPointNameExpr` | the via point: a saved point (by id, then name), a template naming one, or a `$pts[i]` element |
+| `speed` `accel` `decel` | as for MoveL (expressions allowed) |
+| `arcTolerance` | largest gap between the true arc and the straight segments it is cut into (mm, default 0.1, smallest 0.001) |
+| `offset*`, `override*`, `localId` | applied to **both** the via and the end |
+
+The arc is cut into equal segments so each chord stays within `arcTolerance` of the circle and
+spans at most 2°, and sent as one continuous (blended) path, so the robot does not stop between
+segments; it stops exactly on the end. RX / RY / RZ go linearly from the start's to the end's by
+arc angle (the via point's orientation is not used). The start is where the robot is when the
+step runs. Start, via and end on one line (or two of them the same) fail `arcDegenerate`
+(catchable); an unknown via fails `pointNotFound`.
+
+Not part of a Move Arc: a stop condition (validator error `unsupportedOnStep`), a tool offset
+and blending (warnings — ignored). Validator also: a missing or unknown via, a via that is the
+end point, and a tolerance at or below 0.
+
+### ListOp — list operations (C)
+
+`type: "ListOp"`, `variableName` (the list), `listAction`, and per action:
+
+| `listAction` | Uses | Does |
+|---|---|---|
+| `append` (default) | value / fields | adds an element at the end. On a **Points** list with no fields it appends the current position (in the active local) — "append Here". |
+| `insert` | `listIndex`, value / fields | inserts at the index (0…count) |
+| `removeAt` | `listIndex` | removes the element |
+| `clear` | — | empties the list |
+| `set` | `listIndex`, value / fields | replaces the element; on a Points / Record list the fields given are written over the element's others |
+| `setField` | `listIndex`, `listFields` | writes fields of one element (Points / Record lists) |
+| `sort` | `listSortField`, `listSortDescending` | stable sort — by value (Number / Boolean lists), by the field (Points: an axis; Records: any field, missing = 0) |
+| `reverse` | — | reverses the order |
+| `copyFrom` | `listSourceVariable` | replaces the contents with a copy of another list (same type, Number ↔ Boolean, or anything into a Record list) |
+
+The **value** of a Number / Boolean element is `listValueExpr` (an expression; a Boolean stores
+0 / 1). The **fields** of a Point / Record element are `listFields: {field: expression}` — a
+Point's are its axes `x y z rx ry rz` (a new element's missing axes are 0). `listIndex` may be an
+expression in `expressions.listIndex`; it is rounded.
+
+Everything is evaluated before the list changes, so a failing step leaves the list as it was.
+An index outside the list fails `indexOutOfRange` (catchable). A step that does not fit the
+list — fields on a Number list, a single value for a Points list, no value, an unknown axis or
+action, an incompatible copy — fails `badListOperation`, which is an authoring error and is
+**not** catchable. The program's declared list is never changed: a re-run starts from it.
+Validator: the same rules, per action and element type, before the run.
+
+### Prompt — operator dialog (C)
+
+`type: "Prompt"` — show the operator a message with buttons and wait for the answer.
+
+| Field | Meaning |
+|---|---|
+| `promptMessage` | the message (template, required) |
+| `promptTitle` | optional title (template) |
+| `promptButtons` | 1–4 labels (default `["OK"]`; blanks dropped, extras cut) |
+| `promptResultVariableName` | a number variable gets the button index (from 0), a text variable its label; created as a number if not declared |
+| `promptInput` | `"none"` (default), `"number"` or `"text"` |
+| `promptDefault` | the input's default: an expression for a number, a template for text |
+| `promptMin` / `promptMax` | the range a number answer must be in |
+| `promptInputVariableName` | receives the typed value (a text variable gets text; a number variable the number, 0 when the text is not one) |
+| `promptTimeoutMs` | 0 / empty = wait forever |
+| `promptTimeoutButton` | the button pressed on timeout (its input = the default); empty → fail `promptTimeout` (catchable) |
+
+While it waits, the program status carries `prompt {id, stepId, programName, title, message,
+buttons, input, default, min, max, timeoutMs, shownUnixMs}` (the app shows it as a dialog);
+background programs can prompt too, one prompt per program. The answer is the
+**`AnswerPrompt { promptId, button, value? }`** command (`value` as text) → `{}`. The first
+answer wins. Refusals (`ok: false`, the error starts with its code): `stalePrompt` (already
+answered, timed out, replaced, or the run ended), `programPaused` (the program is stopped),
+`badButton`, `badValue` (a number answer that is missing with no default, not a number, or out
+of range). A **Stop** keeps the prompt on screen but refuses answers; **Continue** shows it again
+under a fresh id with its timeout restarted.
+
+Validator: message, 1–4 buttons (more is an error, a blank label a warning), the input kind,
+min above max, the default, result / input variables that cannot hold the answer, an input
+variable without an input (warning), and a timeout button that does not exist (error) or can
+never be pressed because there is no timeout (warning).
 
 ---
 

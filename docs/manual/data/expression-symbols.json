@@ -1,0 +1,541 @@
+{
+  "properties": [
+    {
+      "name": "robot.x",
+      "description": "Current TCP X (mm)",
+      "type": "number"
+    },
+    {
+      "name": "robot.y",
+      "description": "Current TCP Y (mm)",
+      "type": "number"
+    },
+    {
+      "name": "robot.z",
+      "description": "Current TCP Z (mm)",
+      "type": "number"
+    },
+    {
+      "name": "robot.rx",
+      "description": "Current TCP RX (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.ry",
+      "description": "Current TCP RY (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.rz",
+      "description": "Current TCP RZ (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.targetX",
+      "description": "Commanded target X (mm)",
+      "type": "number"
+    },
+    {
+      "name": "robot.targetY",
+      "description": "Commanded target Y (mm)",
+      "type": "number"
+    },
+    {
+      "name": "robot.targetZ",
+      "description": "Commanded target Z (mm)",
+      "type": "number"
+    },
+    {
+      "name": "robot.targetRx",
+      "description": "Commanded target RX (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.targetRy",
+      "description": "Commanded target RY (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.targetRz",
+      "description": "Commanded target RZ (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.moving",
+      "description": "1 while the robot is moving",
+      "type": "boolean"
+    },
+    {
+      "name": "robot.homed",
+      "description": "1 once the robot has been homed",
+      "type": "boolean"
+    },
+    {
+      "name": "robot.faulted",
+      "description": "1 while a joint-limit fault is active",
+      "type": "boolean"
+    },
+    {
+      "name": "robot.driverConnected",
+      "description": "1 while the motor driver is connected",
+      "type": "boolean"
+    },
+    {
+      "name": "robot.speedS",
+      "description": "Current linear speed default (mm/s)",
+      "type": "number"
+    },
+    {
+      "name": "robot.accelS",
+      "description": "Current linear accel default (mm/s²)",
+      "type": "number"
+    },
+    {
+      "name": "robot.decelS",
+      "description": "Current linear decel default (mm/s²)",
+      "type": "number"
+    },
+    {
+      "name": "robot.speedJ",
+      "description": "Current joint speed default",
+      "type": "number"
+    },
+    {
+      "name": "robot.accelJ",
+      "description": "Current joint accel default",
+      "type": "number"
+    },
+    {
+      "name": "robot.decelJ",
+      "description": "Current joint decel default",
+      "type": "number"
+    },
+    {
+      "name": "robot.speedOverride",
+      "description": "Speed override (percent)",
+      "type": "number"
+    },
+    {
+      "name": "robot.joint1",
+      "description": "Joint 1 angle (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.joint2x",
+      "description": "Joint 2 X readout",
+      "type": "number"
+    },
+    {
+      "name": "robot.joint2z",
+      "description": "Joint 2 Z readout",
+      "type": "number"
+    },
+    {
+      "name": "robot.joint4",
+      "description": "Joint 4 angle (deg)",
+      "type": "number"
+    },
+    {
+      "name": "robot.joint1Referenced",
+      "description": "1 once J1/X is homed or set to a known value",
+      "type": "boolean"
+    },
+    {
+      "name": "robot.joint2Referenced",
+      "description": "1 once Horizontal/Y is homed or set to a known value",
+      "type": "boolean"
+    },
+    {
+      "name": "robot.joint3Referenced",
+      "description": "1 once Vertical/Z is homed or set to a known value",
+      "type": "boolean"
+    },
+    {
+      "name": "robot.joint4Referenced",
+      "description": "1 once J4/RZ is homed or set to a known value",
+      "type": "boolean"
+    },
+    {
+      "name": "program.runCount",
+      "description": "Times this program has been started (this run included)",
+      "type": "number"
+    },
+    {
+      "name": "program.stepIndex",
+      "description": "Completed top-level steps in this run",
+      "type": "number"
+    },
+    {
+      "name": "program.stepCount",
+      "description": "Total steps in this run",
+      "type": "number"
+    },
+    {
+      "name": "program.elapsedMs",
+      "description": "Milliseconds since this run started",
+      "type": "number"
+    },
+    {
+      "name": "program.loopDepth",
+      "description": "Number of loops currently executing",
+      "type": "number"
+    },
+    {
+      "name": "program.speedFactor",
+      "description": "This program's Set Speed Factor (percent, 100 = full speed)",
+      "type": "number"
+    },
+    {
+      "name": "time.now",
+      "description": "Unix time in milliseconds",
+      "type": "number"
+    },
+    {
+      "name": "time.hour",
+      "description": "Local hour (0–23)",
+      "type": "number"
+    },
+    {
+      "name": "time.minute",
+      "description": "Local minute (0–59)",
+      "type": "number"
+    },
+    {
+      "name": "time.second",
+      "description": "Local second (0–59)",
+      "type": "number"
+    },
+    {
+      "name": "time.dayOfWeek",
+      "description": "Day of the week, 0 = Sunday",
+      "type": "number"
+    },
+    {
+      "name": "time.dayOfYear",
+      "description": "Day of the year (1–366)",
+      "type": "number"
+    },
+    {
+      "name": "aux.AUX_STEPPER_001.moving",
+      "description": "1 while aux device 'Aux Stepper' is moving",
+      "type": "boolean"
+    },
+    {
+      "name": "aux.AUX_STEPPER_001.0.position",
+      "description": "Aux 'Aux Stepper' axis 0 (Axis 0 (X)) position (steps)",
+      "type": "number"
+    },
+    {
+      "name": "aux.AUX_STEPPER_001.1.position",
+      "description": "Aux 'Aux Stepper' axis 1 (Axis 1 (Y)) position (steps)",
+      "type": "number"
+    },
+    {
+      "name": "aux.AUX_STEPPER_001.2.position",
+      "description": "Aux 'Aux Stepper' axis 2 (Axis 2 (Z)) position (steps)",
+      "type": "number"
+    },
+    {
+      "name": "aux.AUX_STEPPER_001.3.position",
+      "description": "Aux 'Aux Stepper' axis 3 (Axis 3 (A)) position (steps)",
+      "type": "number"
+    },
+    {
+      "name": "time_ms",
+      "description": "Unix time in milliseconds (built-in variable; same as $time.now)",
+      "type": "number"
+    }
+  ],
+  "functions": [
+    {
+      "name": "abs",
+      "signature": "abs(x)",
+      "description": "Absolute value"
+    },
+    {
+      "name": "sign",
+      "signature": "sign(x)",
+      "description": "-1, 0 or 1"
+    },
+    {
+      "name": "sqrt",
+      "signature": "sqrt(x)",
+      "description": "Square root"
+    },
+    {
+      "name": "pow",
+      "signature": "pow(x, y)",
+      "description": "x raised to y (same as x ^ y)"
+    },
+    {
+      "name": "min",
+      "signature": "min(a, b, …) / min($list) / min($list.field)",
+      "description": "Smallest argument, or smallest element of a list (0 when empty)"
+    },
+    {
+      "name": "max",
+      "signature": "max(a, b, …) / max($list) / max($list.field)",
+      "description": "Largest argument, or largest element of a list (0 when empty)"
+    },
+    {
+      "name": "clamp",
+      "signature": "clamp(x, lo, hi)",
+      "description": "x limited to lo…hi"
+    },
+    {
+      "name": "round",
+      "signature": "round(x) / round(x, digits)",
+      "description": "Round half away from zero, optionally to digits decimals"
+    },
+    {
+      "name": "floor",
+      "signature": "floor(x)",
+      "description": "Round down"
+    },
+    {
+      "name": "ceil",
+      "signature": "ceil(x)",
+      "description": "Round up"
+    },
+    {
+      "name": "trunc",
+      "signature": "trunc(x)",
+      "description": "Drop the fraction (toward zero)"
+    },
+    {
+      "name": "mod",
+      "signature": "mod(a, b)",
+      "description": "Remainder, same as a % b (0 when b is 0)"
+    },
+    {
+      "name": "sin",
+      "signature": "sin(deg)",
+      "description": "Sine of an angle in degrees"
+    },
+    {
+      "name": "cos",
+      "signature": "cos(deg)",
+      "description": "Cosine of an angle in degrees"
+    },
+    {
+      "name": "tan",
+      "signature": "tan(deg)",
+      "description": "Tangent of an angle in degrees"
+    },
+    {
+      "name": "asin",
+      "signature": "asin(x)",
+      "description": "Arcsine, in degrees"
+    },
+    {
+      "name": "acos",
+      "signature": "acos(x)",
+      "description": "Arccosine, in degrees"
+    },
+    {
+      "name": "atan",
+      "signature": "atan(x)",
+      "description": "Arctangent, in degrees"
+    },
+    {
+      "name": "atan2",
+      "signature": "atan2(y, x)",
+      "description": "Angle of (x, y) in degrees"
+    },
+    {
+      "name": "deg",
+      "signature": "deg(rad)",
+      "description": "Radians to degrees"
+    },
+    {
+      "name": "rad",
+      "signature": "rad(deg)",
+      "description": "Degrees to radians"
+    },
+    {
+      "name": "hypot",
+      "signature": "hypot(x, y)",
+      "description": "sqrt(x² + y²)"
+    },
+    {
+      "name": "dist",
+      "signature": "dist(x1, y1, x2, y2)",
+      "description": "Distance between two XY points"
+    },
+    {
+      "name": "dist3",
+      "signature": "dist3(x1, y1, z1, x2, y2, z2)",
+      "description": "Distance between two XYZ points"
+    },
+    {
+      "name": "if",
+      "signature": "if(cond, a, b)",
+      "description": "a when cond is non-zero, else b (same as cond ? a : b)"
+    },
+    {
+      "name": "len",
+      "signature": "len($list)",
+      "description": "Number of elements in a list"
+    },
+    {
+      "name": "sum",
+      "signature": "sum($list) / sum($list.field)",
+      "description": "Sum of a number list, or of one field of each element"
+    },
+    {
+      "name": "avg",
+      "signature": "avg($list) / avg($list.field)",
+      "description": "Average of a number list, or of one field of each element (0 when empty)"
+    },
+    {
+      "name": "minOf",
+      "signature": "minOf($list) / minOf($list.field)",
+      "description": "Smallest element of a number list (0 when empty) — same as min($list)"
+    },
+    {
+      "name": "maxOf",
+      "signature": "maxOf($list) / maxOf($list.field)",
+      "description": "Largest element of a number list (0 when empty) — same as max($list)"
+    },
+    {
+      "name": "rand",
+      "signature": "rand() / rand(lo, hi)",
+      "description": "Uniform random number in [0, 1) or [lo, hi)"
+    },
+    {
+      "name": "map",
+      "signature": "map(x, inLo, inHi, outLo, outHi)",
+      "description": "Re-map x from one range to another"
+    },
+    {
+      "name": "lerp",
+      "signature": "lerp(a, b, t)",
+      "description": "a + (b - a) × t"
+    },
+    {
+      "name": "inBox",
+      "signature": "inBox(x, y, z, x1, y1, z1, x2, y2, z2)",
+      "description": "1 when (x, y, z) is inside the box with opposite corners (x1, y1, z1) and (x2, y2, z2), edges included; else 0"
+    },
+    {
+      "name": "inCircle",
+      "signature": "inCircle(x, y, cx, cy, r)",
+      "description": "1 when (x, y) is within r of (cx, cy), edge included; else 0"
+    },
+    {
+      "name": ".contains",
+      "signature": "$text.contains(\"x\")",
+      "description": "1 when the text contains x, else 0",
+      "kind": "textMethod"
+    },
+    {
+      "name": ".startsWith",
+      "signature": "$text.startsWith(\"x\")",
+      "description": "1 when the text starts with x, else 0",
+      "kind": "textMethod"
+    },
+    {
+      "name": ".endsWith",
+      "signature": "$text.endsWith(\"x\")",
+      "description": "1 when the text ends with x, else 0",
+      "kind": "textMethod"
+    },
+    {
+      "name": ".indexOf",
+      "signature": "$text.indexOf(\"x\")",
+      "description": "Position of the first x in the text (from 0), or -1 when absent",
+      "kind": "textMethod"
+    },
+    {
+      "name": ".toNumber",
+      "signature": "$text.toNumber()",
+      "description": "The text as a number; 0 when it is not one",
+      "kind": "textMethod"
+    },
+    {
+      "name": ".length",
+      "signature": "$text.length",
+      "description": "Number of characters in the text (on a list: its element count)",
+      "kind": "textMethod"
+    }
+  ],
+  "io": [
+    {
+      "name": "stb.in1",
+      "description": "Driver board input 1"
+    },
+    {
+      "name": "stb.in2",
+      "description": "Driver board input 2"
+    },
+    {
+      "name": "stb.in3",
+      "description": "Driver board input 3"
+    },
+    {
+      "name": "stb.in4",
+      "description": "Driver board input 4"
+    },
+    {
+      "name": "stb.out1",
+      "description": "Driver board output 1"
+    },
+    {
+      "name": "stb.out2",
+      "description": "Driver board output 2"
+    },
+    {
+      "name": "stb.out3",
+      "description": "Driver board output 3"
+    },
+    {
+      "name": "stb.out4",
+      "description": "Driver board output 4"
+    },
+    {
+      "name": "relay.1",
+      "description": "USB relay 1"
+    },
+    {
+      "name": "relay.2",
+      "description": "USB relay 2"
+    },
+    {
+      "name": "relay.3",
+      "description": "USB relay 3"
+    },
+    {
+      "name": "relay.4",
+      "description": "USB relay 4"
+    },
+    {
+      "name": "io.Arduino_Nano.Input_1",
+      "description": "Nano 'Arduino Nano' pin 2 (Input)"
+    },
+    {
+      "name": "io.Arduino_Nano.Input_2",
+      "description": "Nano 'Arduino Nano' pin 3 (Input)"
+    },
+    {
+      "name": "io.Arduino_Nano.Input_3",
+      "description": "Nano 'Arduino Nano' pin 4 (Input)"
+    },
+    {
+      "name": "io.Arduino_Nano.Input_4",
+      "description": "Nano 'Arduino Nano' pin 5 (Input)"
+    },
+    {
+      "name": "io.Arduino_Nano.Output_1",
+      "description": "Nano 'Arduino Nano' pin 7 (Output)"
+    },
+    {
+      "name": "io.Arduino_Nano.Output_2",
+      "description": "Nano 'Arduino Nano' pin 8 (Output)"
+    },
+    {
+      "name": "io.Arduino_Nano.Status_Light",
+      "description": "Nano 'Arduino Nano' pin 6 (Neopixel)"
+    }
+  ],
+  "plugins": []
+}

@@ -198,18 +198,19 @@ STEPS = {
 
     # ── Vision & imaging ──────────────────────────────────────────────────
     "RunVision": {
-        "what": "Run a saved vision program and write its inspection results into variables.",
+        "what": ("Run a saved vision program (image layers + building-block tools, see "
+                 "docs/vision-tools.md) and write tool results into variables."),
         "fields": {
             "visionProgramId": "string.", "visionProgramName": "string.",
-            "visionZoneId": "string. Restrict to one zone.",
-            "visionZoneVar": "string. Variable naming the zone at run time.",
-            "visionOutputs":  "array of {inspectionId, countVar?, pointsVar?, detectedVar?} - blob inspections.",
-            "colorOutputs":   ("array of {inspectionId, coverageVar?, passedVar?, cellsVar?, cellsPassedVar?}. "
-                               "coverageVar is whole-zone %. On a zone with a grid, passedVar means every cell "
-                               "passed, cellsVar takes an object-list variable filled with one record per cell "
-                               "(row, col, index, coverage, passed), and cellsPassedVar gets the pass count."),
-            "polygonOutputs": "array of {inspectionId, countVar?, foundVar?, angleVar?, centerXVar?, centerYVar?}.",
-            "arucoOutputs":   "array of {inspectionId, countVar?, foundVar?, firstIdVar?, firstCenterXVar?, firstCenterYVar?}.",
+            "outputFrame": ('"pixel" (default) | "normalized" | "robot" - frame of the positions written '
+                            "(points, pose, item/line coordinates, values x/y). robot needs a calibrated camera."),
+            "passVariable": "string, optional. Set to the program's overall pass (1/0).",
+            "toolOutputs": ("array of {toolId, value, variable}. value: any key of the tool's values "
+                            "(angle, count, percent, distance, ... -> Number; a barcode's value -> String), "
+                            "or passed (1/0), status (String), cells (Record list {row,col,index,value,passed}), "
+                            "items (Record list), points (Point list), lines (Record list {x1,y1,x2,y2}), "
+                            "pose (Record list with one {x,y,z,angle}, empty when not found). Declare list "
+                            "variables with items: [] and the matching elementType."),
         },
     },
     "CaptureImage": {
@@ -273,22 +274,172 @@ STEPS = {
                   "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "auxEnable": "bool."}},
 
     # ── CNC ───────────────────────────────────────────────────────────────
+    "GripperAction": {
+        "what": "Drive an aux axis configured as a gripper: Open/Close to its configured gap limits, or GripTo a gap.",
+        "fields": {
+            "auxDeviceId": "string. Aux device id (default: the first).",
+            "auxAxisIndex": "int. The gripper's axis index.",
+            "gripperAction": '"Open" | "Close" | "GripTo".',
+            "gripTargetMm": "number. GripTo: absolute jaw gap (mm), clamped to [closed, open]. expressions.gripTargetMm overrides.",
+            "auxVelocity": "number, mm/s (optional - the axis default otherwise).",
+            "auxAccel": "number, mm/s^2 (optional).",
+            "moveStopCondition": "CONDITION_GROUP - stop the jaws early when it holds (e.g. a load cell reading).",
+            "moveStopMode": '"stop" | "record".',
+            "moveStopFlagVariableName": "string. Set to 1 when the stop condition fired.",
+        },
+    },
+    "ConveyorAction": {"what": "Run/stop an aux axis configured as a conveyor.",
+                       "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "conveyorAction": "string, e.g. Start | Stop."}},
+    "RotaryIndex": {"what": "Index an aux axis configured as a rotary table.",
+                    "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "rotaryDirection": "int, +1 / -1.", "rotaryCount": "int, positions to index."}},
+    "SetJointPosition": {"what": "Redefine one joint's current position (re-reference it); moves nothing.",
+                         "fields": {"jointIndex": "int.", "jointValue": "number. expressions.jointValue overrides."}},
+    "Tare": {"what": "Zero a load cell (nothing on it).",
+             "fields": {"loadCellDeviceId": "string. IO device id, e.g. ROBOT_NANO_001.", "loadCellPin": "int. The cell's DT pin."}},
+    "ReadLoadCell": {"what": "Read a load cell into a variable.",
+                     "fields": {"loadCellDeviceId": "string.", "loadCellPin": "int.", "variableName": "string. Target variable.",
+                                "loadCellUnit": '"g" | "kg" | "oz" | "lb" | "N".'}},
+    "StartRecording": {"what": "Record a load cell's samples into a Record-list variable until StopRecording (or the run ends).",
+                       "fields": {"loadCellDeviceId": "string.", "loadCellPin": "int.",
+                                  "recordVariableName": "string. A list variable with elementType Record ({t, v, r} samples)."}},
+    "StopRecording": {"what": "Stop the recording started on this load cell.",
+                      "fields": {"loadCellDeviceId": "string.", "loadCellPin": "int."}},
+    "ExportData": {"what": "Write variables to a file on the controller (CSV or JSON).",
+                   "fields": {"exportFormat": '"csv" | "json".',
+                              "exportPath": "string. Relative to the data dir; $variable and $time_ms interpolate.",
+                              "exportColumns": "array of {key, expr? | listVar? | imageVar?} - the HttpRequest outbound row shape."}},
+    "Plugin": {
+        "what": "Run a step contributed by an installed plugin (see the controller's GetPlugins / plugin.json).",
+        "fields": {
+            "pluginId": "string. The plugin's id, e.g. checkers.",
+            "pluginStepId": "string. The step id in its manifest, e.g. aiMove.",
+            "pluginParams": "object {paramKey: text}. number/boolean: an expression; string: interpolated text; "
+                            "enum: one of its options; list/image/variable: a $variable name; point: a point name, "
+                            "grid:Name[r,c] or stack:Name[i].",
+            "pluginOutputs": "array of {key, variableName} - copies a step output into a program variable.",
+            "pluginTimeoutMs": "int. Overrides the manifest's timeout (0 = none).",
+        },
+    },
     "CncProgram": {
         "what": "Run a DXF-derived toolpath. Steps are generated at run time from cncSpec.",
         "fields": {"cncDxfFile": "string.", "cncSafeZ": "number, mm.",
                    "cncSpec": "object. Toolpath spec built by the CNC builder in the app.",
                    "cncProgramSteps": "array of ProgramStep. Legacy - baked steps from older app versions."},
     },
+
+    # ── Program-language additions (docs/program-language.md, Package A) ──
+    "MoveC": {
+        "what": "Move along a circular arc through a via point to the end target (the usual target fields).",
+        "fields": {**{k: v for k, v in MOVE_TARGET.items() if not k.startswith("toolOffset")},
+                   "viaPointId": "string. Saved point the arc passes through (by id).",
+                   "viaPointName": "string. Display fallback for viaPointId.",
+                   "viaPointNameExpr": "string, overrides viaPoint*. Same two resolutions as pointNameExpr.",
+                   "arcTolerance": "number, mm, default 0.1. Largest gap between the true arc and its segments."},
+    },
+    "SavePosition": {
+        "what": "Store the current position in a Points list variable or a saved point.",
+        "fields": {
+            "savePositionTo": '"variable" (default) | "point".',
+            "variableName": "string. A list variable with elementType Point (savePositionTo variable).",
+            "pointId": "string. Saved point overwritten or created (savePositionTo point).",
+            "pointName": "string. Display fallback for pointId.",
+            "savePositionMode": '"replace" (default) | "append" | "insert" | "set".',
+            "savePositionIndex": "int. Index for insert/set; expressions.savePositionIndex overrides.",
+            "savePositionSource": '"actual" (default) | "target" (last commanded target).',
+        },
+    },
+    "SetSpeedFactor": {
+        "what": "Scale this program's move speeds by a percentage (never above the operator override; resets to 100 at the end).",
+        "fields": {"speedFactor": "number, %, 1-100, default 100. expressions.speedFactor overrides."},
+    },
+    "Switch": {
+        "what": "Run the case whose value equals an expression, else the default steps.",
+        "fields": {
+            "switchExpr": "string. Expression evaluated once and compared with each case value.",
+            "switchCases": "array of {id, values: [string], steps: [ProgramStep]}.",
+            "switchDefault": "array of ProgramStep. Run when no case matches.",
+        },
+    },
+    "LoopControl": {
+        "what": "Leave the enclosing loop, or skip to its next iteration.",
+        "fields": {"loopControl": '"break" (default) | "continue".'},
+    },
+    "Try": {
+        "what": "Run steps; on a runtime error retry them or run the catch steps.",
+        "fields": {
+            "trySteps": "array of ProgramStep.",
+            "catchSteps": "array of ProgramStep. Run when the error is caught (after retries).",
+            "tryRetries": "int, default 0. Times to re-run trySteps before catching.",
+            "tryRetryDelayMs": "int, ms, default 0. Pause between retries.",
+            "catchCodes": "array of string. Error codes to catch; empty = every catchable error.",
+            "errorVariableName": "string. String variable that receives the error message.",
+            "errorCodeVariableName": "string. String variable that receives the error code.",
+        },
+    },
+    "RaiseError": {
+        "what": "Fail with a message - caught by an enclosing Try, otherwise ends the program.",
+        "fields": {"errorMessage": "string, interpolated. Required.",
+                   "errorCode": "string, default userError. An identifier a Try can filter on."},
+    },
+    "Return": {"what": "Leave the routine (or end the program when not in a routine).", "fields": {}},
+    "EndProgram": {
+        "what": "Finish the program now, from anywhere.",
+        "fields": {"statusMessage": "string, interpolated, optional. Logged as the program ends."},
+    },
+    "Note": {
+        "what": "A note or section header - not executed.",
+        "fields": {"noteStyle": '"note" (default) | "section".',
+                   "comment": "string. The note text."},
+    },
+    "ListOp": {
+        "what": "Append, insert, remove, set, sort or copy list elements.",
+        "fields": {
+            "variableName": "string. The list variable.",
+            "listAction": '"append" (default) | "insert" | "removeAt" | "clear" | "set" | "setField" | "sort" | "reverse" | "copyFrom".',
+            "listIndex": "int. For insert/removeAt/set/setField; expressions.listIndex overrides.",
+            "listValueExpr": "string expression. Element value for Number/Boolean lists (append/insert/set).",
+            "listFields": ("object {field: expr}. Element fields for Point/Record lists; append with no "
+                           "fields on a Points list appends the current position."),
+            "listSourceVariable": "string. List to copy from (copyFrom).",
+            "listSortField": "string. Field to sort by (sort); empty = the element value.",
+            "listSortDescending": "bool, default false.",
+        },
+    },
+    "Prompt": {
+        "what": "Ask the operator: show a message with buttons and an optional input, and wait for an answer.",
+        "fields": {
+            "promptMessage": "string, interpolated. Required.",
+            "promptTitle": "string, interpolated.",
+            "promptButtons": 'array of string, 1-4, default ["OK"].',
+            "promptResultVariableName": "string. Number variable gets the button index (from 0); text variable its label.",
+            "promptInput": '"none" (default) | "number" | "text".',
+            "promptDefault": "string expression. Input default.",
+            "promptMin": "number. Number input minimum.", "promptMax": "number. Number input maximum.",
+            "promptInputVariableName": "string. Variable that receives the input value.",
+            "promptTimeoutMs": "int, ms, default 0 = wait forever.",
+            "promptTimeoutButton": "int. Button index chosen on timeout; empty = fail (catchable).",
+        },
+    },
 }
+
+# Fields added to existing step types by the program-language work.
+COMMON["enabled"] = "bool, optional. false = the step (and a block step's whole body) is skipped. Absent = enabled."
+COMMON["comment"] = "string, optional. Free-text note on the step (the Note step's text)."
+STEPS["Wait"]["fields"]["waitTimeoutAction"] = '"continue" (default) | "error" (fail with the catchable waitTimeout code).'
+STEPS["SetOutput"]["fields"]["outputAction"] = '"set" (default; uses outputValue) | "toggle".'
+STEPS["CallRoutine"]["fields"]["routineArgs"] = "object {param: expr}. One per in / in-out routine parameter, evaluated before the call."
+STEPS["CallRoutine"]["fields"]["routineOutputs"] = "array of {key, variableName}. Out / in-out parameters copied back on return."
 
 # Step types the executor refuses to run inside a background program.
 BACKGROUND_FORBIDDEN = {
     "MoveL", "MoveJ", "JumpL", "JumpJ", "ThreadMove", "CncProgram",
     "SetTool", "RunHoming", "SetSpeedL", "SetSpeedJ", "SetBlendRadius",
+    "MoveC", "SetSpeedFactor",
 }
 
-# Fields whose value is a nested step list, for recursive walks.
-NESTED_STEP_FIELDS = ("loopSteps", "ifSteps", "elseSteps", "cncProgramSteps")
+# Fields whose value is a nested step list, for recursive walks. Lists of {steps} objects
+# (elseIfBranches, switchCases) are walked separately.
+NESTED_STEP_FIELDS = ("loopSteps", "ifSteps", "elseSteps", "switchDefault", "trySteps", "catchSteps", "cncProgramSteps")
 
 VARIABLE_FIELDS = {
     "id":          "string, required, unique.",
