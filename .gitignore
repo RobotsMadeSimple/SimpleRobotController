@@ -272,6 +272,9 @@ Generated_Code/
 # because we have git ;-)
 _UpgradeReport_Files/
 Backup*/
+# ...but RobotControl/Backup/ is real source (the backup/restore service), not a VS upgrade folder.
+!RobotControl/Backup/
+!RobotControl/Backup/**
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/
