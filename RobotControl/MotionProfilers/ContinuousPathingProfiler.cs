@@ -25,18 +25,41 @@ namespace Controller.RobotControl.MotionProfilers
         // Returned by Loop() when the path has no segments (degenerate zero-length move).
         private Vector6 endPoint = new();
 
+        // Set when the path runs a jerk-limited S-curve along its arc length instead of the trapezoid.
+        private SCurveProfile? scurve;
+
         public ContinuousPathingProfiler(
             List<Vector6> points,
             List<double> blendRadii,   // per-waypoint corner radius; index i applies at points[i]
             double speed,
             double accel,
             double decel
+        ) : this(points, blendRadii, speed, accel, decel, MotionProfileSettings.Trapezoid)
+        {
+        }
+
+        /// <summary>
+        /// A blended path driven by one speed profile over its whole arc length — the trapezoid,
+        /// or a jerk-limited S-curve (the geometry is the same either way; only the timing along
+        /// it changes, so the path stays exactly as continuous as before).
+        /// </summary>
+        public ContinuousPathingProfiler(
+            List<Vector6> points,
+            List<double> blendRadii,
+            double speed,
+            double accel,
+            double decel,
+            MotionProfileSettings profile
         )
         {
             if (points != null && points.Count > 0) endPoint = points[^1];
             BuildPath(points!, blendRadii);
 
-            scalar.Setup(totalLength, speed, accel, decel);
+            if (profile.IsSCurve)
+                scurve = new SCurveProfile(totalLength, speed, accel, decel,
+                                           profile.JerkFor(speed, accel), profile.JerkFor(speed, decel));
+            else
+                scalar.Setup(totalLength, speed, accel, decel);
             sw.Restart();
         }
 
@@ -156,12 +179,18 @@ namespace Controller.RobotControl.MotionProfilers
             cumulative.Add(totalLength);
         }
 
-        public Vector6 Loop()
+        public Vector6 Loop() => SampleAt(sw.Elapsed.TotalSeconds);
+
+        /// <summary>
+        /// The pose <paramref name="t"/> seconds into the path (advances <see cref="IsFinished"/>).
+        /// <see cref="Loop"/> is this with the path clock; tests sample it directly.
+        /// </summary>
+        internal Vector6 SampleAt(double t)
         {
             // Degenerate path (all waypoints coincident) — nothing to traverse.
             if (segments.Count == 0) return endPoint;
 
-            double s = scalar.Sample(sw.Elapsed.TotalSeconds);
+            double s = scurve != null ? scurve.Position(t) : scalar.Sample(t);
             lastS = s;
 
             for (int i = 0; i < segments.Count; i++)

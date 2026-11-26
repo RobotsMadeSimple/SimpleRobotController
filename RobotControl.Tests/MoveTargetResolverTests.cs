@@ -14,8 +14,9 @@ public class MoveTargetResolverTests : IDisposable
     public MoveTargetResolverTests()
     {
         Directory.CreateDirectory(_dir);
+        var pts = new PointRepository(P("points.json"), P("pointsHistory.json"));
         _src = new MoveTargetSources(
-            new PointRepository(P("points.json"), P("pointsHistory.json")),
+            pts, pts,   // no program composite in this test: the repo is both writer and reader
             new GridRepository(P("grids.json")),
             new StackRepository(P("stacks.json")),
             new LocalRepository(P("locals.json"), P("localsHistory.json")));
@@ -39,6 +40,34 @@ public class MoveTargetResolverTests : IDisposable
     {
         var t = Resolve(new ProgramStep { Type = StepType.MoveL, PointName = "base", OffsetX = 1, OffsetZ = -5 });
         Near(101, t.X); Near(200, t.Y); Near(45, t.Z); Near(90, t.RZ);
+    }
+
+    [Fact]
+    public void ProgramPoint_WinsOverGlobal_AndFallsBack()
+    {
+        var global = _src.Points;   // global "base" at (100, 200, 50, rz 90) from the ctor
+        var programPts = new List<Point>
+        {
+            new() { Id = "prog-1", Name = "base", X = 1, Y = 2, Z = 3, RZ = 45 },
+        };
+        var reader = new CompositePointLookup(() => programPts, global);
+        var src = new MoveTargetSources(global, reader, _src.Grids, _src.Stacks, _src.Locals);
+
+        bool R(ProgramStep s, out Vector6 t) =>
+            MoveTargetResolver.TryResolve(s, src, _vars, null, Live, out t, out _);
+
+        // By name: the program's own "base" shadows the global one.
+        Assert.True(R(new ProgramStep { Type = StepType.MoveL, PointName = "base" }, out var byName));
+        Near(1, byName.X); Near(45, byName.RZ);
+
+        // By stable id: resolves the program point even with a stale PointName.
+        Assert.True(R(new ProgramStep { Type = StepType.MoveL, PointId = "prog-1", PointName = "stale" }, out var byId));
+        Near(1, byId.X); Near(3, byId.Z);
+
+        // A name only in the global library still resolves (coexistence).
+        global.SavePoint("globalOnly", new Vector6(9, 8, 7, 0, 0, 0));
+        Assert.True(R(new ProgramStep { Type = StepType.MoveL, PointName = "globalOnly" }, out var fb));
+        Near(9, fb.X); Near(7, fb.Z);
     }
 
     [Fact]
@@ -95,6 +124,34 @@ public class MoveTargetResolverTests : IDisposable
         });
         // raw (x=20, y=20) rotated 90° → (-20, 20)
         Near(80, t.X); Near(220, t.Y); Near(52, t.Z);
+    }
+
+    [Fact]
+    public void Grid_BaseResolvesByIdFirst_ThenName()
+    {
+        // A base point found by stable id even when the grid's cached base NAME is stale/renamed.
+        _src.Points.SavePoint("corner", new Vector6(300, 400, 10, 0, 0, 0));
+        var cornerId = _src.Points.Get("corner")!.Id!;
+        var g = _src.Grids.Upsert(new Grid
+        {
+            Name = "byId", BasePointId = cornerId, BasePointName = "renamed-away",
+            RowOffsetX = 10, ColOffsetY = 20,
+        });
+        var t = Resolve(new ProgramStep
+        {
+            Type = StepType.MoveL,
+            GridPoint = new GridPointRef { GridId = g.Id, RowIndex = 1, ColIndex = 1 },
+        });
+        Near(310, t.X); Near(420, t.Y); Near(10, t.Z);
+
+        // No id (old grid) → still resolves by name.
+        var old = _src.Grids.Upsert(new Grid { Name = "byName", BasePointName = "base", RowOffsetX = 5 });
+        var t2 = Resolve(new ProgramStep
+        {
+            Type = StepType.MoveL,
+            GridPoint = new GridPointRef { GridId = old.Id, RowIndex = 1, ColIndex = 0 },
+        });
+        Near(105, t2.X); Near(200, t2.Y);
     }
 
     [Fact]

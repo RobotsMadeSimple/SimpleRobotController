@@ -117,6 +117,57 @@ black on a taught 8x8 grid named *Checkers Board* (row r, col c = the board squa
 clears jumped pieces to the point *Checkers Discard*, parks above it while you move,
 and replies once the camera has seen your move.
 
+### Checker silos (crowning)
+
+Two **silos** — tubes of spare checkers on a lifting platform, one per colour — supply
+the crowns. The controller drives them with the generic aux **Silo** role
+([docs/aux-silo.md](../../../docs/aux-silo.md)): `SiloAction home | present | refill |
+setcount`. `kinged` (from `aiMove` / `applyMove`) means *the piece that just moved* was
+promoted, so it is the robot's piece after `aiMove` and yours after `applyMove`:
+
+- **Robot's king** (black): `SiloAction present` lifts the top black checker to the rim,
+  the robot picks it at the point **Checkers Silo Robot**, puts it on the new king (the
+  square + `$checkerMm`, 3.9 mm) and releases. If the silo is empty or not homed
+  (`siloEmpty` / `siloNotHomed`, caught) it falls back to asking you to crown it.
+- **Your king** (white): the white silo presents a checker and a status asks you to stack
+  it on your piece — you crown your own.
+- **Start of the game**: both silos are homed. Set the program variable `$siloRefill` to 1
+  when you have just loaded both tubes full — they are refilled (count = capacity) and homed.
+
+**Setup:**
+
+1. **Wiring** — one Uno CNC-shield axis per silo (X = 0, Y = 1, Z = 2, A = 3) on the aux
+   stepper board. The builder defaults to device `AUX_STEPPER_001`, black (robot) silo on
+   axis 0, white silo on axis 1; change them when building:
+   `SILO_DEVICE=… SILO_ROBOT_AXIS=… SILO_HUMAN_AXIS=… node program/checkers-game.mjs save`.
+   The SiloAction steps link the silo by that device id + axis (they are not expressions).
+2. **Driver current** — homing has no switch: the platform drives into the bottom stop and
+   the motor skips. Turn each driver's current pot down until the lift still raises a full
+   stack but skips gently against the stop (keep `siloHomeSpeed` slow).
+3. **Microstepping** — the shield's M0/M1/M2 jumpers under each driver: no jumpers = full
+   step, all three = 1/16 (A4988) or 1/32 (DRV8825). `stepsPerRev` = 200 × microsteps
+   (1.8° motors), e.g. 3200 at 1/16.
+4. **Configure each axis** (I/O → aux board → axis): role **Silo**, axis type Linear and:
+
+   | Field | Value |
+   |---|---|
+   | `mmPerRev` | 40 |
+   | `stepsPerRev` | 200 × microsteps |
+   | `invertDirection` | set so **positive = platform up**. The twin motors are mirrored, so one silo is inverted and the other not — jog +1 mm and check |
+   | `siloPitchMm` | 3.9 (one checker) |
+   | `siloCapacity` | 12 |
+   | `siloClearanceMm` | 0.5 |
+   | `siloHomeOverTravelMm` | 5 |
+   | `siloHomeSpeed` | 5 mm/s |
+   | `actionVelocity` | 20 mm/s |
+
+5. **Load and home** — fill each tube (platform at the bottom), then run `SiloAction refill`
+   on it (or the game with `$siloRefill` = 1). The count is kept across restarts; any
+   manual jog clears "homed", so home again after jogging.
+6. **Teach the point *Checkers Silo Robot*** — the gripper's pick pose on the top checker of
+   the black silo **after a Present** (present one, jog onto it, save the point). The program
+   only references it.
+
 `point(square)` is the integration point you own: a saved **grid** over the
 board, or 32 named points `sq0..sq31`. The plugin only ever gives you the square
 numbers; mapping them to reachable poses — and any off-board "captured pile" and

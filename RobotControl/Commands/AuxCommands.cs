@@ -21,6 +21,7 @@ internal sealed class AuxCommands
         d.Add("SetAuxAxisConfig", SetAuxAxisConfig);
         d.Add("SetAuxPosition",   SetAuxPosition);
         d.Add("EnableAux",        EnableAux);
+        d.Add("SiloAction",       SiloAction);
     }
 
     private object? GetAuxState(CommandMessage msg)
@@ -80,6 +81,7 @@ internal sealed class AuxCommands
     private void SetAuxAxisConfig(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<SetAuxAxisConfigParams>(msg);
+        var cur = _robot.AuxAxisManager.GetAxisConfig(p.DeviceId, p.AxisIndex);
         _robot.AuxAxisManager.UpdateAxisConfig(p.DeviceId, p.AxisIndex, new AuxAxisChannelConfig
         {
             AxisIndex       = p.AxisIndex,
@@ -98,8 +100,72 @@ internal sealed class AuxCommands
             GripperCloseTimeSec = p.GripperCloseTimeSec,
             GripperAccel        = p.GripperAccel,
             GripperOverTravelMm = p.GripperOverTravelMm,
+            // Left out = keep (a client that predates the Silo role never wipes it).
+            SiloPitchMm          = p.SiloPitchMm          ?? cur?.SiloPitchMm          ?? 0,
+            SiloCapacity         = p.SiloCapacity         ?? cur?.SiloCapacity         ?? 0,
+            SiloClearanceMm      = p.SiloClearanceMm      ?? cur?.SiloClearanceMm      ?? 0,
+            SiloHomeOverTravelMm = p.SiloHomeOverTravelMm ?? cur?.SiloHomeOverTravelMm ?? 0,
+            SiloHomeSpeed        = p.SiloHomeSpeed        ?? cur?.SiloHomeSpeed        ?? 0,
         });
     }
+
+    /// <summary>Longest the background finish of a SiloAction waits for its lift move.</summary>
+    internal static TimeSpan SiloMoveTimeout = TimeSpan.FromSeconds(300);
+
+    /// <summary>
+    /// SiloAction (docs/aux-silo.md): Home / Present / Refill / SetCount on a Silo-role axis.
+    /// Acks AT ONCE, like MoveAux / Home — a socket handles its commands one at a time, so waiting
+    /// for the lift would hold back a Stop sent meanwhile. The ack carries { siloCount, siloHomed,
+    /// moving }; when moving, the finish (home zero + homed, or Present's count − 1) runs once the
+    /// axis stops, and GetAuxState's siloCount / siloHomed show it. A move stopped part-way is not
+    /// finished (the silo stays un-homed / the count unchanged). Refusals answer
+    /// { ok:false, error, message } with error siloNotHomed / siloEmpty / siloConfig.
+    /// </summary>
+    private object? SiloAction(CommandMessage msg)
+    {
+        var p   = CommandJson.LoadParams<SiloActionParams>(msg);
+        string act = Execution.SiloActions.Normalize(p.Action) ?? "";
+        if (act != Execution.SiloActions.SetCount) RequireStepper(p.DeviceId);
+
+        Execution.SiloPending? pending;
+        try
+        {
+            pending = Execution.SiloActions.Begin(_robot, p.DeviceId, p.Axis, p.Action, p.Count);
+        }
+        catch (Execution.SiloException ex)
+        {
+            return new { ok = false, error = ex.Code, message = ex.Message };
+        }
+
+        if (pending != null) _ = FinishSiloAsync(pending);
+        return SiloStatus(p.DeviceId, p.Axis, moving: pending != null);
+    }
+
+    /// <summary>Waits for the silo's lift move to stop, then runs the action's finish.</summary>
+    internal Task FinishSiloAsync(Execution.SiloPending pending) => Task.Run(async () =>
+    {
+        try
+        {
+            var deadline = DateTime.UtcNow + SiloMoveTimeout;
+            while (_robot.AuxAxisManager.IsDeviceMoving(pending.DeviceId))
+            {
+                if (DateTime.UtcNow > deadline) return;
+                await Task.Delay(20);
+            }
+            if (!Execution.SiloActions.Complete(_robot, pending))
+                Console.WriteLine($"[Aux] Silo {pending.Action} on {pending.DeviceId} axis {pending.Axis} was stopped before it finished");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Aux] Silo {pending.Action} finish failed: {ex.Message}");
+        }
+    });
+    private object SiloStatus(string deviceId, int axis, bool moving) => new
+    {
+        siloCount = _robot.AuxAxisManager.GetAxisConfig(deviceId, axis)?.SiloCount ?? 0,
+        siloHomed = _robot.AuxAxisManager.IsSiloHomed(deviceId, axis),
+        moving,
+    };
 
     private void SetAuxPosition(CommandMessage msg)
     {

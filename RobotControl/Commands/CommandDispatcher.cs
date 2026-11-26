@@ -49,12 +49,16 @@ internal sealed class CommandDispatcher
         new RevisionCommands(robot).Register(d);
         new ProgramCycleCommands(robot, programs, executor).Register(d);
         new IoCommands(robot).Register(d);
+        new SerialCommands(robot).Register(d);
         new AuxCommands(robot).Register(d);
+        new ConveyorCommands(robot).Register(d);
         new CameraCommands(robot).Register(d);
         new DeviceCommands(robot).Register(d);
         new VisionCommands(robot).Register(d);
         new CalibrationCommands(robot).Register(d);
         new PluginCommands(robot).Register(d);
+        new CellCommands(robot).Register(d);
+        new SafetyCommands(robot).Register(d); // e-stop + alarms
         // Program editor v2 (docs/program-language.md §8): the catalog, and the text-language,
         // operator-prompt and debugger commands (stubs until packages B, C and D land).
         new StepCatalogCommands().Register(d);

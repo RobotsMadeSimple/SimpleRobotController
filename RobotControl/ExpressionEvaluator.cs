@@ -184,7 +184,7 @@ namespace Controller.RobotControl
     /// Number, point and record lists all arrive in one <see cref="ListVar"/> dictionary;
     /// the element type decides which of the index forms above applies.
     /// </summary>
-    internal static class ExpressionEvaluator
+    internal static partial class ExpressionEvaluator
     {
         // ── Public entry points ───────────────────────────────────────────────
 
@@ -414,6 +414,13 @@ namespace Controller.RobotControl
                                                                                    a => InBox(a)),
             new("inCircle", 5, 5, "inCircle(x, y, cx, cy, r)",
                 "1 when (x, y) is within r of (cx, cy), edge included; else 0",   a => InCircle(a[0], a[1], a[2], a[3], a[4])),
+            // Reach and kinematics (ExpressionEvaluator.Reach.cs) — parsed and evaluated by their own node.
+            new(ReachableFn, 1, 3, "reachable(point[, tool][, local])",
+                "1 when the robot can reach the point — inverse kinematics solves and every joint is inside its soft limits; else 0. point: $pts[i], \"Name\", grid(\"G\", row, col), stack(\"S\", i); tool/local: a name, \"none\", or \"\" for the active one"),
+            new(JointsOfFn, 1, 3, "jointsOf(point[, tool][, local]).j1",
+                "The joint values that reach the point (read one with .j1 … .j4, or store the whole value with a List step); fails with outOfReach when it cannot be reached"),
+            new(PoseOfFn, 1, 3, "poseOf(joints[, tool][, local]).x",
+                "The TCP pose a joints value puts the tool at — forward kinematics (read one with .x .y .z .rz); joints: $j[i] (an Objects list with j1…j4) or jointsOf(…)"),
         };
 
         // Small tolerance so a point taught exactly on an edge still counts as inside after the
@@ -652,6 +659,11 @@ namespace Controller.RobotControl
 
             public IndexNode(string name, Node index, string? field, Node? posIdx, int pos)
             { _name = name; _index = index; _field = field; _posIdx = posIdx; Pos = pos; }
+
+            /// <summary>"$name[i]" with no .field / [n] accessor.</summary>
+            public bool IsBareElement => _field == null && _posIdx == null;
+            public string Name => _name;
+            public Node IndexExpr => _index;
 
             public override double Eval(in Env e)
             {
@@ -1040,7 +1052,7 @@ namespace Controller.RobotControl
 
         // ── Recursive descent ─────────────────────────────────────────────────
 
-        private sealed class Parser
+        private sealed partial class Parser
         {
             private readonly string _src;
             private List<Token> _t = null!;
@@ -1069,6 +1081,10 @@ namespace Controller.RobotControl
                         throw Error("Unbalanced ')' — no matching '('", Cur.Pos);
                     throw Error($"Unexpected {Describe(Cur)}", Cur.Pos);
                 }
+                // A whole "$list[i]" can also stand for its element (TryEvaluateValue); it still
+                // evaluates as a number exactly as before.
+                if (node is IndexNode ix && ix.IsBareElement)
+                    node = new ElementValueNode(ix, ix.Name, ix.IndexExpr, ix.Pos);
                 return node;
             }
 
@@ -1345,6 +1361,9 @@ namespace Controller.RobotControl
             {
                 if (!FunctionsByName.TryGetValue(nameTok.Value, out var fn))
                     throw Error($"Unknown function '{nameTok.Value}'", nameTok.Pos, "unknownFunction");
+
+                // reachable / jointsOf / poseOf take point and frame arguments, not numbers.
+                if (IsReachFunction(fn.Name)) return ParseReachCall(fn, nameTok, allowAccessor: true);
 
                 var args = ParseArgs(fn.Name, out var argTokens);
 

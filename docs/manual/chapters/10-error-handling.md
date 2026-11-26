@@ -15,7 +15,7 @@ hide.
 
 | Catchable | Fatal (never caught) |
 |---|---|
-| `waitTimeout` `visionTimeout` `visionFailed` `httpFailed` `httpTimeout` `receiveTimeout` `pluginFailed` `pluginTimeout` `pluginNotRunning` `promptTimeout` `pointNotFound` `arcDegenerate` `indexOutOfRange` `userError` — and any code you raise yourself | `motionFault` `jointLimit` `driverDisconnected` `emergencyStop` `userStop` `unknownVariable` `expressionSyntax` `computedVariable` `badListOperation` |
+| `waitTimeout` `visionTimeout` `visionFailed` `httpFailed` `httpTimeout` `receiveTimeout` `pluginFailed` `pluginTimeout` `pluginNotRunning` `promptTimeout` `pointNotFound` `arcDegenerate` `indexOutOfRange` `outOfReach` `userError` — and any code you raise yourself | `motionFault` `jointLimit` `driverDisconnected` `emergencyStop` `userStop` `unknownVariable` `expressionSyntax` `computedVariable` `badListOperation` |
 
 The full table, with what raises each code, is in [Error and Problem Codes](#error-codes).
 
@@ -63,7 +63,19 @@ goes outward too.
 ![A catchable error travels outward from the failing step — through loops, branches and called routines — to the nearest Try that catches its code. With none, the program ends with Error.](../figures/error-propagation.svg)
 
 When the program ends with Error, its status carries the message and the `errorCode`, and the monitor
-shows the step that failed.
+shows the step that failed. The error is also recorded in the controller's **alarm history** (Robot →
+Alarms in the app), with the program, the failing step and the code's help text: what it means, what
+causes it and what to do. The help for every code is in [Error Codes](#error-codes) and comes from
+the controller's `GetAlarmCatalog`.
+
+### Emergency stop
+
+When the hardwired e-stop trips, every running program — foreground and background — ends with
+`emergencyStop`. It is fatal: no Try catches it, and Continue cannot resume the program. The robot is
+marked unhomed (the drivers lost power), so after the operator resets the e-stop the program must
+home before it moves (a [Home](#ref-RunHoming) step, or homing from the app) — starting a program is
+refused until the e-stop is reset. Wiring and recovery are described in the controller's
+`docs/estop.md`; it is **not a certified safety function**.
 
 ## Raising your own errors
 
@@ -78,6 +90,31 @@ end
 A code of your own is always catchable, so an enclosing `try … only=(emptySlot)` can handle exactly
 this case. The default code is `userError`. Raising a fatal code (e.g. `motionFault`) is a validator
 warning — no Try could catch it.
+
+## Targets out of reach
+
+Every move checks its target before the robot starts. When the arm cannot get there — no inverse
+kinematics solution, or a joint past its soft limit — the move fails with the catchable
+`outOfReach` and the robot does not move: the RAPID way of trapping ERR_ROBLIMIT /
+ERR_OUTSIDE_REACH. `jointsOf(…)` of an unreachable point fails the same way.
+
+```srs
+var msg: string
+var code: string
+var skipped = 0
+var parts: list point
+for _, $i in $parts
+  try
+    JumpL $parts[$i], z=40
+  catch $msg, code=$code, only=(outOfReach)
+    status warning "Part {$i} skipped: {$msg}"
+    $skipped = $skipped + 1
+  end
+end
+```
+
+To decide without failing at all, test first: `if reachable($parts[$i]) … end`. A joint that
+still crosses its limit while moving is the fatal `jointLimit` fault.
 
 ## Waits that fail
 
@@ -104,6 +141,7 @@ end
 | Plugin step, plugin functions | `pluginFailed`, `pluginTimeout`, `pluginNotRunning` |
 | Moves with a template or list target | `pointNotFound` |
 | Move Arc | `arcDegenerate`, `pointNotFound` |
+| Any move, Move to Joints, `jointsOf(…)` | `outOfReach` (checked before the move starts) |
 | List, Save Position | `indexOutOfRange` |
 | Prompt (timeout without a timeout button) | `promptTimeout` |
 | Raise Error | `userError` or your own code |

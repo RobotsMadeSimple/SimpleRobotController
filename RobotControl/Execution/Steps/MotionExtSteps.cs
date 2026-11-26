@@ -69,6 +69,9 @@ namespace Controller.RobotControl.Execution
             if (!ArcPath.TryTessellate(start, via, end, tolerance, out var waypoints, out var radii, out var arcError))
                 return ctx.Fail(ErrorCodes.ArcDegenerate, $"{desc}: {arcError}");
 
+            // The whole arc must stay in reach (catchable outOfReach otherwise).
+            if (ctx.FailIfUnreachable(step, waypoints) is { } unreachable) return unreachable;
+
             var ev = ctx.Eval;
             ctx.Motion.StartContinuous(waypoints, radii,
                 ev.OptionalField(step, "speed", step.Speed),
@@ -243,10 +246,24 @@ namespace Controller.RobotControl.Execution
     {
         public static readonly SavePositionStep Instance = new();
 
+        /// <summary>savePositionSource that stores the joint values instead of the TCP pose.</summary>
+        public const string JointsSource = "joints";
+
         public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
         {
+            if (step.SavePositionSource == JointsSource)
+            {
+                // A joints value is an Objects-list element {j1, j2, j3, j4} — the shape MoveJoints,
+                // poseOf() and the reach functions read. A saved point is Cartesian, so it cannot hold one.
+                if (step.SavePositionTo == "point")
+                    return ctx.Fail(ErrorCodes.BadListOperation,
+                        $"{ProgressReporter.StepDescription(step)}: joint values go into an Objects list, not a saved point");
+                return ToVariable(step, ctx, Reachability.ToRecord(ctx.Controller.LiveJoints), ListElementType.Record);
+            }
             var pose = MotionExtSteps.ProgramPose(ctx, step.SavePositionSource);
-            return step.SavePositionTo == "point" ? ToPoint(step, ctx, pose) : ToVariable(step, ctx, pose);
+            return step.SavePositionTo == "point"
+                ? ToPoint(step, ctx, pose)
+                : ToVariable(step, ctx, ObjectRecord.FromPoint(MotionExtSteps.ToVal(pose)), ListElementType.Point);
         }
 
         private static StepOutcome ToPoint(ProgramStep step, ExecutionContext ctx, Vector6 pose)
@@ -278,23 +295,23 @@ namespace Controller.RobotControl.Execution
             return StepOutcome.Advance;
         }
 
-        private static StepOutcome ToVariable(ProgramStep step, ExecutionContext ctx, Vector6 pose)
+        private static StepOutcome ToVariable(ProgramStep step, ExecutionContext ctx, ObjectRecord element, ListElementType elementType)
         {
             string desc = ProgressReporter.StepDescription(step);
+            string want = elementType == ListElementType.Point ? "Points" : "Objects";
             var name = step.VariableName?.Trim().TrimStart('$') ?? "";
-            if (name.Length == 0) return ctx.Finish(ProgramStatus.Error, $"{desc}: no Points variable is selected");
+            if (name.Length == 0) return ctx.Finish(ProgramStatus.Error, $"{desc}: no {want} variable is selected");
 
             var vars = ctx.Vars;
             vars.Lists.TryGetValue(name, out var list);
-            if (list != null && list.ElementType != ListElementType.Point)
-                return ctx.Fail(ErrorCodes.BadListOperation, $"{desc}: '${name}' is a {list.ElementType} list, not a Points list");
+            if (list != null && list.ElementType != elementType)
+                return ctx.Fail(ErrorCodes.BadListOperation, $"{desc}: '${name}' is a {list.ElementType} list, not a{(want == "Objects" ? "n" : "")} {want} list");
 
-            var element = ObjectRecord.FromPoint(MotionExtSteps.ToVal(pose));
             string mode = string.IsNullOrEmpty(step.SavePositionMode) ? "replace" : step.SavePositionMode;
             if (mode == "replace")
             {
                 // Exactly one element, as a stop condition's position variable is: $var[0] is the pose.
-                vars.SetList(name, new ListVar { ElementType = ListElementType.Point, Items = [element] });
+                vars.SetList(name, new ListVar { ElementType = elementType, Items = [element] });
                 return StepOutcome.Advance;
             }
 
@@ -319,7 +336,7 @@ namespace Controller.RobotControl.Execution
                 default:
                     return ctx.Fail(ErrorCodes.BadListOperation, $"{desc}: unknown mode '{mode}' (replace, append, insert or set)");
             }
-            vars.SetList(name, new ListVar { ElementType = ListElementType.Point, Items = items });
+            vars.SetList(name, new ListVar { ElementType = elementType, Items = items });
             return StepOutcome.Advance;
         }
     }

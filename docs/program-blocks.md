@@ -727,7 +727,7 @@ also goes outward. Each catch is logged (`[Caught <code>] <message> — retry 1 
 
 **Catchable codes:** `waitTimeout`, `visionTimeout`, `visionFailed`, `httpFailed`,
 `httpTimeout`, `receiveTimeout`, `pluginFailed`, `pluginTimeout`, `pluginNotRunning`,
-`promptTimeout`, `pointNotFound`, `arcDegenerate`, `indexOutOfRange`, `userError` and any
+`promptTimeout`, `pointNotFound`, `arcDegenerate`, `indexOutOfRange`, `outOfReach`, `userError` and any
 RaiseError code of your own. **Fatal, never caught:** motion faults and joint limits, driver
 disconnects, e-stop, a user Stop, unknown variables, expression syntax errors and writes to
 computed variables — these are authoring or hardware problems a Try must not hide. What the
@@ -742,6 +742,8 @@ existing steps fail with:
 | HttpReceive | `receiveTimeout` |
 | Plugin step, plugin functions in expressions | `pluginFailed`, `pluginTimeout`, `pluginNotRunning` |
 | MoveL / MoveJ / JumpL / JumpJ with a `pointNameExpr` target | `pointNotFound` (the template names no saved point, or the points list is empty) |
+| MoveL / MoveJ / JumpL / JumpJ / MoveC / blended runs / MoveJoints | `outOfReach` — checked **before** the move starts: no IK solution, or a joint outside its soft limits (see "Reach check" below) |
+| Expressions: `jointsOf(…)` / `poseOf(…)` / `reachable(…)` | `outOfReach` (jointsOf of an unreachable point), `pointNotFound` (no such saved point, grid, stack, tool or local), `indexOutOfRange` |
 
 A program that ends `Error` reports `errorCode` in its status (when the failure has one), and
 its `currentStepId` is the step that failed.
@@ -814,12 +816,12 @@ spot (the same rule TeachPoint uses).
 
 | Field | Meaning |
 |---|---|
-| `savePositionTo` | `"variable"` (default) — a Points list; `"point"` — a saved point |
+| `savePositionTo` | `"variable"` (default) — a Points list (an Objects list for joint values); `"point"` — a saved point |
 | `variableName` | the Points list (created if not declared) |
 | `savePositionMode` | `"replace"` (default: the list becomes exactly this pose, like a stop condition's position variable), `"append"`, `"insert"` (at the index, 0…count), `"set"` (replace the element at the index) |
 | `savePositionIndex` | index for insert / set; an expression in `expressions.savePositionIndex` |
 | `pointId` / `pointName` | the saved point — by id first, then by name; a name that does not exist yet is **created**. Written through the point repository, so the points history records it. |
-| `savePositionSource` | `"actual"` (default, the live TCP) or `"target"` (the last commanded target) |
+| `savePositionSource` | `"actual"` (default, the live TCP), `"target"` (the last commanded target) or `"joints"` — the live joint values as one Objects-list element `{j1, j2, j3, j4}` (the shape MoveJoints and `poseOf()` read). Joint values never go into a saved point (validator `unsupportedOnStep`, run time `badListOperation`). |
 
 Failures: an index outside the list → `indexOutOfRange` (catchable); a list that is not a Points
 list → `badListOperation`; a point linked only by an id that no longer exists → `pointNotFound`.
@@ -860,6 +862,65 @@ Not part of a Move Arc: a stop condition (validator error `unsupportedOnStep`), 
 and blending (warnings — ignored). Validator also: a missing or unknown via, a via that is the
 end point, and a tolerance at or below 0.
 
+### MoveJoints — move to joint values (MoveAbsJ)
+
+`type: "MoveJoints"` (text alias `MoveAbsJ`) — a joint-interpolated move straight to joint
+values: no Cartesian target and no inverse kinematics (RAPID `MoveAbsJ`). The joint numbering
+is the controller's joint-limit layout — the same as the app's Joint Limits page:
+
+| Joint | ASTRO | CNC4Axis (identity kinematics) |
+|---|---|---|
+| `j1` | J1 base rotation, ° | X, mm |
+| `j2` | radial reach, mm | Y, mm |
+| `j3` | vertical, mm | Z, mm |
+| `j4` | J4 tool rotation, ° | RZ, ° |
+
+| Field | Meaning |
+|---|---|
+| `jointsExpr` | optional: a **joints value** — `$home[0]` (an element of an Objects list with fields `j1…j4`, e.g. from SavePosition `source: "joints"`) or `jointsOf(…)` |
+| `j1` … `j4` | single joints on top of it (literals, or expressions in `expressions.j1…j4`). A joint left empty keeps its **current** value. |
+| `speed` `accel` `decel` | as for MoveJ (joint units/s); the speed override and SetSpeedFactor apply |
+| `motionProfile` | this move's speed profile (see "Motion profile" below) |
+| `moveStopCondition` … | the stop condition, exactly as on MoveJ |
+
+The target starts from the live joints, takes `jointsExpr` when set, then the `j*` fields. A
+joint outside its soft limit fails with the catchable `outOfReach` ("J2 limit (500 > 450)")
+before anything moves; a `jointsExpr` that is a Points element or a plain number ends the
+program ("convert a point with jointsOf(…)"). Skipped in background programs like every move.
+Validator: no joint value at all (warning), a `jointsExpr` that is not a whole value or names a
+Points list, an unknown `motionProfile`.
+
+### Motion profile — `motionProfile`
+
+MoveL, MoveJ, JumpL, JumpJ and MoveJoints take `motionProfile`: `"trapezoid"` or `"scurve"`;
+empty = the robot config's `motionProfile` (GetRobotConfig; default `"trapezoid"`). A blended run
+uses its first move's value; a Jump uses its own for every leg. MoveC and ThreadMove use the
+config's. The S-curve is jerk-limited — the acceleration ramps instead of stepping — and takes a
+little longer than the trapezoid with the same accel / decel. Homing and jogging always keep the
+trapezoid.
+
+### Reach check — `outOfReach`
+
+Every robot move checks its target **before** it is dispatched, with the robot's real inverse
+kinematics, the active tool (plus the move's tool offset) and the joint windows the motion
+thread enforces:
+
+| Move | Checked |
+|---|---|
+| MoveL | the end, and points every ~5 mm along the line (skipped between the ends when the start is itself out of range — a corrective move back into range) |
+| MoveJ | the end |
+| JumpL / JumpJ | the lift point, the point above the target, and the target |
+| blended run | every corner |
+| MoveC | every point of the tessellated arc |
+| MoveJoints | the joint target against the joint windows |
+
+A target with no IK solution ("outside reach") or a joint past its soft limit ("J2 limit (512 >
+450)") fails with the catchable `outOfReach`, so a Try can handle it the RAPID way
+(ERR_ROBLIMIT / ERR_OUTSIDE_REACH). With joint limits off, only IK solvability is checked. A
+joint that still crosses its limit **mid-move** is the motion thread's fatal `jointLimit` fault,
+as before. The same check without moving: `reachable(point)` / `jointsOf(point)`
+([expressions-and-variables.md](expressions-and-variables.md) §2, "Reach and kinematics").
+
 ### ListOp — list operations (C)
 
 `type: "ListOp"`, `variableName` (the list), `listAction`, and per action:
@@ -878,8 +939,11 @@ end point, and a tolerance at or below 0.
 
 The **value** of a Number / Boolean element is `listValueExpr` (an expression; a Boolean stores
 0 / 1). The **fields** of a Point / Record element are `listFields: {field: expression}` — a
-Point's are its axes `x y z rx ry rz` (a new element's missing axes are 0). `listIndex` may be an
-expression in `expressions.listIndex`; it is rounded.
+Point's are its axes `x y z rx ry rz` (a new element's missing axes are 0). A Point / Record
+element may instead be a **whole value** in `listValueExpr` (no fields): another list's element
+(`$pts[2]`), `poseOf(…)` (a pose — Points or Objects lists) or `jointsOf(…)` (a joints value
+`{j1…j4}` — Objects lists). `listIndex` may be an expression in `expressions.listIndex`; it is
+rounded.
 
 Everything is evaluated before the list changes, so a failing step leaves the list as it was.
 An index outside the list fails `indexOutOfRange` (catchable). A step that does not fit the

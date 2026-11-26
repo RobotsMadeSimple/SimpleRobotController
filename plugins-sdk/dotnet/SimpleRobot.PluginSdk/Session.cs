@@ -414,7 +414,9 @@ internal sealed class Session
     private class PluginContext : IPluginContext
     {
         protected readonly Session S;
-        public PluginContext(Session s) { S = s; }
+        public PluginContext(Session s) { S = s; Robot = new RobotApi(this); }
+
+        public IRobotApi Robot { get; }
 
         public JsonElement Config => S.Config;
         public string ControllerVersion => S.ControllerVersion;
@@ -462,6 +464,67 @@ internal sealed class Session
             if (r.ValueKind == JsonValueKind.Object && r.TryGetProperty(name, out var o) && o.ValueKind == JsonValueKind.Object)
                 foreach (var p in o.EnumerateObject()) d[p.Name] = p.Value;
             return d;
+        }
+    }
+
+    /// <summary>Thin convenience wrappers over <c>controller.command</c> (see <see cref="IRobotApi"/>).</summary>
+    private sealed class RobotApi : IRobotApi
+    {
+        private readonly IPluginContext _c;
+        public RobotApi(IPluginContext c) { _c = c; }
+
+        public Task<JsonElement> MoveL(double x, double y, double z, double rx = 0, double ry = 0, double rz = 0, double? speed = null, double? accel = null)
+            => Move("MoveL", x, y, z, rx, ry, rz, speed, accel);
+        public Task<JsonElement> MoveJ(double x, double y, double z, double rx = 0, double ry = 0, double rz = 0, double? speed = null, double? accel = null)
+            => Move("MoveJ", x, y, z, rx, ry, rz, speed, accel);
+
+        private Task<JsonElement> Move(string cmd, double x, double y, double z, double rx, double ry, double rz, double? speed, double? accel)
+        {
+            var p = new Dictionary<string, object?> { ["x"] = x, ["y"] = y, ["z"] = z, ["rx"] = rx, ["ry"] = ry, ["rz"] = rz };
+            if (speed is not null) p["speed"] = speed;
+            if (accel is not null) p["accel"] = accel;
+            return _c.CommandAsync(cmd, p);
+        }
+
+        public Task<JsonElement> Home() => _c.CommandAsync("Home");
+        public Task<JsonElement> Stop() => _c.CommandAsync("StopJog");
+
+        public async Task<JsonElement> GetPoints() => ParseList(await _c.CommandAsync("GetPoints").ConfigureAwait(false), "points");
+        public Task<JsonElement> TeachPoint(string name) => _c.CommandAsync("TeachPoint", new { name });
+        public async Task<JsonElement> GetGrids() => ParseList(await _c.CommandAsync("GetGrids").ConfigureAwait(false), "grids");
+        public async Task<JsonElement> GetStacks() => ParseList(await _c.CommandAsync("GetStacks").ConfigureAwait(false), "stacks");
+
+        public async Task<PluginPoint> Position()
+        {
+            var s = await _c.CommandAsync("GetStatus").ConfigureAwait(false);
+            double G(string k) => s.ValueKind == JsonValueKind.Object && s.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0;
+            return new PluginPoint(G("x"), G("y"), G("z"), G("rx"), G("ry"), G("rz"));
+        }
+
+        public async Task<bool> IsMoving()
+        {
+            var s = await _c.CommandAsync("GetStatus").ConfigureAwait(false);
+            return s.ValueKind == JsonValueKind.Object && s.TryGetProperty("moving", out var v)
+                && (v.ValueKind == JsonValueKind.True || (v.ValueKind == JsonValueKind.Number && v.GetDouble() != 0));
+        }
+
+        // The point/grid/stack commands return their list as a JSON *string*; parse it back to an array.
+        private static JsonElement ParseList(JsonElement result, string key)
+        {
+            if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty(key, out var el))
+            {
+                if (el.ValueKind == JsonValueKind.String)
+                {
+                    var s = el.GetString();
+                    if (!string.IsNullOrEmpty(s))
+                        try { return JsonDocument.Parse(s).RootElement.Clone(); } catch { /* fall through to [] */ }
+                }
+                else if (el.ValueKind == JsonValueKind.Array)
+                {
+                    return el.Clone();
+                }
+            }
+            return JsonDocument.Parse("[]").RootElement.Clone();
         }
     }
 

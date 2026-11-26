@@ -26,7 +26,8 @@ internal static class SrsTestKit
          .Add(SrsRefKind.Program, "bg-1", "Conveyor").Add(SrsRefKind.Program, "bg-guid-1", "BgProg")
          .Add(SrsRefKind.Vision, "vp-1", "Detect Parts").Add(SrsRefKind.Vision, "vp-2", "Find")
          .Add(SrsRefKind.Device, "nano-1", "Arduino Nano").Add(SrsRefKind.Device, "aux-1", "Aux")
-         .Add(SrsRefKind.Camera, "cam-1", "Top").Add(SrsRefKind.Camera, "cam-2", "Side Cam");
+         .Add(SrsRefKind.Camera, "cam-1", "Top").Add(SrsRefKind.Camera, "cam-2", "Side Cam")
+         .Add(SrsRefKind.Conveyor, "c1a2b3c4d5e6", "Infeed").Add(SrsRefKind.Conveyor, "conv_2", "Out Belt");
         t.AddTool("vp-1", "t1", "Top edge").AddTool("vp-1", "t5", "Board").AddTool("vp-1", "t6", "dup").AddTool("vp-1", "t7", "dup")
          .AddTool("vp-2", "f1", "Parts");
         return t;
@@ -237,8 +238,12 @@ internal static class SrsTestKit
                 }
                 case K.DeviceRef:
                 case K.CameraRef:
+                case K.ConveyorRef:
                 {
-                    var known = Names().List(f.Kind == K.DeviceRef ? SrsRefKind.Device : SrsRefKind.Camera);
+                    var known = Names().List(f.Kind switch
+                    {
+                        K.DeviceRef => SrsRefKind.Device, K.ConveyorRef => SrsRefKind.Conveyor, _ => SrsRefKind.Camera,
+                    });
                     j[f.Key] = Chance(0.7) ? Pick(known).Id : Pick(["dangling-dev", "Arduino Nano", "", "Top"]);
                     break;
                 }

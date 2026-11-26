@@ -155,6 +155,8 @@ public static class FieldKinds
     public const string DeviceRef  = "deviceRef";
     public const string CameraRef  = "cameraRef";
     public const string LabelRef   = "labelRef";
+    /// <summary>A configured conveyor, by stable id (GetConveyors).</summary>
+    public const string ConveyorRef = "conveyorRef";
     /// <summary>Plugin step identity: pluginId + pluginStepId.</summary>
     public const string PluginRef  = "pluginRef";
     /// <summary>Composite: a move target (point / expression / grid / stack).</summary>
@@ -183,6 +185,6 @@ public static class FieldKinds
         Number, Integer, Bool, Enum, Text, Template, Expr, Condition, VarWrite, VarRead, ListVar,
         PointRef, ToolRef, LocalRef, GridRef, StackRef, RoutineRef, ProgramRef, VisionRef, DeviceRef,
         CameraRef, LabelRef, PluginRef, Target, Axes6, MappingOut, Rows, ExprMap, TextList, Steps,
-        Branches, Cases, Json,
+        Branches, Cases, Json, ConveyorRef,
     ];
 }

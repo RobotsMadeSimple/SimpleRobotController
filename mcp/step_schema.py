@@ -290,8 +290,21 @@ STEPS = {
     },
     "ConveyorAction": {"what": "Run/stop an aux axis configured as a conveyor.",
                        "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "conveyorAction": "string, e.g. Start | Stop."}},
+    "ConveyorTrack": {"what": "Start tracking the oldest part in a conveyor's pick window (docs/conveyor-tracking.md); later moves resolve in the part frame and ride the belt.",
+                      "fields": {"conveyorId": "string, the conveyor's stable id (GetConveyors).", "trackWait": "bool, default true: wait for a part.",
+                                 "trackTimeoutMs": "int, ms; null/0 = forever, else fails conveyorTimeout (catchable)."}},
+    "ConveyorEndTracking": {"what": "Stop tracking; the robot stays where it is. The part counts as picked.",
+                            "fields": {"conveyorId": "string, optional (empty = the tracked one).", "conveyorRelease": "bool: leave the part on the belt instead."}},
+    "ConveyorAddPart": {"what": "Queue a part at a known conveyor X now (e.g. from vision).",
+                        "fields": {"conveyorId": "string.", "partOffsetMm": "number (expression key partOffsetMm), the part's X along the belt."}},
+    "ConveyorClearQueue": {"what": "Drop every queued part of a conveyor.",
+                           "fields": {"conveyorId": "string."}},
     "RotaryIndex": {"what": "Index an aux axis configured as a rotary table.",
                     "fields": {"auxDeviceId": "string.", "auxAxisIndex": "int.", "rotaryDirection": "int, +1 / -1.", "rotaryCount": "int, positions to index."}},
+    "SiloAction": {"what": "Drive an aux axis configured as a silo (stacked-part lift, docs/aux-silo.md). Home drives down into the stop and zeroes; Present lifts the top part to the rim and takes one off the count (fails siloNotHomed / siloEmpty, catchable); Refill sets count = capacity and homes; SetCount sets the count without moving.",
+                   "fields": {"auxDeviceId": "string. Aux device id (stable id).", "auxAxisIndex": "int. The silo's axis.",
+                              "siloAction": '"Home" | "Present" | "Refill" | "SetCount".',
+                              "siloCount": "int, SetCount only (0..capacity). expressions.siloCount overrides."}},
     "SetJointPosition": {"what": "Redefine one joint's current position (re-reference it); moves nothing.",
                          "fields": {"jointIndex": "int.", "jointValue": "number. expressions.jointValue overrides."}},
     "Tare": {"what": "Zero a load cell (nothing on it).",
@@ -336,8 +349,16 @@ STEPS = {
                    "viaPointNameExpr": "string, overrides viaPoint*. Same two resolutions as pointNameExpr.",
                    "arcTolerance": "number, mm, default 0.1. Largest gap between the true arc and its segments."},
     },
+    "MoveJoints": {
+        "what": "Move to explicit joint values by joint interpolation (alias MoveAbsJ). ASTRO: J1 deg, J2 radial mm, J3 vertical mm, J4 deg; CNC4Axis: X, Y, Z, RZ. A joint left empty keeps its current value. Fails with the catchable outOfReach when a joint is outside its soft limits.",
+        "fields": {"jointsExpr": "string expression. A joints value: $list[i] (an Objects list with fields j1..j4) or jointsOf(point). Optional.",
+                   "j1": "number. expressions.j1 overrides.", "j2": "number.", "j3": "number.", "j4": "number.",
+                   "speed": "number. Joint speed (deg/s or mm/s).", "accel": "number.", "decel": "number.",
+                   "motionProfile": "\"trapezoid\" | \"scurve\"; empty = the robot config's motionProfile.",
+                   "moveStopCondition": "ConditionGroup. Same as MoveJ."},
+    },
     "SavePosition": {
-        "what": "Store the current position in a Points list variable or a saved point.",
+        "what": "Store the current position (or joint values) in a list variable or a saved point.",
         "fields": {
             "savePositionTo": '"variable" (default) | "point".',
             "variableName": "string. A list variable with elementType Point (savePositionTo variable).",
@@ -345,7 +366,7 @@ STEPS = {
             "pointName": "string. Display fallback for pointId.",
             "savePositionMode": '"replace" (default) | "append" | "insert" | "set".',
             "savePositionIndex": "int. Index for insert/set; expressions.savePositionIndex overrides.",
-            "savePositionSource": '"actual" (default) | "target" (last commanded target).',
+            "savePositionSource": '"actual" (default) | "target" (last commanded target) | "joints" (joint values {j1..j4} into an Objects list).',
         },
     },
     "SetSpeedFactor": {
@@ -397,7 +418,7 @@ STEPS = {
             "variableName": "string. The list variable.",
             "listAction": '"append" (default) | "insert" | "removeAt" | "clear" | "set" | "setField" | "sort" | "reverse" | "copyFrom".',
             "listIndex": "int. For insert/removeAt/set/setField; expressions.listIndex overrides.",
-            "listValueExpr": "string expression. Element value for Number/Boolean lists (append/insert/set).",
+            "listValueExpr": "string expression. Element value for Number/Boolean lists (append/insert/set); for Point/Record lists a whole value: $list[i], poseOf(...), jointsOf(...).",
             "listFields": ("object {field: expr}. Element fields for Point/Record lists; append with no "
                            "fields on a Points list appends the current position."),
             "listSourceVariable": "string. List to copy from (copyFrom).",
@@ -429,12 +450,14 @@ STEPS["Wait"]["fields"]["waitTimeoutAction"] = '"continue" (default) | "error" (
 STEPS["SetOutput"]["fields"]["outputAction"] = '"set" (default; uses outputValue) | "toggle".'
 STEPS["CallRoutine"]["fields"]["routineArgs"] = "object {param: expr}. One per in / in-out routine parameter, evaluated before the call."
 STEPS["CallRoutine"]["fields"]["routineOutputs"] = "array of {key, variableName}. Out / in-out parameters copied back on return."
+for _t in ("MoveL", "MoveJ", "JumpL", "JumpJ"):
+    STEPS[_t]["fields"]["motionProfile"] = '"trapezoid" | "scurve" - this move\'s speed profile; empty = the robot config motionProfile.'
 
 # Step types the executor refuses to run inside a background program.
 BACKGROUND_FORBIDDEN = {
     "MoveL", "MoveJ", "JumpL", "JumpJ", "ThreadMove", "CncProgram",
     "SetTool", "RunHoming", "SetSpeedL", "SetSpeedJ", "SetBlendRadius",
-    "MoveC", "SetSpeedFactor",
+    "MoveC", "SetSpeedFactor", "MoveJoints",
 }
 
 # Fields whose value is a nested step list, for recursive walks. Lists of {steps} objects

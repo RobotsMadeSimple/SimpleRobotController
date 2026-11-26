@@ -39,6 +39,27 @@ public static class JointLimiter
         switch (i) { case 0: v.X = x; break; case 1: v.Y = x; break; case 2: v.Z = x; break; default: v.RZ = x; break; }
     }
 
+    /// <summary>
+    /// Whether a joint target lies inside every window (edges count as inside, within 1e-9) —
+    /// the pre-move check behind <c>reachable()</c> / <c>jointsOf()</c> and the moves' own
+    /// <c>outOfReach</c> failure. Unlike <see cref="Clamp"/> there is no "already outside"
+    /// allowance: a target is either in range or it is not. Reports the first joint out of
+    /// range (0..3) and its direction (+1 past max, -1 past min).
+    /// </summary>
+    public static Result Check(Vector6 target, (double lo, double hi)[] lims)
+    {
+        for (int i = 0; i < 4 && i < lims.Length; i++)
+        {
+            double v  = Comp(target, i);
+            double lo = Math.Min(lims[i].lo, lims[i].hi);
+            double hi = Math.Max(lims[i].lo, lims[i].hi);
+            if (double.IsNaN(v)) return new Result(true, i, 1, target);
+            if (v > hi + 1e-9) return new Result(true, i, 1, target);
+            if (v < lo - 1e-9) return new Result(true, i, -1, target);
+        }
+        return new Result(false, -1, 0, target);
+    }
+
     /// <param name="lims">Four (lo, hi) windows for joints 0..3.</param>
     public static Result Clamp(Vector6 target, Vector6 before, (double lo, double hi)[] lims)
     {

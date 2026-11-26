@@ -1,0 +1,815 @@
+{
+  "name": "ASTRO",
+  "description": "RobotsMadeSimple ASTRO: J1 rotary base, J2/J3 CoreXY vertical + reach, J4 wrist. Simplified from the ASTRO Fusion assembly (envelope boxes / cylinders of each moving group). Lengths in mm, angles in degrees, in the robot's base frame (Z up, the J1 axis through the origin), at the 'zero pose' the geometry is drawn in: the reach pointing -Y.",
+  "units": "mm",
+  "flange": "Wrist",
+  "adjustable": [
+    {
+      "id": "vertical",
+      "setting": "astroVerticalTravelMm",
+      "nominal": 400,
+      "direction": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "radial",
+      "setting": "astroRadialTravelMm",
+      "nominal": 400,
+      "direction": [
+        0,
+        1,
+        0
+      ]
+    }
+  ],
+  "joints": [
+    {
+      "name": "J1",
+      "type": "revolute",
+      "parent": "Base",
+      "child": "Turret",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "value": {
+        "field": "joint1Angle",
+        "scale": -1.0,
+        "zero": 90.0
+      },
+      "comment": "Controller J1 = 90 deg points the reach along -Y (operator Y = -math Y); +J1 turns clockwise seen from above."
+    },
+    {
+      "name": "J2",
+      "type": "prismatic",
+      "parent": "Turret",
+      "child": "Carriage",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "value": {
+        "field": "joint2Z",
+        "scale": 1.0,
+        "zero": 311.1
+      },
+      "comment": "Vertical: the controller's joint2Z is the J4 flange height; 311.1 mm in the drawn pose."
+    },
+    {
+      "name": "J3",
+      "type": "prismatic",
+      "parent": "Carriage",
+      "child": "Reach",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        -1,
+        0
+      ],
+      "value": {
+        "field": "joint2X",
+        "scale": 1.0,
+        "zero": 319.8
+      },
+      "comment": "Radial reach: the controller's joint2X is the flange's distance along the reach; 319.8 mm in the drawn pose."
+    },
+    {
+      "name": "J4",
+      "type": "revolute",
+      "parent": "Reach",
+      "child": "Wrist",
+      "origin": [
+        58.5,
+        -319.8,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "value": {
+        "field": "joint4Angle",
+        "scale": -1.0,
+        "zero": 0.0
+      },
+      "comment": "Wrist, 58.5 mm off the reach line — the CAD offcenter (J1 axis to J4 axis), matching the controller's kinematics (ASTROKinematics J4OffsetLocal)."
+    }
+  ],
+  "links": [
+    {
+      "name": "Base",
+      "color": [
+        60,
+        60,
+        66
+      ],
+      "shapes": [
+        {
+          "type": "cylinder",
+          "center": [
+            0,
+            0
+          ],
+          "radius": 60,
+          "z": [
+            -10,
+            0
+          ],
+          "name": "Mount Plate",
+          "holes": [
+            {
+              "center": [
+                -48.3,
+                12.94
+              ],
+              "diameter": 6.6,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "M6 mounting"
+            },
+            {
+              "center": [
+                -12.94,
+                48.3
+              ],
+              "diameter": 6.6,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "M6 mounting"
+            },
+            {
+              "center": [
+                35.36,
+                35.36
+              ],
+              "diameter": 6.6,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "M6 mounting"
+            },
+            {
+              "center": [
+                48.3,
+                -12.94
+              ],
+              "diameter": 6.6,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "M6 mounting"
+            },
+            {
+              "center": [
+                12.94,
+                -48.3
+              ],
+              "diameter": 6.6,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "M6 mounting"
+            },
+            {
+              "center": [
+                -35.36,
+                -35.36
+              ],
+              "diameter": 6.6,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "M6 mounting"
+            },
+            {
+              "center": [
+                35.36,
+                -35.36
+              ],
+              "diameter": 4.0,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "locating"
+            },
+            {
+              "center": [
+                -35.36,
+                35.36
+              ],
+              "diameter": 4.0,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "locating"
+            },
+            {
+              "center": [
+                0,
+                0
+              ],
+              "diameter": 18.0,
+              "z": [
+                -10,
+                0
+              ],
+              "name": "centre"
+            }
+          ]
+        },
+        {
+          "type": "cylinder",
+          "center": [
+            0,
+            0
+          ],
+          "radius": 40,
+          "z": [
+            0,
+            6.5
+          ]
+        },
+        {
+          "type": "cylinder",
+          "center": [
+            0,
+            0
+          ],
+          "radius": 47.8,
+          "z": [
+            6.5,
+            35
+          ]
+        }
+      ],
+      "comment": "The J1 Flange Base Mount from the ASTRO CAD: 6 x 6.6 mm (M6 clearance) and 2 x 4 mm locating holes on a 100 mm circle, an 18 mm centre hole -- joint the robot to your assembly by these."
+    },
+    {
+      "name": "Turret",
+      "color": [
+        200,
+        60,
+        50
+      ],
+      "shapes": [
+        {
+          "type": "cylinder",
+          "center": [
+            0,
+            0
+          ],
+          "radius": 47.8,
+          "z": [
+            35,
+            47.2
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            -110,
+            -35,
+            47
+          ],
+          "max": [
+            35,
+            35,
+            59.7
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            -32,
+            -34.9,
+            59.7
+          ],
+          "max": [
+            35,
+            34.9,
+            124.7
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            -109,
+            -69,
+            25.8
+          ],
+          "max": [
+            -53,
+            -13,
+            133
+          ],
+          "color": [
+            40,
+            40,
+            44
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            -52,
+            -30,
+            94.7
+          ],
+          "max": [
+            -32,
+            30,
+            494.7
+          ],
+          "color": [
+            170,
+            172,
+            178
+          ],
+          "adjust": {
+            "id": "vertical",
+            "role": "stretch"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            -32,
+            -26,
+            94.7
+          ],
+          "max": [
+            -24,
+            -14,
+            494.7
+          ],
+          "color": [
+            120,
+            122,
+            128
+          ],
+          "adjust": {
+            "id": "vertical",
+            "role": "stretch"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            -32,
+            14,
+            94.7
+          ],
+          "max": [
+            -24,
+            26,
+            494.7
+          ],
+          "color": [
+            120,
+            122,
+            128
+          ],
+          "adjust": {
+            "id": "vertical",
+            "role": "stretch"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            -52,
+            -40,
+            29.7
+          ],
+          "max": [
+            -35,
+            90,
+            94.7
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            -52,
+            -90,
+            494.7
+          ],
+          "max": [
+            -35,
+            40,
+            559.7
+          ],
+          "adjust": {
+            "id": "vertical",
+            "role": "end"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            -138,
+            32,
+            34.2
+          ],
+          "max": [
+            -30.8,
+            88,
+            90.2
+          ],
+          "color": [
+            40,
+            40,
+            44
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            -138,
+            -88,
+            499.2
+          ],
+          "max": [
+            -30.8,
+            -32,
+            555.2
+          ],
+          "color": [
+            40,
+            40,
+            44
+          ],
+          "adjust": {
+            "id": "vertical",
+            "role": "end"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            -49,
+            -27.5,
+            529.7
+          ],
+          "max": [
+            30,
+            27.5,
+            559.7
+          ],
+          "adjust": {
+            "id": "vertical",
+            "role": "end"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Carriage",
+      "color": [
+        200,
+        60,
+        50
+      ],
+      "shapes": [
+        {
+          "type": "box",
+          "min": [
+            -19,
+            -54,
+            378.6
+          ],
+          "max": [
+            -3,
+            54,
+            445.6
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Reach",
+      "color": [
+        170,
+        172,
+        178
+      ],
+      "shapes": [
+        {
+          "type": "box",
+          "min": [
+            10,
+            -292.3,
+            382.1
+          ],
+          "max": [
+            30,
+            187.7,
+            442.1
+          ],
+          "adjust": {
+            "id": "radial",
+            "role": "stretch"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            2,
+            -252.3,
+            386.1
+          ],
+          "max": [
+            10,
+            147.7,
+            398.1
+          ],
+          "color": [
+            120,
+            122,
+            128
+          ],
+          "adjust": {
+            "id": "radial",
+            "role": "stretch"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            2,
+            -252.3,
+            426.1
+          ],
+          "max": [
+            10,
+            147.7,
+            438.1
+          ],
+          "color": [
+            120,
+            122,
+            128
+          ],
+          "adjust": {
+            "id": "radial",
+            "role": "stretch"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            -19,
+            -304.3,
+            378.6
+          ],
+          "max": [
+            30,
+            -292.3,
+            442.1
+          ],
+          "color": [
+            200,
+            60,
+            50
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            -19,
+            187.7,
+            378.6
+          ],
+          "max": [
+            30,
+            199.7,
+            442.1
+          ],
+          "color": [
+            200,
+            60,
+            50
+          ],
+          "adjust": {
+            "id": "radial",
+            "role": "end"
+          }
+        },
+        {
+          "type": "box",
+          "min": [
+            -43,
+            -304.3,
+            378.6
+          ],
+          "max": [
+            -19,
+            -284.3,
+            423.6
+          ],
+          "color": [
+            200,
+            60,
+            50
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            19.856,
+            -342.3,
+            382.1
+          ],
+          "max": [
+            70.856,
+            -252.3,
+            432.1
+          ],
+          "color": [
+            200,
+            60,
+            50
+          ]
+        },
+        {
+          "type": "box",
+          "min": [
+            23.356,
+            -340.8,
+            363
+          ],
+          "max": [
+            69.356,
+            -298.8,
+            427.6
+          ],
+          "color": [
+            40,
+            40,
+            44
+          ]
+        },
+        {
+          "type": "cylinder",
+          "center": [
+            58.5,
+            -319.8
+          ],
+          "radius": 21,
+          "z": [
+            324.1,
+            373.6
+          ],
+          "color": [
+            150,
+            150,
+            155
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Wrist",
+      "color": [
+        150,
+        150,
+        155
+      ],
+      "shapes": [
+        {
+          "type": "cylinder",
+          "center": [
+            58.5,
+            -319.8
+          ],
+          "radius": 16,
+          "z": [
+            311.1,
+            314.1
+          ],
+          "name": "Flange",
+          "holes": [
+            {
+              "center": [
+                60.346,
+                -320.39
+              ],
+              "diameter": 3.9,
+              "z": [
+                311.1,
+                314.1
+              ],
+              "name": "tool mounting"
+            },
+            {
+              "center": [
+                36.366,
+                -319.2
+              ],
+              "diameter": 3.9,
+              "z": [
+                311.1,
+                314.1
+              ],
+              "name": "tool mounting"
+            },
+            {
+              "center": [
+                47.756,
+                -331.78
+              ],
+              "diameter": 3.9,
+              "z": [
+                311.1,
+                314.1
+              ],
+              "name": "tool mounting"
+            },
+            {
+              "center": [
+                48.956,
+                -307.81
+              ],
+              "diameter": 3.9,
+              "z": [
+                311.1,
+                314.1
+              ],
+              "name": "tool mounting"
+            },
+            {
+              "center": [
+                58.5,
+                -319.8
+              ],
+              "diameter": 8.0,
+              "z": [
+                311.1,
+                314.1
+              ],
+              "name": "bore"
+            }
+          ]
+        },
+        {
+          "type": "cylinder",
+          "center": [
+            58.5,
+            -319.8
+          ],
+          "radius": 8,
+          "z": [
+            314.1,
+            324.1
+          ],
+          "name": "Hub",
+          "holes": [
+            {
+              "center": [
+                58.5,
+                -319.8
+              ],
+              "diameter": 8.0,
+              "z": [
+                314.1,
+                324.1
+              ],
+              "name": "bore"
+            }
+          ]
+        }
+      ],
+      "comment": "The J4 flange coupler from the ASTRO CAD: tools bolt to its face by 4 x 3.9 mm holes on a 24 mm circle (they match the Servo Gripper's Side Tool Mounting)."
+    }
+  ]
+}

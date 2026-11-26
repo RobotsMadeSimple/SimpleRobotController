@@ -56,7 +56,12 @@ namespace Controller.RobotControl.Execution
             Controller        = controller;
             Locals            = localRepo;
             BuiltPrograms     = builtProgramRepo;
-            TargetSources     = new MoveTargetSources(pointRepo, gridRepo, stackRepo, localRepo);
+            // Move targets resolve against the running program's OWN points first (bundled in the
+            // BuiltProgram), then the global library. The program is read live through
+            // CurrentProgramPoints so a called routine resolves its own points, not the caller's.
+            TargetSources     = new MoveTargetSources(
+                pointRepo, new CompositePointLookup(CurrentProgramPoints, pointRepo),
+                gridRepo, stackRepo, localRepo);
             Vars              = vars;
             IsBackground      = isBackground;
             Background        = backgroundManager;
@@ -65,6 +70,8 @@ namespace Controller.RobotControl.Execution
             {
                 IsBackground = isBackground,
                 Plugins      = () => controller.PluginManager,
+                Alarms       = () => controller.Alarms,
+                ProgramId    = () => Program?.Id,
             };
             Motion            = new MotionDispatcher(controller);
             LivePosition      = controller.GetCurrentPosition;
@@ -113,6 +120,19 @@ namespace Controller.RobotControl.Execution
         /// <summary>The program being run (set on Start; kept after it finishes).</summary>
         public BuiltProgram? Program { get; set; }
 
+        /// <summary>
+        /// The points of the program that owns the step running right now: the nearest routine on
+        /// the frame stack (a called routine owns its own points), else the top-level program. Fed
+        /// to the move resolver's composite point source so program points resolve before globals.
+        /// </summary>
+        private IReadOnlyList<Point>? CurrentProgramPoints()
+        {
+            foreach (var f in Frames.ToArray())        // innermost frame first
+                if (f.Kind == FrameKind.Routine)
+                    return f.Routine?.Points;          // the routine owns its points — no caller leak
+            return Program?.Points;
+        }
+
         /// <summary>Active local during program execution — null = no local (zero offset).</summary>
         public Vector6? ActiveLocal { get; set; }
 
@@ -141,6 +161,7 @@ namespace Controller.RobotControl.Execution
         public VisionState Vision { get; } = new();
         public HttpState   Http   { get; } = new();
         public PluginStepState PluginState { get; } = new();
+        public ConveyorStepState Conveyor { get; } = new();
 
         // Active program recordings: channelKey → (IoHistory recording id, target list-variable name).
         // Set by StartRecording, consumed + cleared by StopRecording.
@@ -247,6 +268,7 @@ namespace Controller.RobotControl.Execution
             Vision.Reset(Controller);
             Jump.Reset();
             ThreadMove.Reset();
+            Conveyor.Reset();
         }
 
         /// <summary>
@@ -418,10 +440,126 @@ namespace Controller.RobotControl.Execution
             return false;
         }
 
-        /// <summary>Resolves a move target with no side effects (false + the error text).</summary>
-        public bool TryResolveMoveTarget(ProgramStep step, out Vector6 target, out string error, Vector6? currentPos = null) =>
-            MoveTargetResolver.TryResolve(step, TargetSources, Vars, ActiveLocal, LivePosition,
-                                          out target, out error, currentPos);
+        /// <summary>Resolves a move target with no side effects (false + the error text). While this
+        /// run tracks a conveyor part the target resolves in the <b>part frame</b> instead of the
+        /// active local, and the belt travel it was resolved at is noted for the dispatcher
+        /// (<see cref="MotionDispatcher.PlanTravel"/>) so the motion thread can ride along.</summary>
+        public bool TryResolveMoveTarget(ProgramStep step, out Vector6 target, out string error, Vector6? currentPos = null)
+        {
+            var local = ActiveLocal;
+            Motion.PlanTravel = null;
+            if (IsTracking && Controller.Conveyors.TryPartFrame(out var partFrame, out var travel))
+            {
+                local = partFrame;
+                Motion.PlanTravel = travel;
+            }
+            return MoveTargetResolver.TryResolve(step, TargetSources, Vars, local, LivePosition,
+                                                 out target, out error, currentPos);
+        }
+
+        // ── Conveyor tracking ─────────────────────────────────────────────────
+
+        /// <summary>True while a conveyor part tracked by this run is being followed.</summary>
+        public bool IsTracking => Controller.Conveyors?.Tracking is { } t && ReferenceEquals(t.Owner, this);
+
+        /// <summary>
+        /// Where a tracked move to <paramref name="target"/> (resolved now) will end: the target
+        /// carried on by the belt for the move's estimated time (distance ÷ speed + speed ÷ accel,
+        /// at the given or the robot's default linear speed). The target itself when not tracking.
+        /// </summary>
+        public Vector6 PredictTrackedEnd(Vector6 target, double? speed, double? accel)
+        {
+            var svc = Controller.Conveyors;
+            if (!IsTracking || svc.Tracking is not { } t) return target;
+            var p = Controller.MotionParameters;
+            double v = speed is > 0 ? speed.Value : Math.Max(1, p.SpeedS);
+            double a = accel is > 0 ? accel.Value : Math.Max(1, p.AccelS);
+            double seconds = LivePosition().Distance3(target) / v + v / a;
+            double d = svc.SpeedOf(t.ConveyorId) * seconds;
+            return new Vector6(target.X + t.DirX * d, target.Y + t.DirY * d, target.Z, target.RX, target.RY, target.RZ);
+        }
+
+        /// <summary>Notes the belt travel now for moves built from the live position (ThreadMove)
+        /// while tracking; clears it otherwise.</summary>
+        public void StampTrackingPlan() =>
+            Motion.PlanTravel = IsTracking && Controller.Conveyors.TryPartFrame(out _, out var travel) ? travel : null;
+
+        /// <summary>
+        /// A tracking fault raised off the program thread (belt too fast, out of reach, the part
+        /// left the window) becomes this run's catchable error: any move in flight is ended and its
+        /// wait dropped, then the error goes to <see cref="Fail"/> as if the current step raised it.
+        /// Returns true when one was raised (the tick is over).
+        /// </summary>
+        public bool RaiseConveyorFault()
+        {
+            var f = Controller.Conveyors?.ConsumeFault(this);
+            if (f == null) return false;
+
+            ProgramStep? at = Motion.PendingStep ?? Motion.PendingSteps?.FirstOrDefault();
+            if (at == null && Frames.Count > 0)
+            {
+                var top = Frames.Peek();
+                if (top.Index >= 0 && top.Index < top.Steps.Count) at = top.Steps[top.Index];
+            }
+            if (Motion.AwaitingMove)
+            {
+                Controller.RequestMotionStop();
+                Motion.AwaitingMove = false;
+                Motion.PendingStep  = null;
+                Motion.PendingSteps = null;
+                if (Motion.Watch is { IsAux: false }) Motion.ClearWatch();
+            }
+            Motion.PlanTravel = null;
+            CurrentStep = at;
+            try { Fail(f.Code, f.Message); }
+            finally { CurrentStep = null; }
+            return true;
+        }
+
+        // ── Reach check (outOfReach) ──────────────────────────────────────────
+
+        /// <summary>
+        /// The pre-move reach check every robot move runs before it is dispatched: each world-frame
+        /// <paramref name="targets"/> (with the per-move <paramref name="toolOffset"/>, solved with the
+        /// active tool) must have an IK solution with every joint inside the enforced soft limits.
+        /// Null when all are reachable; otherwise the step has failed with the catchable
+        /// <c>outOfReach</c> (so a Try can handle it, RAPID-style) and this is the outcome to return.
+        /// Mid-move limit crossings are still caught by the motion thread's clamp (a fatal fault).
+        /// </summary>
+        public StepOutcome? FailIfUnreachable(ProgramStep step, IEnumerable<Vector6> targets, Vector6? toolOffset = null)
+        {
+            var tool = Controller.CurrentTool;
+            foreach (var t in targets)
+            {
+                var w = toolOffset is { } o ? RobotController.ApplyToolOffset(t, o) : t;
+                var r = Controller.CheckReach(w, tool);
+                if (r.Ok) continue;
+                return Fail(Programs.ErrorCodes.OutOfReach,
+                    $"{ProgressReporter.StepDescription(step)}: target {DescribePose(t)} is out of reach — {r.Reason}");
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// <see cref="FailIfUnreachable"/> along a straight line (a MoveL): the end, and points every
+        /// ~5 mm between — a line can leave the work envelope between two reachable ends. Skipped
+        /// between the ends when the start itself is out of range (a corrective move back into range).
+        /// </summary>
+        public StepOutcome? FailIfLineUnreachable(ProgramStep step, Vector6 start, Vector6 end, Vector6? toolOffset = null)
+        {
+            if (FailIfUnreachable(step, [end], toolOffset) is { } failed) return failed;
+            var tool = Controller.CurrentTool;
+            var s = toolOffset is { } o ? RobotController.ApplyToolOffset(start, o) : start;
+            if (!Controller.CheckReach(s, tool).Ok) return null;
+            double len = start.Distance3(end);
+            int n = (int)Math.Clamp(Math.Ceiling(len / 5.0), 1, 200);
+            var pts = new List<Vector6>(n);
+            for (int i = 1; i < n; i++) pts.Add(start + (end - start) * ((double)i / n));
+            return FailIfUnreachable(step, pts, toolOffset);
+        }
+
+        private static string DescribePose(Vector6 p) =>
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"({p.X:0.#}, {p.Y:0.#}, {p.Z:0.#}, rz {p.RZ:0.#})");
 
         /// <summary>The target comes from <c>pointNameExpr</c> (the resolver's precedence: grid,
         /// stack and the legacy variable point win over it).</summary>
@@ -442,6 +580,12 @@ namespace Controller.RobotControl.Execution
                 // While-loop re-checks run outside the step dispatch, so error here directly.
                 Finish(ProgramStatus.Error, $"Unknown variable '${ex.VariableName}' in while-loop condition");
                 return false; // exit the loop — the program is already finishing with an error
+            }
+            catch (ExpressionRuntimeException ex)
+            {
+                // e.g. jointsOf() out of reach in the condition: catchable, like inside a step.
+                Fail(ex.Code, $"While-loop condition: {ex.Message}");
+                return false;
             }
             catch (ExpressionParseException ex)
             {
@@ -498,6 +642,10 @@ namespace Controller.RobotControl.Execution
             ThreadMove.Reset();
             Homing.Reset();
 
+            // Conveyor tracking belongs to the run: it stops (the robot freezes, the part rides on)
+            Conveyor.Reset();
+            Controller.Conveyors?.ReleaseOwner(this);
+
             // Vision — a processor left running would keep grabbing and analysing frames
             Vision.Reset(Controller);
 
@@ -526,6 +674,7 @@ namespace Controller.RobotControl.Execution
             var r = new Dictionary<StepType, IStepHandler>();
             MotionSteps.Register(r);
             IoSteps.Register(r);
+            SerialSteps.Register(r);
             LoadCellSteps.Register(r);
             RecordingSteps.Register(r);
             ControlFlowSteps.Register(r);
@@ -542,6 +691,7 @@ namespace Controller.RobotControl.Execution
             MotionExtSteps.Register(r);
             DataSteps.Register(r);
             OperatorSteps.Register(r);
+            ConveyorSteps.Register(r);
             // Steps the controller does not recognise (from a newer app) are skipped.
             r[StepType.Unknown] = NoOpStep.Instance;
             return r;

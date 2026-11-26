@@ -21,6 +21,8 @@ namespace Controller.RobotControl.Hosting
             MapIoHistory(app, robot);
             MapVision(app, robot);
             MapVectorFiles(app, vectorFileDir);
+            app.MapCellEndpoints(robot);
+            app.MapBackupEndpoints(robot);
         }
 
         // ── Webhook ───────────────────────────────────────────────────────────

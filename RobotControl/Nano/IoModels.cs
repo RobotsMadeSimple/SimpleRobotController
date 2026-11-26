@@ -49,6 +49,12 @@ namespace Controller.RobotControl.Io
         [JsonPropertyName("pixelCount")]
         public int PixelCount { get; set; } = 8;
 
+        /// <summary>Aux-stepper boards only: an Input scanned every firmware loop pass that reports
+        /// each edge with the step counters captured at that instant (<c>CFG:&lt;pin&gt;,L</c> →
+        /// <c>LAT:</c>) — for a conveyor part sensor. Still an Input everywhere else.</summary>
+        [JsonPropertyName("latch"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Latch { get; set; }
+
         // ── Load cell (HX711) — only used when Type == LoadCell ────────────────
         /// <summary>HX711 clock (SCK) pin. The <see cref="Pin"/> field is the HX711 data (DT) pin.</summary>
         [JsonPropertyName("sckPin")]
@@ -80,6 +86,8 @@ namespace Controller.RobotControl.Io
         public string  DeviceId     { get; set; } = "";
         public string  DeviceName   { get; set; } = "";
         public int     PixelCount { get; set; }
+        /// <summary>Aux-stepper latch input (Type stays Input) — see <see cref="IoPinConfig.Latch"/>.</summary>
+        public bool    Latch      { get; set; }
 
         // ── Load cell runtime (Type == LoadCell) ──────────────────────────────
         public int     SckPin        { get; set; }

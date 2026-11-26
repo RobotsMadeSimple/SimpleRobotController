@@ -16,6 +16,7 @@ namespace Controller.RobotControl.Execution
             r[StepType.GripperAction]  = new GripperActionStep();
             r[StepType.ConveyorAction] = new ConveyorActionStep();
             r[StepType.RotaryIndex]    = new RotaryIndexStep();
+            r[StepType.SiloAction]     = new SiloActionStep();
         }
 
         private static string DeviceOrFirst(ProgramStep step, ExecutionContext ctx) =>
@@ -29,8 +30,16 @@ namespace Controller.RobotControl.Execution
             return (long)Math.Abs(Math.Round(spu > 0 ? dist * spu : dist));
         }
 
-        private static double ActionVel(AuxAxisChannelConfig? cfg) =>
-            (cfg?.ActionVelocity ?? 0) > 0 ? cfg!.ActionVelocity : 1600;
+        // Role action speed -> steps/s. ActionVelocity is in the axis's physical unit per second
+        // (mm/s Linear, deg/s Rotary) when the axis has a type, else raw steps/s — same rule as
+        // ActionStepsMag. Unset (0) falls back to 1600 steps/s.
+        internal static double ActionVel(AuxAxisChannelConfig? cfg)
+        {
+            double vel = cfg?.ActionVelocity ?? 0;
+            if (vel <= 0) return 1600;
+            double spu = cfg!.StepsPerUnit();
+            return spu > 0 ? vel * spu : vel;
+        }
 
         private sealed class AuxMoveStep : IStepHandler
         {
@@ -272,6 +281,38 @@ namespace Controller.RobotControl.Execution
 
                 ctrl.StartAuxMove(deviceId, axisIndex, steps, ActionVel(cfg), 3200, 3200);
                 ctx.AwaitAuxMove(step, frame);
+                return StepOutcome.Yield;
+            }
+        }
+
+        // Silo (docs/aux-silo.md) — Home / Present / Accept / Refill move the lift and wait for it,
+        // then finish (zero + homed / count − 1 / count + 1) when the axis stops; SetCount only sets
+        // the count.
+        private sealed class SiloActionStep : IStepHandler
+        {
+            public StepOutcome Execute(ProgramStep step, StepListFrame frame, ExecutionContext ctx)
+            {
+                var    ctrl      = ctx.Controller;
+                string deviceId  = DeviceOrFirst(step, ctx);
+                int    axisIndex = step.AuxAxisIndex ?? 0;
+                string action    = string.IsNullOrEmpty(step.SiloAction) ? SiloActions.Present : step.SiloAction;
+                int?   count     = null;
+                if (SiloActions.Normalize(action) == SiloActions.SetCount)
+                    count = (int)Math.Round(ctx.Eval.EvalField(step, "siloCount", step.SiloCount ?? 0));
+
+                SiloPending? pending;
+                try
+                {
+                    pending = SiloActions.Begin(ctrl, deviceId, axisIndex, action, count);
+                }
+                catch (SiloException ex)
+                {
+                    return ctx.Fail(ex.Code, $"{ProgressReporter.StepDescription(step)}: {ex.Message}");
+                }
+                if (pending == null) return StepOutcome.Advance;
+
+                ctx.AwaitAuxMove(step, frame);
+                ctx.Motion.PendingAuxCompletion = () => SiloActions.Complete(ctrl, pending);
                 return StepOutcome.Yield;
             }
         }

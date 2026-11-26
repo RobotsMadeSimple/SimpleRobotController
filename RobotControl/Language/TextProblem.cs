@@ -84,6 +84,8 @@ public static class TextProblemCodes
     public const string UnknownDevice     = "unknownDevice";
     /// <summary>Warning: a camera name that matches no camera (the text is kept as the id).</summary>
     public const string UnknownCamera     = "unknownCamera";
+    /// <summary>Warning: a conveyor name that matches no configured conveyor (the text is kept as the id).</summary>
+    public const string UnknownConveyor   = "unknownConveyor";
     /// <summary>Warning: an <c>@with</c> key that is not a step / variable field (it is dropped).</summary>
     public const string UnknownField      = "unknownField";
     /// <summary>Error: a name written in its underscore form (<c>Pick_1</c>) that fits more than one

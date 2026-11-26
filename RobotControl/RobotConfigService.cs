@@ -141,6 +141,20 @@ namespace Controller.RobotControl
         /// <summary>CoreXY belt pulley pitch diameter (mm). Linear travel per motor rev = π·PCD.</summary>
         [JsonPropertyName("astroCoreXyPulleyPcdMm")] public double AstroCoreXyPulleyPcdMm { get; set; } = 19.099;
 
+        // ── ASTRO build lengths (3D cell viewer) ──────────────────────────────────────
+        // The built extrusion travel of the J2 column and J3 reach. Only change what the cell
+        // viewer draws (docs/cell-package.md §3.1 "Adjustable axes"); kinematics never read them.
+
+        /// <summary>Vertical (J2 column) travel the robot was built with, mm. Nominal 400.</summary>
+        [JsonPropertyName("astroVerticalTravelMm")] public double AstroVerticalTravelMm { get; set; } = 400;
+        /// <summary>Radial (J3 reach) travel the robot was built with, mm. Nominal 400.</summary>
+        [JsonPropertyName("astroRadialTravelMm")]   public double AstroRadialTravelMm   { get; set; } = 400;
+
+        // ── 3D cell viewer ────────────────────────────────────────────────────────────
+
+        /// <summary>Id of the active cell package (docs/cell-package.md §4); null = none (the built-in robot alone).</summary>
+        [JsonPropertyName("activeCellId")] public string? ActiveCellId { get; set; }
+
         // ── CNC4Axis motor configuration ──────────────────────────────────────────────
 
         /// <summary>Motor steps per revolution for the X axis (microstepping setting).</summary>
@@ -229,6 +243,28 @@ namespace Controller.RobotControl
         [JsonPropertyName("joint3Max")] public double? Joint3Max { get; set; }
         [JsonPropertyName("joint4Min")] public double? Joint4Min { get; set; }
         [JsonPropertyName("joint4Max")] public double? Joint4Max { get; set; }
+
+        // ── Hardwired e-stop sense input (docs/estop.md) ──────────────────────
+        /// <summary>Where the e-stop input is read and its polarity. Off by default. Read/written by
+        /// GetEstopConfig / SetEstopConfig, kept by ResetRobotConfig.</summary>
+        [JsonPropertyName("estop")] public Safety.EstopConfig Estop { get; set; } = new();
+
+        // ── Motion profile ──────────────────────────────────────────────────────
+        // The speed profile program and point moves run with (MoveL / MoveJ / MoveJoints, blended
+        // paths, Jump legs, MoveC). Jogging and homing always keep the trapezoid. A move step's
+        // own motionProfile overrides this per move.
+
+        /// <summary>"trapezoid" (default — constant-acceleration ramps, the classic behaviour) or
+        /// "scurve" (jerk-limited: acceleration ramps instead of stepping).</summary>
+        [JsonPropertyName("motionProfile")] public string MotionProfile { get; set; } = "trapezoid";
+
+        /// <summary>S-curve smoothness, 1–100 %: the share of each acceleration phase spent ramping
+        /// the acceleration (100 = no constant-acceleration segment). Used when no jerk is set.</summary>
+        [JsonPropertyName("scurveSmoothness")] public double ScurveSmoothness { get; set; } = 50;
+
+        /// <summary>Optional absolute S-curve jerk limit (mm/s³ for linear moves, joint units/s³ for
+        /// joint moves). Null / ≤ 0 = derive the jerk from <see cref="ScurveSmoothness"/>.</summary>
+        [JsonPropertyName("scurveJerk")] public double? ScurveJerk { get; set; }
     }
 
     public static class RobotConfigService

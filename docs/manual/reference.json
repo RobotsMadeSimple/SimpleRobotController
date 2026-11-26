@@ -2,7 +2,7 @@
   "generatedFrom": {
     "catalogVersion": 1,
     "languageVersion": 1,
-    "generatedAt": "2026-11-07"
+    "generatedAt": "2026-11-11"
   },
   "categories": [
     {
@@ -12,6 +12,7 @@
       "steps": [
         "MoveL",
         "MoveJ",
+        "MoveJoints",
         "JumpL",
         "JumpJ",
         "MoveC",
@@ -84,7 +85,12 @@
         "AuxEnable",
         "GripperAction",
         "ConveyorAction",
-        "RotaryIndex"
+        "ConveyorTrack",
+        "ConveyorEndTracking",
+        "ConveyorAddPart",
+        "ConveyorClearQueue",
+        "RotaryIndex",
+        "SiloAction"
       ]
     },
     {
@@ -136,7 +142,7 @@
       "category": "motion",
       "categoryLabel": "Motion",
       "description": "Move to a target in a straight line.",
-      "syntax": "MoveL <target>[, speed=…][, blend=…][, offset=(…)][, until=…]",
+      "syntax": "MoveL <target>[, speed=…][, blend=…][, offset=(…)][, profile=scurve][, until=…]",
       "background": false,
       "body": null,
       "bodies": [],
@@ -211,6 +217,33 @@
           "options": null,
           "showIf": null,
           "help": "",
+          "group": "Dynamics"
+        },
+        {
+          "key": "motionProfile",
+          "label": "Motion profile",
+          "inText": "profile=",
+          "type": "Option",
+          "kind": "enum",
+          "value": "trapezoid | scurve",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "showIf": null,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop.",
           "group": "Dynamics"
         },
         {
@@ -426,6 +459,12 @@
           "when": "A template or `$list[i]` target names no saved point, or the Points list is empty."
         },
         {
+          "code": "outOfReach",
+          "label": "Target out of reach",
+          "catchable": true,
+          "when": "The target cannot be reached — no inverse kinematics solution, or a joint would be outside its soft limits. Checked before the robot moves; catchable."
+        },
+        {
           "code": "motionFault",
           "label": "Motion fault",
           "catchable": false,
@@ -435,7 +474,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -497,7 +536,7 @@
       "category": "motion",
       "categoryLabel": "Motion",
       "description": "Move to a target by joint interpolation.",
-      "syntax": "MoveJ <target>[, speed=…][, offset=(…)][, until=…]",
+      "syntax": "MoveJ <target>[, speed=…][, offset=(…)][, profile=scurve][, until=…]",
       "background": false,
       "body": null,
       "bodies": [],
@@ -572,6 +611,33 @@
           "options": null,
           "showIf": null,
           "help": "",
+          "group": "Dynamics"
+        },
+        {
+          "key": "motionProfile",
+          "label": "Motion profile",
+          "inText": "profile=",
+          "type": "Option",
+          "kind": "enum",
+          "value": "trapezoid | scurve",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "showIf": null,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop.",
           "group": "Dynamics"
         },
         {
@@ -745,6 +811,12 @@
           "when": "A template or `$list[i]` target names no saved point."
         },
         {
+          "code": "outOfReach",
+          "label": "Target out of reach",
+          "catchable": true,
+          "when": "The target cannot be reached — no inverse kinematics solution, or a joint would be outside its soft limits. Checked before the robot moves; catchable."
+        },
+        {
           "code": "motionFault",
           "label": "Motion fault",
           "catchable": false,
@@ -754,7 +826,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -789,6 +861,343 @@
           "type": "JumpJ",
           "name": "Jump Joint",
           "keyword": "JumpJ"
+        },
+        {
+          "type": "SetSpeedJ",
+          "name": "Set Speed (Joint)",
+          "keyword": "SetSpeedJ"
+        }
+      ],
+      "chapter": "motion"
+    },
+    {
+      "type": "MoveJoints",
+      "keyword": "MoveJoints",
+      "aliases": [
+        "MoveAbsJ"
+      ],
+      "name": "Move to Joints",
+      "category": "motion",
+      "categoryLabel": "Motion",
+      "description": "Move to explicit joint values by joint interpolation (no Cartesian target).",
+      "syntax": "MoveJoints [<joints>][, j1=…][, j2=…][, j3=…][, j4=…][, speed=…][, profile=scurve][, until=…]",
+      "background": false,
+      "body": null,
+      "bodies": [],
+      "params": [
+        {
+          "key": "jointsExpr",
+          "label": "Joints value",
+          "inText": "position 1",
+          "type": "Expression",
+          "kind": "expr",
+          "value": "expression",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "Optional: $home[0] (an Objects list with j1…j4, e.g. from Save Position → Joint values) or jointsOf(…).",
+          "group": "Joints"
+        },
+        {
+          "key": "j1",
+          "label": "J1",
+          "inText": "j1=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "° (CNC: X mm)",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "ASTRO: base rotation. CNC: X.",
+          "group": "Joints"
+        },
+        {
+          "key": "j2",
+          "label": "J2",
+          "inText": "j2=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "mm (CNC: Y)",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "ASTRO: radial reach. CNC: Y.",
+          "group": "Joints"
+        },
+        {
+          "key": "j3",
+          "label": "J3",
+          "inText": "j3=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "mm (CNC: Z)",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "ASTRO: vertical. CNC: Z.",
+          "group": "Joints"
+        },
+        {
+          "key": "j4",
+          "label": "J4",
+          "inText": "j4=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "° (CNC: RZ)",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "ASTRO: tool rotation. CNC: RZ.",
+          "group": "Joints"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "inText": "speed=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "°/s · mm/s",
+          "default": "",
+          "min": 0,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "Overrides the program's speed for this move only.",
+          "group": "Dynamics"
+        },
+        {
+          "key": "accel",
+          "label": "Acceleration",
+          "inText": "accel=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "mm/s²",
+          "default": "",
+          "min": 0,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "",
+          "group": "Dynamics"
+        },
+        {
+          "key": "decel",
+          "label": "Deceleration",
+          "inText": "decel=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "mm/s²",
+          "default": "",
+          "min": 0,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "",
+          "group": "Dynamics"
+        },
+        {
+          "key": "motionProfile",
+          "label": "Motion profile",
+          "inText": "profile=",
+          "type": "Option",
+          "kind": "enum",
+          "value": "trapezoid | scurve",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "showIf": null,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop.",
+          "group": "Dynamics"
+        },
+        {
+          "key": "moveStopCondition",
+          "label": "Stop condition",
+          "inText": "until=",
+          "type": "Condition",
+          "kind": "condition",
+          "value": "condition",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000.",
+          "group": "Stop condition"
+        },
+        {
+          "key": "moveStopMode",
+          "label": "When true",
+          "inText": "untilMode=",
+          "type": "Option",
+          "kind": "enum",
+          "value": "stop | record",
+          "unit": "",
+          "default": "stop",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "showIf": null,
+          "help": "",
+          "group": "Stop condition"
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "label": "Position variable",
+          "inText": "untilPos=",
+          "type": "Variable",
+          "kind": "varWrite",
+          "value": "$variable",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "A Points list set to the one pose where the condition fired.",
+          "group": "Stop condition"
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "label": "Fired flag",
+          "inText": "untilFlag=",
+          "type": "Variable",
+          "kind": "varWrite",
+          "value": "$variable",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "group": "Stop condition"
+        }
+      ],
+      "notes": [
+        "Moves straight to joint values by joint interpolation — no Cartesian target and no inverse kinematics (RAPID `MoveAbsJ`; the text also accepts `MoveAbsJ`).",
+        "Joints follow the robot's joint-limit layout: ASTRO `j1` base rotation (°), `j2` radial reach (mm), `j3` vertical (mm), `j4` tool rotation (°); a CNC's X, Y, Z and RZ.",
+        "The positional value is a joints value: an element of an Objects list with fields `j1 j2 j3 j4` (`$home[0]`, made by Save Position with `source=joints`) or `jointsOf(…)` in parentheses. `j1=` … `j4=` set single joints on top of it; a joint left empty keeps its current value.",
+        "`profile=` picks this move's speed profile (`trapezoid` or `scurve`); empty = the robot's Motion profile setting.",
+        "A stop condition (`until=`) is checked every controller tick while the move runs. `untilMode=stop` ends the move where it is and continues with the next step (no error); `record` lets the move finish and stores the pose where the condition first held in `untilPos=` (a one-element Points list). `untilFlag=` gets 1 if it fired, else 0.",
+        "Not run in background programs."
+      ],
+      "errors": [
+        {
+          "code": "outOfReach",
+          "label": "Target out of reach",
+          "catchable": true,
+          "when": "A joint value is outside its soft limit (checked before the robot moves; catchable)."
+        },
+        {
+          "code": "motionFault",
+          "label": "Motion fault",
+          "catchable": false,
+          "when": "The motion system reports a fault (fatal)."
+        },
+        {
+          "code": "jointLimit",
+          "label": "Joint limit",
+          "catchable": false,
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
+        },
+        {
+          "code": "driverDisconnected",
+          "label": "Driver disconnected",
+          "catchable": false,
+          "when": "The motor driver is not connected (fatal)."
+        },
+        {
+          "code": "unknownVariable",
+          "label": "Unknown variable",
+          "catchable": false,
+          "when": "An expression names a variable that does not exist (fatal)."
+        },
+        {
+          "code": "expressionSyntax",
+          "label": "Expression error",
+          "catchable": false,
+          "when": "An expression does not parse (fatal)."
+        }
+      ],
+      "example": {
+        "srs": "var home: list record\nSavePosition $home, source=joints\nMoveJoints j1=90, j2=250, j3=120, j4=0, speed=50\nMoveJoints $home[0], j4=45, profile=scurve",
+        "screen": "screens/ref-MoveJoints.png"
+      },
+      "seeAlso": [
+        {
+          "type": "MoveJ",
+          "name": "Move Joint",
+          "keyword": "MoveJ"
+        },
+        {
+          "type": "SavePosition",
+          "name": "Save Position",
+          "keyword": "SavePosition"
         },
         {
           "type": "SetSpeedJ",
@@ -935,6 +1344,33 @@
           "options": null,
           "showIf": null,
           "help": "",
+          "group": "Dynamics"
+        },
+        {
+          "key": "motionProfile",
+          "label": "Motion profile",
+          "inText": "profile=",
+          "type": "Option",
+          "kind": "enum",
+          "value": "trapezoid | scurve",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "showIf": null,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop.",
           "group": "Dynamics"
         },
         {
@@ -1149,6 +1585,12 @@
           "when": "A template or `$list[i]` target names no saved point."
         },
         {
+          "code": "outOfReach",
+          "label": "Target out of reach",
+          "catchable": true,
+          "when": "The target cannot be reached — no inverse kinematics solution, or a joint would be outside its soft limits. Checked before the robot moves; catchable."
+        },
+        {
           "code": "motionFault",
           "label": "Motion fault",
           "catchable": false,
@@ -1158,7 +1600,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -1342,6 +1784,33 @@
           "group": "Dynamics"
         },
         {
+          "key": "motionProfile",
+          "label": "Motion profile",
+          "inText": "profile=",
+          "type": "Option",
+          "kind": "enum",
+          "value": "trapezoid | scurve",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "showIf": null,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop.",
+          "group": "Dynamics"
+        },
+        {
           "key": "offset",
           "label": "Offset",
           "inText": "offset=",
@@ -1510,6 +1979,12 @@
           "when": "A template or `$list[i]` target names no saved point."
         },
         {
+          "code": "outOfReach",
+          "label": "Target out of reach",
+          "catchable": true,
+          "when": "The target cannot be reached — no inverse kinematics solution, or a joint would be outside its soft limits. Checked before the robot moves; catchable."
+        },
+        {
           "code": "motionFault",
           "label": "Motion fault",
           "catchable": false,
@@ -1519,7 +1994,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -1755,6 +2230,12 @@
           "when": "The via or end names no saved point."
         },
         {
+          "code": "outOfReach",
+          "label": "Target out of reach",
+          "catchable": true,
+          "when": "The target cannot be reached — no inverse kinematics solution, or a joint would be outside its soft limits. Checked before the robot moves; catchable."
+        },
+        {
           "code": "motionFault",
           "label": "Motion fault",
           "catchable": false,
@@ -1764,7 +2245,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -2011,7 +2492,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -2066,7 +2547,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -2237,7 +2718,7 @@
           "code": "jointLimit",
           "label": "Joint limit",
           "catchable": false,
-          "when": "The target is outside a joint's soft limits (fatal)."
+          "when": "A joint crosses its soft limit while the robot moves (fatal)."
         },
         {
           "code": "driverDisconnected",
@@ -2271,8 +2752,8 @@
       "name": "Save Position",
       "category": "motion",
       "categoryLabel": "Motion",
-      "description": "Store the current position in a Points list or a saved point.",
-      "syntax": "SavePosition $<list>[, mode=replace|append|insert|set][, index=…][, source=actual|target] | SavePosition point <name>",
+      "description": "Store the current position (or joint values) in a list or a saved point.",
+      "syntax": "SavePosition $<list>[, mode=replace|append|insert|set][, index=…][, source=actual|target|joints] | SavePosition point <name>",
       "background": true,
       "body": null,
       "bodies": [],
@@ -2293,7 +2774,7 @@
           "options": [
             {
               "value": "variable",
-              "label": "Points variable"
+              "label": "List variable"
             },
             {
               "value": "point",
@@ -2306,7 +2787,7 @@
         },
         {
           "key": "variableName",
-          "label": "Points variable",
+          "label": "List variable",
           "inText": "position 1",
           "type": "List variable",
           "kind": "listVar",
@@ -2324,7 +2805,7 @@
               "variable"
             ]
           },
-          "help": "",
+          "help": "A Points list for a position; an Objects list (fields j1…j4) for joint values.",
           "group": "Destination"
         },
         {
@@ -2420,7 +2901,7 @@
           "inText": "source=",
           "type": "Option",
           "kind": "enum",
-          "value": "actual | target",
+          "value": "actual | target | joints",
           "unit": "",
           "default": "actual",
           "min": null,
@@ -2435,10 +2916,14 @@
             {
               "value": "target",
               "label": "Last commanded target"
+            },
+            {
+              "value": "joints",
+              "label": "Joint values (j1…j4)"
             }
           ],
           "showIf": null,
-          "help": "",
+          "help": "Joint values go into an Objects list as {j1, j2, j3, j4} — what Move to Joints and poseOf() read.",
           "group": "Destination"
         }
       ],
@@ -2446,7 +2931,8 @@
         "Stores where the robot is (\"Here\"), expressed in the program's active local frame, so a later move under the same local lands on the same spot.",
         "Into a Points list: `mode=replace` (the list becomes exactly this pose), `append`, `insert` or `set` (at `index=`). A list that does not exist is created.",
         "`SavePosition point <name>` overwrites a saved point (or creates it); the change is recorded in the points history.",
-        "`source=target` stores the last commanded target instead of the measured position."
+        "`source=target` stores the last commanded target instead of the measured position.",
+        "`source=joints` stores the joint values instead, as one element `{j1, j2, j3, j4}` of an Objects list — what Move to Joints and `poseOf()` read. Joint values cannot go into a saved point."
       ],
       "errors": [
         {
@@ -3494,6 +3980,30 @@
               "label": "List index out of range"
             },
             {
+              "value": "outOfReach",
+              "label": "Target out of reach"
+            },
+            {
+              "value": "conveyorWindow",
+              "label": "Conveyor part left the window"
+            },
+            {
+              "value": "conveyorTimeout",
+              "label": "No conveyor part in time"
+            },
+            {
+              "value": "conveyorSpeed",
+              "label": "Conveyor too fast to track"
+            },
+            {
+              "value": "siloNotHomed",
+              "label": "Silo not homed"
+            },
+            {
+              "value": "siloEmpty",
+              "label": "Silo empty"
+            },
+            {
               "value": "userError",
               "label": "Raised error"
             }
@@ -4258,7 +4768,7 @@
               "set"
             ]
           },
-          "help": "For Number and Boolean lists.",
+          "help": "For Number and Boolean lists — or a whole value for Points / Objects lists: $pts[i], poseOf(…), jointsOf(…).",
           "group": "List"
         },
         {
@@ -6365,6 +6875,247 @@
       "chapter": "io"
     },
     {
+      "type": "ConveyorTrack",
+      "keyword": "ConveyorTrack",
+      "aliases": [],
+      "name": "Conveyor Track",
+      "category": "io",
+      "categoryLabel": "I/O & Aux Axes",
+      "description": "Start following the oldest part in a conveyor's pick window.",
+      "syntax": "ConveyorTrack <conveyor>[, wait=off][, timeout=…]",
+      "background": false,
+      "body": null,
+      "bodies": [],
+      "params": [
+        {
+          "key": "conveyorId",
+          "label": "Conveyor",
+          "inText": "position 1",
+          "type": "conveyorRef",
+          "kind": "conveyorRef",
+          "value": "conveyor name",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": true,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "",
+          "group": "Conveyor"
+        },
+        {
+          "key": "trackWait",
+          "label": "Wait for a part",
+          "inText": "wait=",
+          "type": "Boolean",
+          "kind": "bool",
+          "value": "on / off",
+          "unit": "",
+          "default": "on",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "Wait until a part enters the window. Off: carry on untracked when none is there ($conveyor.<id>.tracking reads 0).",
+          "group": "Tracking"
+        },
+        {
+          "key": "trackTimeoutMs",
+          "label": "Timeout",
+          "inText": "timeout=",
+          "type": "Integer",
+          "kind": "integer",
+          "value": "duration (500ms, 2s)",
+          "unit": "ms",
+          "default": "",
+          "min": 0,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": {
+            "field": "trackWait",
+            "in": [
+              "true"
+            ]
+          },
+          "help": "Empty or 0 = wait forever; otherwise fail with conveyorTimeout (catchable).",
+          "group": "Tracking"
+        }
+      ],
+      "notes": [],
+      "errors": [],
+      "example": {
+        "srs": "",
+        "screen": "screens/ref-ConveyorTrack.png"
+      },
+      "seeAlso": [],
+      "chapter": null
+    },
+    {
+      "type": "ConveyorEndTracking",
+      "keyword": "ConveyorEndTracking",
+      "aliases": [],
+      "name": "Conveyor End Tracking",
+      "category": "io",
+      "categoryLabel": "I/O & Aux Axes",
+      "description": "Stop following the tracked part — the robot stays where it is.",
+      "syntax": "ConveyorEndTracking [<conveyor>][, release=on]",
+      "background": false,
+      "body": null,
+      "bodies": [],
+      "params": [
+        {
+          "key": "conveyorId",
+          "label": "Conveyor",
+          "inText": "position 1",
+          "type": "conveyorRef",
+          "kind": "conveyorRef",
+          "value": "conveyor name",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "Empty = the conveyor being tracked.",
+          "group": "Conveyor"
+        },
+        {
+          "key": "conveyorRelease",
+          "label": "Release the part",
+          "inText": "release=",
+          "type": "Boolean",
+          "kind": "bool",
+          "value": "on / off",
+          "unit": "",
+          "default": "off",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "On: the part stays on the belt (not counted as picked) and is never tracked again.",
+          "group": "Tracking"
+        }
+      ],
+      "notes": [],
+      "errors": [],
+      "example": {
+        "srs": "",
+        "screen": "screens/ref-ConveyorEndTracking.png"
+      },
+      "seeAlso": [],
+      "chapter": null
+    },
+    {
+      "type": "ConveyorAddPart",
+      "keyword": "ConveyorAddPart",
+      "aliases": [],
+      "name": "Conveyor Add Part",
+      "category": "io",
+      "categoryLabel": "I/O & Aux Axes",
+      "description": "Queue a part at a known position on the belt (e.g. from vision).",
+      "syntax": "ConveyorAddPart <conveyor>, x=…",
+      "background": true,
+      "body": null,
+      "bodies": [],
+      "params": [
+        {
+          "key": "conveyorId",
+          "label": "Conveyor",
+          "inText": "position 1",
+          "type": "conveyorRef",
+          "kind": "conveyorRef",
+          "value": "conveyor name",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": true,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "",
+          "group": "Conveyor"
+        },
+        {
+          "key": "partOffsetMm",
+          "label": "Part X",
+          "inText": "x=",
+          "type": "Number",
+          "kind": "number",
+          "value": "number or (expr)",
+          "unit": "mm",
+          "default": "0",
+          "min": null,
+          "max": null,
+          "required": true,
+          "expression": true,
+          "options": null,
+          "showIf": null,
+          "help": "The part's X in the conveyor frame now (along the belt).",
+          "group": "Part"
+        }
+      ],
+      "notes": [],
+      "errors": [],
+      "example": {
+        "srs": "",
+        "screen": "screens/ref-ConveyorAddPart.png"
+      },
+      "seeAlso": [],
+      "chapter": null
+    },
+    {
+      "type": "ConveyorClearQueue",
+      "keyword": "ConveyorClearQueue",
+      "aliases": [],
+      "name": "Conveyor Clear Queue",
+      "category": "io",
+      "categoryLabel": "I/O & Aux Axes",
+      "description": "Forget every queued part of a conveyor.",
+      "syntax": "ConveyorClearQueue <conveyor>",
+      "background": true,
+      "body": null,
+      "bodies": [],
+      "params": [
+        {
+          "key": "conveyorId",
+          "label": "Conveyor",
+          "inText": "position 1",
+          "type": "conveyorRef",
+          "kind": "conveyorRef",
+          "value": "conveyor name",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": true,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "",
+          "group": "Conveyor"
+        }
+      ],
+      "notes": [],
+      "errors": [],
+      "example": {
+        "srs": "",
+        "screen": "screens/ref-ConveyorClearQueue.png"
+      },
+      "seeAlso": [],
+      "chapter": null
+    },
+    {
       "type": "RotaryIndex",
       "keyword": "RotaryIndex",
       "aliases": [],
@@ -6472,6 +7223,174 @@
           "type": "ConveyorAction",
           "name": "Conveyor",
           "keyword": "ConveyorAction"
+        },
+        {
+          "type": "SiloAction",
+          "name": "Silo",
+          "keyword": "SiloAction"
+        }
+      ],
+      "chapter": "io"
+    },
+    {
+      "type": "SiloAction",
+      "keyword": "SiloAction",
+      "aliases": [],
+      "name": "Silo",
+      "category": "io",
+      "categoryLabel": "I/O & Aux Axes",
+      "description": "Home a silo, present its top part at the rim, refill it or set its count.",
+      "syntax": "SiloAction home|present|refill|setcount[, count=…][, device=…, axis=…]",
+      "background": true,
+      "body": null,
+      "bodies": [],
+      "params": [
+        {
+          "key": "siloAction",
+          "label": "Action",
+          "inText": "position 1",
+          "type": "Option",
+          "kind": "enum",
+          "value": "home | present | refill | setcount",
+          "unit": "",
+          "default": "Present",
+          "min": null,
+          "max": null,
+          "required": true,
+          "expression": false,
+          "options": [
+            {
+              "value": "Home",
+              "label": "Home"
+            },
+            {
+              "value": "Present",
+              "label": "Present"
+            },
+            {
+              "value": "Refill",
+              "label": "Refill"
+            },
+            {
+              "value": "SetCount",
+              "label": "Set count"
+            }
+          ],
+          "showIf": null,
+          "help": "Present needs the silo homed (siloNotHomed) and a part in it (siloEmpty) — both catchable.",
+          "group": "Silo"
+        },
+        {
+          "key": "siloCount",
+          "label": "Count",
+          "inText": "count=",
+          "type": "Integer",
+          "kind": "integer",
+          "value": "number or (expr)",
+          "unit": "",
+          "default": "",
+          "min": 0,
+          "max": null,
+          "required": true,
+          "expression": true,
+          "options": null,
+          "showIf": {
+            "field": "siloAction",
+            "in": [
+              "SetCount"
+            ]
+          },
+          "help": "Parts now in the silo (0 to its capacity).",
+          "group": "Silo"
+        },
+        {
+          "key": "auxDeviceId",
+          "label": "Device",
+          "inText": "device=",
+          "type": "Device",
+          "kind": "deviceRef",
+          "value": "device name",
+          "unit": "",
+          "default": "",
+          "min": null,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "The aux IO card.",
+          "group": "Axis"
+        },
+        {
+          "key": "auxAxisIndex",
+          "label": "Axis",
+          "inText": "axis=",
+          "type": "Integer",
+          "kind": "integer",
+          "value": "number",
+          "unit": "",
+          "default": "0",
+          "min": 0,
+          "max": null,
+          "required": false,
+          "expression": false,
+          "options": null,
+          "showIf": null,
+          "help": "",
+          "group": "Axis"
+        }
+      ],
+      "notes": [
+        "Drives a silo-role aux axis: a tube of identical flat parts on a platform the axis lifts. The robot always picks the top part at the rim.",
+        "`home` drives the platform down past its full travel into the bottom stop, then zeroes the axis. `present` lifts the top part level with the rim and counts it as taken. `refill` sets the count to the capacity and homes. `setcount, count=…` sets the count without moving.",
+        "Read the state with `$aux.<device>.<axis>.siloCount` and `$aux.<device>.<axis>.siloHomed`. Any other move or zero of the axis clears the homed flag."
+      ],
+      "errors": [
+        {
+          "code": "siloNotHomed",
+          "label": "Silo not homed",
+          "catchable": true,
+          "when": "Present on a silo that has not been homed since it last moved or reconnected (catchable)."
+        },
+        {
+          "code": "siloEmpty",
+          "label": "Silo empty",
+          "catchable": true,
+          "when": "Present on a silo with no parts left (catchable)."
+        },
+        {
+          "code": "siloConfig",
+          "label": "Silo axis not set up",
+          "catchable": false,
+          "when": "The axis is not a silo with a linear unit, a capacity and a part height (fatal)."
+        },
+        {
+          "code": "unknownVariable",
+          "label": "Unknown variable",
+          "catchable": false,
+          "when": "An expression names a variable that does not exist (fatal)."
+        },
+        {
+          "code": "expressionSyntax",
+          "label": "Expression error",
+          "catchable": false,
+          "when": "An expression does not parse (fatal)."
+        }
+      ],
+      "example": {
+        "srs": "SiloAction home, device=Aux_Stepper, axis=1\nSiloAction present, device=Aux_Stepper, axis=1\nSiloAction setcount, count=12, device=Aux_Stepper, axis=1",
+        "screen": "screens/ref-SiloAction.png"
+      },
+      "seeAlso": [
+        {
+          "type": "AuxMove",
+          "name": "Aux Move",
+          "keyword": "AuxMove"
+        },
+        {
+          "type": "RotaryIndex",
+          "name": "Rotary Index",
+          "keyword": "RotaryIndex"
         }
       ],
       "chapter": "io"
@@ -7804,6 +8723,59 @@
       ]
     },
     {
+      "code": "outOfReach",
+      "label": "Target out of reach",
+      "catchable": true,
+      "description": "",
+      "raisedBy": [
+        "MoveL",
+        "MoveJ",
+        "MoveJoints",
+        "JumpL",
+        "JumpJ",
+        "MoveC"
+      ]
+    },
+    {
+      "code": "conveyorWindow",
+      "label": "Conveyor part left the window",
+      "catchable": true,
+      "description": "",
+      "raisedBy": []
+    },
+    {
+      "code": "conveyorTimeout",
+      "label": "No conveyor part in time",
+      "catchable": true,
+      "description": "",
+      "raisedBy": []
+    },
+    {
+      "code": "conveyorSpeed",
+      "label": "Conveyor too fast to track",
+      "catchable": true,
+      "description": "",
+      "raisedBy": []
+    },
+    {
+      "code": "siloNotHomed",
+      "label": "Silo not homed",
+      "catchable": true,
+      "description": "",
+      "raisedBy": [
+        "SiloAction"
+      ]
+    },
+    {
+      "code": "siloEmpty",
+      "label": "Silo empty",
+      "catchable": true,
+      "description": "",
+      "raisedBy": [
+        "SiloAction"
+      ]
+    },
+    {
       "code": "userError",
       "label": "Raised error",
       "catchable": true,
@@ -7820,6 +8792,7 @@
       "raisedBy": [
         "MoveL",
         "MoveJ",
+        "MoveJoints",
         "JumpL",
         "JumpJ",
         "MoveC",
@@ -7836,6 +8809,7 @@
       "raisedBy": [
         "MoveL",
         "MoveJ",
+        "MoveJoints",
         "JumpL",
         "JumpJ",
         "MoveC",
@@ -7852,6 +8826,7 @@
       "raisedBy": [
         "MoveL",
         "MoveJ",
+        "MoveJoints",
         "JumpL",
         "JumpJ",
         "MoveC",
@@ -7882,6 +8857,7 @@
       "raisedBy": [
         "MoveL",
         "MoveJ",
+        "MoveJoints",
         "JumpL",
         "JumpJ",
         "SetSpeedL",
@@ -7897,7 +8873,8 @@
         "Wait",
         "SetOutput",
         "AuxMove",
-        "GripperAction"
+        "GripperAction",
+        "SiloAction"
       ]
     },
     {
@@ -7908,6 +8885,7 @@
       "raisedBy": [
         "MoveL",
         "MoveJ",
+        "MoveJoints",
         "JumpL",
         "JumpJ",
         "SetSpeedL",
@@ -7923,7 +8901,8 @@
         "Wait",
         "SetOutput",
         "AuxMove",
-        "GripperAction"
+        "GripperAction",
+        "SiloAction"
       ]
     },
     {
@@ -7943,6 +8922,15 @@
       "raisedBy": [
         "SavePosition",
         "ListOp"
+      ]
+    },
+    {
+      "code": "siloConfig",
+      "label": "Silo axis not set up",
+      "catchable": false,
+      "description": "",
+      "raisedBy": [
+        "SiloAction"
       ]
     }
   ],
@@ -8291,6 +9279,21 @@
       "signature": "inCircle(x, y, cx, cy, r)",
       "name": "inCircle",
       "description": "1 when (x, y) is within r of (cx, cy), edge included; else 0"
+    },
+    {
+      "signature": "reachable(point[, tool][, local])",
+      "name": "reachable",
+      "description": "1 when the robot can reach the point — inverse kinematics solves and every joint is inside its soft limits; else 0. point: $pts[i], \"Name\", grid(\"G\", row, col), stack(\"S\", i); tool/local: a name, \"none\", or \"\" for the active one"
+    },
+    {
+      "signature": "jointsOf(point[, tool][, local]).j1",
+      "name": "jointsOf",
+      "description": "The joint values that reach the point (read one with .j1 … .j4, or store the whole value with a List step); fails with outOfReach when it cannot be reached"
+    },
+    {
+      "signature": "poseOf(joints[, tool][, local]).x",
+      "name": "poseOf",
+      "description": "The TCP pose a joints value puts the tool at — forward kinematics (read one with .x .y .z .rz); joints: $j[i] (an Objects list with j1…j4) or jointsOf(…)"
     },
     {
       "signature": "$text.contains(\"x\")",
@@ -8644,6 +9647,11 @@
         "name": "Move Joint"
       },
       {
+        "word": "MoveJoints",
+        "type": "MoveJoints",
+        "name": "Move to Joints"
+      },
+      {
         "word": "JumpL",
         "type": "JumpL",
         "name": "Jump Linear"
@@ -8784,9 +9792,34 @@
         "name": "Conveyor"
       },
       {
+        "word": "ConveyorTrack",
+        "type": "ConveyorTrack",
+        "name": "Conveyor Track"
+      },
+      {
+        "word": "ConveyorEndTracking",
+        "type": "ConveyorEndTracking",
+        "name": "Conveyor End Tracking"
+      },
+      {
+        "word": "ConveyorAddPart",
+        "type": "ConveyorAddPart",
+        "name": "Conveyor Add Part"
+      },
+      {
+        "word": "ConveyorClearQueue",
+        "type": "ConveyorClearQueue",
+        "name": "Conveyor Clear Queue"
+      },
+      {
         "word": "RotaryIndex",
         "type": "RotaryIndex",
         "name": "Rotary Index"
+      },
+      {
+        "word": "SiloAction",
+        "type": "SiloAction",
+        "name": "Silo"
       },
       {
         "word": "RunVision",
@@ -8904,6 +9937,7 @@
     "stepTypeNames": [
       "MoveL",
       "MoveJ",
+      "MoveJoints",
       "JumpL",
       "JumpJ",
       "MoveC",
@@ -8948,7 +9982,12 @@
       "AuxEnable",
       "GripperAction",
       "ConveyorAction",
+      "ConveyorTrack",
+      "ConveyorEndTracking",
+      "ConveyorAddPart",
+      "ConveyorClearQueue",
       "RotaryIndex",
+      "SiloAction",
       "RunVision",
       "CaptureImage",
       "SaveImage",

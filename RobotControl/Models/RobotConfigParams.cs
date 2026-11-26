@@ -47,6 +47,9 @@ public class SetRobotConfigParams
     [JsonPropertyName("astroJoint1GearRatio")]      public double? AstroJoint1GearRatio      { get; set; }
     [JsonPropertyName("astroJoint4GearRatio")]      public double? AstroJoint4GearRatio      { get; set; }
     [JsonPropertyName("astroCoreXyPulleyPcdMm")]    public double? AstroCoreXyPulleyPcdMm    { get; set; }
+    [JsonPropertyName("astroVerticalTravelMm")]     public double? AstroVerticalTravelMm     { get; set; }
+    [JsonPropertyName("astroRadialTravelMm")]       public double? AstroRadialTravelMm       { get; set; }
+    // activeCellId is read from the raw params (an explicit null clears it), like the joint limits.
     [JsonPropertyName("cncStepsPerRevX")]           public int?    CncStepsPerRevX           { get; set; }
     [JsonPropertyName("cncStepsPerRevY")]           public int?    CncStepsPerRevY           { get; set; }
     [JsonPropertyName("cncStepsPerRevZ")]           public int?    CncStepsPerRevZ           { get; set; }
@@ -73,6 +76,11 @@ public class SetRobotConfigParams
     [JsonPropertyName("joint3Max")]                 public double? Joint3Max                 { get; set; }
     [JsonPropertyName("joint4Min")]                 public double? Joint4Min                 { get; set; }
     [JsonPropertyName("joint4Max")]                 public double? Joint4Max                 { get; set; }
+
+    // ── Motion profile ────────────────────────────────────────────────────
+    [JsonPropertyName("motionProfile")]             public string? MotionProfile             { get; set; }
+    [JsonPropertyName("scurveSmoothness")]          public double? ScurveSmoothness          { get; set; }
+    // scurveJerk is read from the raw params (an explicit null clears it), like the joint limits.
 }
 
 public class ResetRobotConfigParams

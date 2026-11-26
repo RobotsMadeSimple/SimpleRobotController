@@ -52,6 +52,8 @@ namespace Controller.RobotControl.AuxAxis
         Gripper,
         Conveyor,
         RotaryTable,
+        // Stacked-part lift (docs/aux-silo.md): positive = platform up.
+        Silo,
     }
 
     public sealed class AuxAxisRoleJsonConverter : JsonConverter<AuxAxisRole>
@@ -62,6 +64,7 @@ namespace Controller.RobotControl.AuxAxis
                 "Gripper"     => AuxAxisRole.Gripper,
                 "Conveyor"    => AuxAxisRole.Conveyor,
                 "RotaryTable" => AuxAxisRole.RotaryTable,
+                "Silo"        => AuxAxisRole.Silo,
                 _             => AuxAxisRole.Generic,
             };
 
@@ -71,6 +74,7 @@ namespace Controller.RobotControl.AuxAxis
                 AuxAxisRole.Gripper     => "Gripper",
                 AuxAxisRole.Conveyor    => "Conveyor",
                 AuxAxisRole.RotaryTable => "RotaryTable",
+                AuxAxisRole.Silo        => "Silo",
                 _                       => "Generic",
             });
     }
@@ -80,7 +84,8 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("id")]             public string                    Id   { get; set; } = "AUX_STEPPER_001";
         [JsonPropertyName("name")]           public string                    Name { get; set; } = "Aux Stepper";
         [JsonPropertyName("axes")]           public List<AuxAxisChannelConfig> Axes { get; set; } = new();
-        // Digital IO on the Uno's spare pins (same model as a Nano edge device). Input/Output only.
+        // Digital IO on the Uno's spare pins (same model as a Nano edge device). Input/Output only;
+        // an Input may set Latch (firmware cap "latch") to report edges with exact step counts.
         [JsonPropertyName("ioPins")]         public List<IoPinConfig>         IoPins { get; set; } = new();
     }
 
@@ -127,6 +132,27 @@ namespace Controller.RobotControl.AuxAxis
         // clamped limit (it can never read past [Closed, Open]). 0 = don't over-travel.
         [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
 
+        // ── Silo geometry (Role == Silo, docs/aux-silo.md) ────────────────────────
+        // A tube of identical flat parts on a platform the axis lifts (Linear, mm; positive = up
+        // after InvertDirection). Travel = capacity × pitch + clearance; home drives down
+        // travel + over-travel into the bottom stop at SiloHomeSpeed, then zeroes.
+        [JsonPropertyName("siloPitchMm")]          public double SiloPitchMm          { get; set; } = 0.0;
+        [JsonPropertyName("siloCapacity")]         public int    SiloCapacity         { get; set; } = 0;
+        [JsonPropertyName("siloClearanceMm")]      public double SiloClearanceMm      { get; set; } = 0.0;
+        [JsonPropertyName("siloHomeOverTravelMm")] public double SiloHomeOverTravelMm { get; set; } = 0.0;
+        // mm/s; 0 = fall back to ActionVelocity.
+        [JsonPropertyName("siloHomeSpeed")]        public double SiloHomeSpeed        { get; set; } = 0.0;
+        // Parts currently in the silo — persisted so it survives restarts. Changed only by
+        // SiloAction (Present takes one, Refill fills, SetCount sets), never by a config save.
+        [JsonPropertyName("siloCount")]            public int    SiloCount            { get; set; } = 0;
+
+        /// <summary>Silo lift travel (mm): capacity × pitch + clearance.</summary>
+        public double SiloTravelMm() => Math.Max(0, SiloCapacity) * SiloPitchMm + SiloClearanceMm;
+
+        /// <summary>Absolute platform position (mm from home) that lifts the top part of a stack of
+        /// <paramref name="partsLeft"/> level with the rim: travel − (k − 1) × pitch.</summary>
+        public double SiloPresentMm(int partsLeft) => SiloTravelMm() - (partsLeft - 1) * SiloPitchMm;
+
         /// <summary>Steps per physical output unit (mm for Linear, degrees for Rotary).
         /// Returns 0 when the axis is not configured (use raw steps instead).</summary>
         public double StepsPerUnit()
@@ -138,6 +164,16 @@ namespace Controller.RobotControl.AuxAxis
             return (StepsPerRev * GearRatio) / 360.0;
         }
     }
+
+    /// <summary>
+    /// An input edge on an aux board, with every axis's step position at that instant (the same
+    /// tracked-position space as <see cref="AuxAxisDevice.GetPosition"/>). For a latch pin
+    /// (<c>LAT:</c>) the positions were captured by the firmware at the edge and
+    /// <paramref name="StopwatchTicks"/> is the edge's board time mapped onto the controller's
+    /// <see cref="System.Diagnostics.Stopwatch"/>; for a plain input (<c>CHG:</c>, ~10 ms scan) it is
+    /// the controller receive time and the positions are interpolated to it.
+    /// </summary>
+    public sealed record AuxLatchEvent(string DeviceId, int Pin, int Value, double[] AxisSteps, long StopwatchTicks);
 
     public class AuxAxisManagerConfig
     {
@@ -181,5 +217,13 @@ namespace Controller.RobotControl.AuxAxis
         [JsonPropertyName("gripperCloseTimeSec")] public double GripperCloseTimeSec { get; set; } = 0.0;
         [JsonPropertyName("gripperAccel")]        public double GripperAccel        { get; set; } = 0.0;
         [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
+        [JsonPropertyName("siloPitchMm")]          public double SiloPitchMm          { get; set; } = 0.0;
+        [JsonPropertyName("siloCapacity")]         public int    SiloCapacity         { get; set; } = 0;
+        [JsonPropertyName("siloClearanceMm")]      public double SiloClearanceMm      { get; set; } = 0.0;
+        [JsonPropertyName("siloHomeOverTravelMm")] public double SiloHomeOverTravelMm { get; set; } = 0.0;
+        [JsonPropertyName("siloHomeSpeed")]        public double SiloHomeSpeed        { get; set; } = 0.0;
+        [JsonPropertyName("siloCount")]            public int    SiloCount            { get; set; } = 0;
+        // Runtime only: homed since the last move / zero / reconnect of this axis by anything else.
+        [JsonPropertyName("siloHomed")]            public bool   SiloHomed            { get; set; } = false;
     }
 }

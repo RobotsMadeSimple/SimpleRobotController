@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from .errors import CommandError
 
@@ -13,13 +14,109 @@ if TYPE_CHECKING:  # pragma: no cover
 _STATES = ("ok", "degraded", "error")
 
 
+def _as_list(raw: Any) -> List[Any]:
+    """The point/grid/stack commands return their list as a JSON *string*; parse it to a list."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+class RobotApi:
+    """Convenience helpers for the most common controller commands, reached as ``ctx.robot``.
+
+    Every method is thin sugar over :meth:`Context.command` — it issues exactly one
+    WebSocket command and returns its result. Anything not covered here (any command in
+    ``docs/websocket-api.md``) is still reachable directly with ``await ctx.command(name, ...)``.
+    """
+
+    def __init__(self, ctx: "Context") -> None:
+        self._ctx = ctx
+
+    # -- motion ---------------------------------------------------------------
+    async def move_l(
+        self, x: float, y: float, z: float,
+        rx: float = 0.0, ry: float = 0.0, rz: float = 0.0,
+        *, speed: Optional[float] = None, accel: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Linear (straight-line) move to a Cartesian pose. On the 4-axis ASTRO the only
+        orientation DOF is ``rz`` (J4); ``rx``/``ry`` stay 0. Queued on the motion thread —
+        the call returns when the move is *accepted*, not when it finishes; await
+        :meth:`is_moving` / the ``robot.position`` event to know it has stopped."""
+        return await self._move("MoveL", x, y, z, rx, ry, rz, speed, accel)
+
+    async def move_j(
+        self, x: float, y: float, z: float,
+        rx: float = 0.0, ry: float = 0.0, rz: float = 0.0,
+        *, speed: Optional[float] = None, accel: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Joint-interpolated move to a Cartesian pose (see :meth:`move_l` for the DOF/timing notes)."""
+        return await self._move("MoveJ", x, y, z, rx, ry, rz, speed, accel)
+
+    async def _move(self, cmd, x, y, z, rx, ry, rz, speed, accel):
+        params: Dict[str, Any] = {"x": x, "y": y, "z": z, "rx": rx, "ry": ry, "rz": rz}
+        if speed is not None:
+            params["speed"] = speed
+        if accel is not None:
+            params["accel"] = accel
+        return await self._ctx.command(cmd, **params)
+
+    async def home(self) -> Dict[str, Any]:
+        """Start the homing sequence."""
+        return await self._ctx.command("Home")
+
+    async def stop(self) -> Dict[str, Any]:
+        """Stop jogging / continuous motion (``StopJog``)."""
+        return await self._ctx.command("StopJog")
+
+    # -- points & pallets -----------------------------------------------------
+    async def get_points(self) -> List[Any]:
+        """List taught points: ``[{"name", "x", "y", "z", "rx", "ry", "rz"}, ...]``."""
+        return _as_list((await self._ctx.command("GetPoints")).get("points"))
+
+    async def teach_point(self, name: str) -> Dict[str, Any]:
+        """Save the robot's current pose as a taught point (stored in the base frame)."""
+        return await self._ctx.command("TeachPoint", name=name)
+
+    async def get_grids(self) -> List[Any]:
+        """List saved grids (pallet patterns)."""
+        return _as_list((await self._ctx.command("GetGrids")).get("grids"))
+
+    async def get_stacks(self) -> List[Any]:
+        """List saved stacks (pick/place columns)."""
+        return _as_list((await self._ctx.command("GetStacks")).get("stacks"))
+
+    # -- live state -----------------------------------------------------------
+    async def position(self) -> Dict[str, float]:
+        """Current tool pose ``{"x","y","z","rx","ry","rz"}``. One ``GetStatus`` call — for
+        high-rate reads subscribe to the ``robot.position`` event instead."""
+        s = await self._ctx.command("GetStatus")
+        return {k: s.get(k) for k in ("x", "y", "z", "rx", "ry", "rz")}
+
+    async def is_moving(self) -> bool:
+        """True while the robot is in motion."""
+        return bool((await self._ctx.command("GetStatus")).get("moving"))
+
+
 class Context:
     """Per-plugin context. Step handlers receive a :class:`StepContext` (a subclass)."""
 
     def __init__(self, plugin: "Plugin") -> None:
         self._plugin = plugin
+        self._robot = RobotApi(self)
 
     # -- read-only information ------------------------------------------------
+    @property
+    def robot(self) -> RobotApi:
+        """Convenience helpers for common robot commands (motion, points, live pose).
+        A thin layer over :meth:`command`; see :class:`RobotApi`."""
+        return self._robot
+
     @property
     def config(self) -> Dict[str, Any]:
         """Current config (schema defaults merged in). Updated by ``config.changed``."""

@@ -356,6 +356,28 @@ namespace Controller.RobotControl
         }
 
         /// <summary>
+        /// Ends a running or paused program with an uncatchable error raised from outside the program
+        /// (the e-stop): no Try sees it and Continue cannot resume it. The step that was executing is
+        /// marked as the failing one. Returns false when nothing was running or paused.
+        /// </summary>
+        public bool AbortWithError(string code, string message)
+        {
+            lock (_controlLock)
+            {
+                if (!_running && !_isPaused) return false;
+                ProgramStep? at = _ctx.Motion.PendingStep;
+                if (at == null && _ctx.Frames.Count > 0)
+                {
+                    var top = _ctx.Frames.Peek();
+                    if (top.Index >= 0 && top.Index < top.Steps.Count) at = top.Steps[top.Index];
+                }
+                _ctx.Progress.Failing(at, code);
+                Finish(ProgramStatus.Error, message);
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Immediately halts execution and clears all state — no status update is emitted.
         /// The caller is responsible for pushing a final status (e.g. Ready) to programManager.
         /// </summary>
@@ -626,6 +648,10 @@ namespace Controller.RobotControl
             // the control loop thread, before any step execution can advance.
             if (motion.ResumeDispatchPending) motion.DispatchResume();
 
+            // Conveyor tracking stopped off this thread (belt too fast, out of reach, the part left
+            // the window): a catchable error for whatever step is running.
+            if (_ctx.RaiseConveyorFault()) return;
+
             // Blocking on a background program finishing
             if (_ctx.WaitingForBackground != null)
             {
@@ -647,6 +673,9 @@ namespace Controller.RobotControl
                 if (motion.Watch is { Fired: false, IsAux: false } && !_ctx.TickMoveWatch()) return;
 
                 if (!motion.MoveFinished) return;
+                // A tracked move the motion thread refused (its intercept out of reach) ends with a
+                // fault, not a completion.
+                if (_ctx.RaiseConveyorFault()) return;
 
                 motion.AwaitingMove = false;
                 // A move the motion thread could not execute also leaves the queue
@@ -682,6 +711,11 @@ namespace Controller.RobotControl
 
                 motion.AwaitingAux = false;
                 Diag.AuxWaitDone();
+                if (motion.PendingAuxCompletion is { } onDone)
+                {
+                    motion.PendingAuxCompletion = null;
+                    onDone();
+                }
                 if (motion.PendingAuxStep is { } auxStep)
                 {
                     _ctx.Progress.StepCompleted(auxStep);
@@ -831,6 +865,14 @@ namespace Controller.RobotControl
                 Finish(ProgramStatus.Error,
                     $"Cannot assign computed variable '${ex.VariableName}' in step: {ProgressReporter.StepDescription(step)}");
             }
+            catch (ExpressionRuntimeException ex)
+            {
+                // A runtime failure inside an expression (jointsOf() out of reach, a missing saved
+                // point, an index outside a list): a catalog code a Try can catch.
+                var message = $"{_ctx.Progress.Describe(step)}: {ex.Message}";
+                try { _ctx.Fail(ex.Code, message); }
+                catch (Exception inner) { Finish(ProgramStatus.Error, $"{message} ({inner.Message})"); }
+            }
             catch (PluginFunctionCallException ex)
             {
                 // A plugin function failed (not running, timed out, returned an error) — the
@@ -897,9 +939,10 @@ namespace Controller.RobotControl
         /// <c>background</c> flag is the negation of this.</summary>
         internal static bool IsRestrictedInBackground(StepType type) => type switch
         {
-            StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ or StepType.MoveC => true,
+            StepType.MoveL or StepType.MoveJ or StepType.JumpL or StepType.JumpJ or StepType.MoveC or StepType.MoveJoints => true,
             StepType.SetTool or StepType.SetSpeedL or StepType.SetSpeedJ or StepType.SetSpeedFactor => true,
             StepType.SetLocal or StepType.ClearLocal or StepType.RunHoming or StepType.ThreadMove => true,
+            StepType.ConveyorTrack or StepType.ConveyorEndTracking => true, // tracking drives the robot
             _ => false,
         };
 

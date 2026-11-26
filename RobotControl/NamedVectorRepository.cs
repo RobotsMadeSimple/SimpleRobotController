@@ -148,6 +148,11 @@ public abstract class NamedVectorRepository<TItem, TEntry>
             _items.TryGetValue(item.Name!, out var prior);
             EnsureIdentity(item, prior);
 
+            // Re-teaching replaces the pose but keeps metadata: carry the prior
+            // description forward so changing a point's position never wipes the
+            // note describing what it's for.
+            if (prior != null) item.Description = prior.Description;
+
             _items[item.Name!] = item;
             AppendHistory(item);
             SaveItems();

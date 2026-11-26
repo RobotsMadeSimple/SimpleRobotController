@@ -36,6 +36,15 @@ namespace Controller.RobotControl.Robots.CNC4Axis
             );
         }
 
+        // FK of any joint vector: identity plus the tool, like ForwardKinematics.
+        public Vector6 ForwardFromJoints(Vector6 joints, Vector6 toolOffset) => new(
+            joints.X  + toolOffset.X,
+            joints.Y  + toolOffset.Y,
+            joints.Z  + toolOffset.Z,
+            0,
+            0,
+            joints.RZ + toolOffset.RZ);
+
         // IK: trivial — Cartesian IS joint space
         public Vector6 InverseKinematics(Vector6 tcp, Vector6 toolOffset)
         {

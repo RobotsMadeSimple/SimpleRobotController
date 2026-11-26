@@ -37,11 +37,50 @@ public interface IPluginContext
     Task<VariablesSnapshot> GetVariablesAsync(string? program = null);
     Task SetVariablesAsync(object values, string? program = null);
 
+    /// <summary>Convenience helpers for the most common robot commands (motion, points, live pose).
+    /// A thin layer over <see cref="CommandAsync"/>; anything not covered is still reachable with it.</summary>
+    IRobotApi Robot { get; }
+
     /// <summary>
     /// Subscribes to events (globs like <c>program.*</c> allowed). Events already subscribed (including the automatic
     /// subscription for every <c>On(...)</c> handler) are kept; intervals that are null keep their previous value.
     /// </summary>
     Task SubscribeAsync(IEnumerable<string> events, int? positionIntervalMs = null, int? statusIntervalMs = null, int? ioIntervalMs = null);
+}
+
+/// <summary>
+/// Convenience wrappers over common controller commands, reached as <c>ctx.Robot</c>. Each method issues
+/// exactly one WebSocket command and returns its result; anything not covered here (any command in
+/// <c>docs/websocket-api.md</c>) is still reachable with <see cref="IPluginContext.CommandAsync"/>.
+/// </summary>
+public interface IRobotApi
+{
+    /// <summary>Linear (straight-line) move to a Cartesian pose. On the 4-axis ASTRO the only orientation
+    /// DOF is <paramref name="rz"/> (J4); <paramref name="rx"/>/<paramref name="ry"/> stay 0. Queued on the
+    /// motion thread — returns when the move is <i>accepted</i>, not when it finishes (await
+    /// <see cref="IsMoving"/> / the <c>robot.position</c> event to know it has stopped).</summary>
+    Task<JsonElement> MoveL(double x, double y, double z, double rx = 0, double ry = 0, double rz = 0, double? speed = null, double? accel = null);
+    /// <summary>Joint-interpolated move to a Cartesian pose (see <see cref="MoveL"/> for the DOF/timing notes).</summary>
+    Task<JsonElement> MoveJ(double x, double y, double z, double rx = 0, double ry = 0, double rz = 0, double? speed = null, double? accel = null);
+    /// <summary>Start the homing sequence.</summary>
+    Task<JsonElement> Home();
+    /// <summary>Stop jogging / continuous motion (<c>StopJog</c>).</summary>
+    Task<JsonElement> Stop();
+
+    /// <summary>Taught points as a JSON array (<c>[{ name, x, y, z, rx, ry, rz }, …]</c>).</summary>
+    Task<JsonElement> GetPoints();
+    /// <summary>Save the robot's current pose as a taught point (stored in the base frame).</summary>
+    Task<JsonElement> TeachPoint(string name);
+    /// <summary>Saved grids (pallet patterns) as a JSON array.</summary>
+    Task<JsonElement> GetGrids();
+    /// <summary>Saved stacks (pick/place columns) as a JSON array.</summary>
+    Task<JsonElement> GetStacks();
+
+    /// <summary>Current tool pose. One <c>GetStatus</c> call — for high-rate reads subscribe to the
+    /// <c>robot.position</c> event instead.</summary>
+    Task<PluginPoint> Position();
+    /// <summary>True while the robot is in motion.</summary>
+    Task<bool> IsMoving();
 }
 
 /// <summary>The context handed to step handlers (cast the <see cref="IPluginContext"/> argument to this).</summary>

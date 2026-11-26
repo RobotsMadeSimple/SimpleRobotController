@@ -75,6 +75,7 @@ Keyword arguments override the environment. `manifest_override` (dict, or path t
 | `await get_variables(program=None)` | `{"variables": {...}, "lists": {...}, "strings": {...}}` |
 | `await set_variables({"x": 1}, program=None)` | computed variables raise `CommandError("computedVariable")` |
 | `await subscribe("status", position_interval_ms=50, status_interval_ms=None, io_interval_ms=None)` | merged with the events used in `@plugin.on`; remembered across reconnects |
+| `ctx.robot.*` | built-in command helpers — `move_l`/`move_j(x,y,z,rx=0,ry=0,rz=0,*,speed=,accel=)`, `home()`, `stop()`, `get_points()`, `teach_point(name)`, `get_grids()`, `get_stacks()`, `position()`, `is_moving()`. Thin wrappers over `command(...)`; anything else stays reachable with it (see `docs/plugins.md` section 8) |
 | `is_cancelled`, `await cancelled()`, `cancel_reason`, `invocation_id` | `StepContext` only; set by `step.cancel` (`stopped`, `reset`, `timeout`, `shutdown`) |
 
 Events used in `@plugin.on(...)` are subscribed automatically at ready. Cancellation does not interrupt your

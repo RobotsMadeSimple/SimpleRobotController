@@ -94,7 +94,7 @@ namespace Controller.RobotControl.Camera.Sofia
         {
             _decoder = _s.Decoder == SofiaDecoder.DecoderFfmpeg
                 ? new FfmpegProcessDecoder(_tag, _s.FfmpegPath, EffectiveCodec, _s.Hwaccel)
-                : new LoopbackEsDecoder(_tag, streamReadTimeoutMs);
+                : SofiaDecoder.CreateOpenCv(_tag, streamReadTimeoutMs);
             if (_aborted) { _decoder.Abort(); throw new System.IO.IOException("aborted"); }
 
             _client.ReadTimeoutMs = streamReadTimeoutMs;

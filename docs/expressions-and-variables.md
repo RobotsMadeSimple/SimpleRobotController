@@ -57,8 +57,46 @@ place above comparison (`not $a > 5` is `not ($a > 5)`, as it always was); a
 | `rand()` `rand(lo,hi)` | uniform |
 | `map(x,inLo,inHi,outLo,outHi)` `lerp(a,b,t)` | |
 | `inBox(x,y,z,x1,y1,z1,x2,y2,z2)` `inCircle(x,y,cx,cy,r)` | 1/0 zone tests: inside the box with opposite corners (x1,y1,z1)–(x2,y2,z2), corners in any order; within r of (cx,cy). Edges count as inside. |
+| `reachable(point[, tool][, local])` | 1/0: the robot can reach the point — IK solves and every joint is inside its soft limits. Nothing moves. (SPEL+ `TargetOK`) |
+| `jointsOf(point[, tool][, local]).j1` | the joint values that reach the point, read one at a time (`.j1`…`.j4` or `[0]`…`[3]`); fails `outOfReach` when it cannot be reached (RAPID `CalcJointT`) |
+| `poseOf(joints[, tool][, local]).x` | the TCP pose a joints value puts the tool at — forward kinematics (`.x .y .z .rx .ry .rz` or `[0]`…`[5]`) (RAPID `CalcRobT`) |
 
 Unknown function → parse error `unknownFunction`. Wrong arity → `badArity`.
+
+### Reach and kinematics
+
+`reachable`, `jointsOf` and `poseOf` run the controller's **real** inverse / forward kinematics
+and the joint windows the motion thread enforces (`Reachability`, `JointLimiter.Check`) — not a
+copy. They resolve a point exactly the way a move resolves its target.
+
+- **point** — `$pts[i]` (a Points-list element, or an Objects-list element with `x y z …`), `"Name"`
+  or a text variable `$s` (a saved point by name), `grid("Tray", row, col)` / `grid("Tray", index)`
+  (a grid cell, by name or id), `stack("Bins", i)` (a stack slot), or a nested `poseOf(…)`. Point
+  coordinates are program (local-frame) coordinates, like a saved point.
+- **joints** (poseOf) — `$home[i]` (an Objects-list element with fields `j1 j2 j3 j4`) or a
+  nested `jointsOf(…)`.
+- **tool**, **local** — a name in quotes or a text variable; `""` (or leaving it out) = the
+  active one (the active tool; the program's active local from SetLocal / ClearLocal), `"none"` =
+  no tool / the world frame. The tool comes first: `reachable($p[0], "", "Tray")` keeps the
+  active tool and names a local.
+
+A **joints value** is an Objects-list element `{j1, j2, j3, j4}` — ASTRO J1 °, J2 radial reach
+mm, J3 vertical mm, J4 ° (the joint-limit layout); CNC4Axis X, Y, Z, RZ. Save Position with
+`source: "joints"` stores one; Move to Joints (`jointsExpr`) and a List step's value
+(`$js.append(jointsOf($pts[0]))`, `$pts.append(poseOf($home[0]))`) take a **whole** value. In a
+number field `jointsOf(…)` / `poseOf(…)` need an accessor — a bare one is an expression error
+("read one with .j1, .j2, .j3 or .j4").
+
+`reachable` is true when IK has a solution — forward kinematics of the solution lands within
+0.05 mm of the target (ASTRO cannot put its TCP inside the 48 mm J4 offset circle around the
+base axis, for example) — and, with joint limits on, every joint is inside its window (edges
+count as inside). With joint limits off only the IK check applies. Runtime failures are
+**catchable**: `jointsOf` of an unreachable point fails `outOfReach` with the reason ("…out of
+reach — J2 limit (512 > 450)" or "outside reach"); an unknown saved point, grid, stack, tool or
+local fails `pointNotFound`; an index outside the list `indexOutOfRange`. There is no
+`reachReason()` — expressions are numeric; the reason is in the caught error message. The
+functions need the robot: they work in programs (main and background) and `EvaluateExpression`,
+and error elsewhere.
 
 **Text helpers** on a string variable `$s`: `$s.contains("x")`, `$s.startsWith("x")`,
 `$s.endsWith("x")` (1/0), `$s.indexOf("x")` (position of the first match from 0, -1 when
@@ -117,6 +155,7 @@ Resolved live at evaluation time; never assignable. Names are case-insensitive.
 | `$time.now` (unix ms) `$time.hour` `$time.minute` `$time.second` `$time.dayOfWeek` (0=Sun) `$time.dayOfYear` | wall clock |
 | `$aux.<deviceId>.<axisIndex>.position` `$aux.<deviceId>.moving` | aux axes |
 | `$camera.<cameraId>.calibrated` | 1 when the camera has a camera-to-robot calibration ([camera-calibration.md](camera-calibration.md)) |
+| `$conveyor.<conveyorId>.travel` `.speed` `.count` `.inWindow` `.tracking` `.part.x` `.part.id` `.latched` `.picked` `.missed` | a configured conveyor ([conveyor-tracking.md](conveyor-tracking.md)), by its stable id: belt travel (mm), speed (mm/s), queued parts, parts inside the pick window, 1 while one of its parts is tracked, the tracked part's X in the conveyor frame (mm) and id (0 when none), and the running counts since the controller started |
 | `$<pluginId>.<name>` | a running plugin's live property, e.g. `$scale.weight` ([plugins.md](plugins.md)) |
 
 Plugin properties sit in the chain computed variables → plugin properties →
@@ -181,6 +220,11 @@ as written rather than failing. `stepPath` uses the JSON field names
 (`steps[2].loopSteps[0]`, `steps[1].elseIfBranches[0].steps[3]`); a routine body is
 checked once, under the first call that reaches it: `steps[4].routine(Pick).steps[0]`.
 Program-level problems (variables) have `stepId: null` and `stepPath: "variables[i]"`.
+
+Move to Joints adds: no joint value (warning), a `jointsExpr` that is not a whole value
+(`$list[i]`, `jointsOf(…)`) or names a Points list; MoveL / MoveJ / JumpL / JumpJ / MoveJoints: an
+unknown `motionProfile` (not `trapezoid` / `scurve`). A List step's `listValueExpr` on a Points /
+Objects list is fine when it is a whole value (`$pts[i]`, `poseOf(…)`, `jointsOf(…)`).
 
 `EvaluateExpression` failures also carry `code` (`expressionSyntax`,
 `unknownFunction`, `badArity`, `unknownVariable`, and for plugin calls

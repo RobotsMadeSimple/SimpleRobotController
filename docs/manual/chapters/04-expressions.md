@@ -27,6 +27,7 @@ Expressions are evaluated when the step runs, so they always use the current val
 | Conditional | `cond ? a : b`, or `if(cond, a, b)` |
 | Functions | `abs(x)`, `round(x, 2)`, `min(a, b, …)`, `dist(x1, y1, x2, y2)`, `len($list)` … |
 | Text helpers | `$s.contains("x")`, `$s.startsWith("x")`, `$s.indexOf("x")`, `$s.toNumber()`, `$s.length` |
+| Reach | `reachable($pts[$i])`, `jointsOf("Pick").j2`, `poseOf($home[0]).z` |
 | Plugin calls | `scale.tare()`, `$scale.weight` |
 | Grouping | `( … )` |
 
@@ -76,6 +77,33 @@ MoveL Pick1, until=$io.Arduino_Nano.Load_Cell >= 2000
 
 In Blocks a condition is shown as **rows** (`left · operator · right`) joined by **ALL** (and) or
 **ANY** (or). The text form's top-level `and` / `or` become those rows, so both views stay in step.
+
+## Reach and kinematics
+
+Three functions ask the robot's own kinematics without moving it — the counterparts of SPEL+
+`TargetOK` and RAPID `CalcJointT` / `CalcRobT`:
+
+| Function | Gives |
+|---|---|
+| `reachable(point[, tool][, local])` | 1 when the inverse kinematics solves and every joint is inside its soft limits, else 0 |
+| `jointsOf(point[, tool][, local])` | the joint values that reach the point — read one with `.j1` … `.j4`; fails `outOfReach` when unreachable |
+| `poseOf(joints[, tool][, local])` | the tool pose those joints give — read one axis with `.x` `.y` `.z` `.rz` |
+
+A **point** is a list element (`$pts[$i]`), a saved point by name (`"Pick"`, or a text variable),
+a grid cell (`grid("Tray", $r, $c)`) or a stack slot (`stack("Bins", $i)`) — resolved exactly as a
+move to it would be. **Joints** are an element of an Objects list with fields `j1 j2 j3 j4` (Save
+Position with `source=joints` makes one) or a `jointsOf(…)`. The optional **tool** and **local**
+are names in quotes: `""` means the active one, `"none"` none.
+
+```srs
+var home: list record
+if reachable($pts[$i])
+  MoveL $pts[$i]
+end
+$j2 = jointsOf("Pick", "Gripper").j2
+SavePosition $home, source=joints
+$z = poseOf($home[0]).z
+```
 
 ## IO names
 

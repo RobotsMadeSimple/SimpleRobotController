@@ -18,6 +18,9 @@ public interface INamedVector
     /// (see NamedVectorRepository.EnsureIdentity).
     /// </summary>
     string? Id { get; set; }
+    /// <summary>Optional free-text note describing the item's purpose. Preserved across
+    /// re-teach (see NamedVectorRepository.SaveItem) so it isn't lost when the pose changes.</summary>
+    string Description { get; set; }
     long LastUpdatedUnixMs { get; set; }
 }
 
@@ -35,6 +38,16 @@ public class Point : Vector6, INamedVector
     /// </summary>
     [JsonPropertyName("id")]
     public string? Id { get; set; }
+
+    /// <summary>Optional free-text note describing what the point is for. Edited any time;
+    /// never required when teaching. Mirrors <see cref="Tool.Description"/> / <see cref="Local.Description"/>.</summary>
+    public string Description { get; set; } = "";
+
+    /// <summary>Program points only: true until the point has been taught a position (added in the
+    /// builder with a name but not yet jogged to). Stored so the untaught state survives save/reload.
+    /// Global library points are always taught and leave this false.</summary>
+    [JsonPropertyName("untaught")]
+    public bool Untaught { get; set; }
 
     // Unix ms when this point was last created or modified
     public long LastUpdatedUnixMs { get; set; }
@@ -128,6 +141,10 @@ public class TeachPointParams
 {
     [JsonPropertyName("name")]
     public string Name { get; set; } = default!;
+
+    /// <summary>Optional description to set when teaching a brand-new point in one step.</summary>
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
 }
 
 public class EditPointParams
@@ -137,6 +154,9 @@ public class EditPointParams
 
     [JsonPropertyName("newName")]
     public string? NewName { get; set; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
 
     [JsonPropertyName("x")]
     public double? X { get; set; }

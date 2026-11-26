@@ -14,7 +14,7 @@ namespace Controller.RobotControl.Robots.ASTRO
         // Expressed in flange-local coordinates
         private static readonly Vector3 J4OffsetLocal = new Vector3(
             0f,  // X offset (Radial Offset)
-            -48.356f,   // Y offset (Offcenter Distance)
+            -58.5f,   // Y offset (Offcenter Distance) — CAD measures 58.5 mm (J1 axis to J4 axis)
             0f    // Z offset
         );
 
@@ -55,11 +55,23 @@ namespace Controller.RobotControl.Robots.ASTRO
         // ============================================================
         public Vector6 ForwardKinematics(Vector6 toolOffset)
         {
-            double j1Rad = CurrentJoint1.JointAngleRad;
-            double j4Rad = CurrentJoint4.JointAngleRad;
-
             var (radial, flangeZ) = CurrentJoint2.Cartesian;
+            return Forward(CurrentJoint1.JointAngleRad, CurrentJoint1.JointAngleDeg,
+                           CurrentJoint4.JointAngleRad, CurrentJoint4.JointAngleDeg,
+                           radial, flangeZ, toolOffset);
+        }
 
+        /// <summary>
+        /// FK of an arbitrary joint vector (X = J1 °, Y = radial mm, Z = vertical mm, RZ = J4 °)
+        /// without touching the joint state — the same math as <see cref="ForwardKinematics"/>.
+        /// </summary>
+        public Vector6 ForwardFromJoints(Vector6 joints, Vector6 toolOffset) =>
+            Forward(joints.X * Math.PI / 180.0, joints.X, joints.RZ * Math.PI / 180.0, joints.RZ,
+                    joints.Y, joints.Z, toolOffset);
+
+        private static Vector6 Forward(double j1Rad, double j1Deg, double j4Rad, double j4Deg,
+                                       double radial, double flangeZ, Vector6 toolOffset)
+        {
             // --- Flange centerline position ---
             Vector3 flange = new Vector3(
                 (float)(radial * Math.Cos(j1Rad)),
@@ -85,9 +97,7 @@ namespace Controller.RobotControl.Robots.ASTRO
 
             Vector3 tcp = j4World + toolWorld;
 
-            double worldRzMath =
-                CurrentJoint1.JointAngleDeg +
-                CurrentJoint4.JointAngleDeg;
+            double worldRzMath = j1Deg + j4Deg;
 
             return new Vector6(
                 tcp.X,

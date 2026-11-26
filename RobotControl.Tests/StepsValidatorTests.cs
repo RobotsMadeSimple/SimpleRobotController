@@ -132,7 +132,12 @@ public class StepsValidatorTests
         Has(Validate([StepsRig.PointList("pts")], Save(s => s.SavePositionMode = "prepend")), ValidationCodes.MissingField, "savePositionMode");
         Has(Validate([StepsRig.PointList("pts")], Save(s => { s.SavePositionMode = "set"; s.SavePositionIndex = -1; })),
             ValidationCodes.MissingField, "savePositionIndex");
-        Has(Validate([StepsRig.PointList("pts")], Save(s => s.SavePositionSource = "joints")), ValidationCodes.MissingField, "savePositionSource");
+        Has(Validate([StepsRig.PointList("pts")], Save(s => s.SavePositionSource = "elbow")), ValidationCodes.MissingField, "savePositionSource");
+        // Joint values go into an Objects list, never a Points list or a saved point.
+        Has(Validate([StepsRig.PointList("pts")], Save(s => s.SavePositionSource = "joints")), ValidationCodes.UnknownVariable, "variableName");
+        Clean(Validate([StepsRig.Records("pts")], Save(s => s.SavePositionSource = "joints")));
+        Has(Validate(Save(s => { s.SavePositionSource = "joints"; s.SavePositionTo = "point"; s.PointName = "P"; })),
+            ValidationCodes.UnsupportedOnStep, "savePositionTo");
         Has(Validate([StepsRig.PointList("pts")], Save(s => s.SavePositionTo = "file")), ValidationCodes.MissingField, "savePositionTo");
         Clean(Validate([StepsRig.PointList("pts"), StepsRig.Num("i")],
             Save(s => { s.SavePositionMode = "insert"; s.Expressions = new() { ["savePositionIndex"] = "$i" }; })));

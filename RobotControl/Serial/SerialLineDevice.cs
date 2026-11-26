@@ -35,8 +35,29 @@ namespace Controller.RobotControl.Serial
         // ── Shared timing constants — identical across every current subclass ──────
         protected const int BaudRate             = 115200;
         protected const int ProbeWriteTimeoutMs   = 1000;
-        protected const int SessionReadTimeoutMs  = 100;  // short so the write queue is serviced promptly
-        protected const int ReconnectDelayMs      = 3000;
+
+        /// <summary>Delay between reconnect attempts. A const for the probing devices; overridable
+        /// so a fixed-port device (no boot window to respect) can retry its one port more snappily.</summary>
+        protected virtual int ReconnectDelayMs    => 3000;
+
+        // ── Fixed-port (no ID? probe) hooks — GenericSerialDevice ──────────────────
+        /// <summary>True (default) to discover the device by probing candidate ports with "ID?".
+        /// Nano/Aux keep this true. A subclass that sets it false + a <see cref="FixedPortName"/>
+        /// opens that one user-chosen port directly, with no handshake.</summary>
+        protected virtual bool UsesIdProbe => true;
+
+        /// <summary>When <see cref="UsesIdProbe"/> is false, the single port to open. Null = none.</summary>
+        protected virtual string? FixedPortName => null;
+
+        /// <summary>Baud for the fixed-port path (the probing path always uses <see cref="BaudRate"/>).</summary>
+        protected virtual int ConfiguredBaud => BaudRate;
+
+        /// <summary>Fixed-port path only: whether a connection is currently wanted (manual connect/disconnect).</summary>
+        protected virtual bool WantConnection => true;
+
+        /// <summary>Session read timeout — the longest a queued command waits for an idle read loop
+        /// to come round and send it. Short so the write queue is serviced promptly.</summary>
+        protected virtual int SessionReadTimeoutMs => 100;
 
         // ── Probe timing — overridable per device ─────────────────────────────────
         /// <summary>Read timeout for one "ID?" probe attempt. Short + many attempts = poll across
@@ -259,6 +280,11 @@ namespace Controller.RobotControl.Serial
         /// </summary>
         private SerialPort? ScanForDevice()
         {
+            // Fixed-port path (GenericSerialDevice): no ID? probe, no candidate scan — just open the
+            // one user-chosen port at the configured framing and run the normal session/reconnect loop.
+            if (!UsesIdProbe && FixedPortName is { } fixedPort)
+                return ScanFixedPort(fixedPort);
+
             foreach (string portName in CandidatePorts())
             {
                 if (!_running) return null;
@@ -328,6 +354,64 @@ namespace Controller.RobotControl.Serial
             return null;
         }
 
+        /// <summary>
+        /// Fixed-port open: respects <see cref="SerialPortRegistry"/> and <see cref="WantConnection"/>,
+        /// opens the port via <see cref="CreateFixedPort"/>, claims it, and returns it ready for the
+        /// session. Null (then the loop retries after <see cref="ReconnectDelayMs"/>) when a connection
+        /// isn't wanted, the port is owned by another device, or the open failed (port absent/in use).
+        /// </summary>
+        private SerialPort? ScanFixedPort(string portName)
+        {
+            if (!_running || !WantConnection) return null;
+            if (SerialPortRegistry.IsClaimedByOther(portName, Id)) return null;
+
+            lock (SerialPortRegistry.LockFor(portName))
+            {
+                if (SerialPortRegistry.IsClaimedByOther(portName, Id)) return null;
+                SerialPort? port = null;
+                try
+                {
+                    port = CreateFixedPort(portName);
+                    port.Open();
+                    SerialPortRegistry.Claim(portName, Id);
+                    return port;
+                }
+                catch
+                {
+                    try { port?.Close(); port?.Dispose(); } catch { }
+                    return null;
+                }
+            }
+        }
+
+        /// <summary>Builds the SerialPort for the fixed-port path. Overridden by GenericSerialDevice to
+        /// apply the configured baud/parity/stop/data framing and line ending.</summary>
+        protected virtual SerialPort CreateFixedPort(string portName) =>
+            new(portName, ConfiguredBaud)
+            {
+                ReadTimeout  = SessionReadTimeoutMs,
+                WriteTimeout = SessionWriteTimeoutMs,
+                NewLine      = "\n",
+            };
+
+        /// <summary>Closes the current session port (if any), ending the read/write loop so the
+        /// connection loop reconnects (or stays idle while a connection isn't wanted).</summary>
+        protected void DropConnection()
+        {
+            try { _port?.Close(); } catch { }
+        }
+
+        /// <summary>Writes raw text to the port with no appended terminator (the caller supplies any).</summary>
+        protected void WriteRaw(string text)
+        {
+            try { _port?.Write(text); }
+            catch (Exception ex) { Console.WriteLine($"[{LogPrefix}] Write error: {ex.Message}"); }
+        }
+
+        /// <summary>How one queued command is written during the session. Default = WriteLine (appends
+        /// the port's NewLine). Overridden to apply a configurable line ending.</summary>
+        protected virtual void WriteOutbound(string line) => SafeWrite(line);
+
         /// <summary>Opens a fresh session SerialPort for devices that don't keep the probe port open.</summary>
         protected virtual SerialPort OpenSessionPort(string portName)
         {
@@ -352,16 +436,21 @@ namespace Controller.RobotControl.Serial
 
             OnSessionStarted(port);
 
-            var readBuf = new StringBuilder();
+            var readBuf  = new StringBuilder();
+            var outgoing = new List<string>();
 
             while (_running && port.IsOpen)
             {
-                // Drain outbound command queue
+                // Drain outbound command queue. Dequeue under the lock, write outside it, so a
+                // slow port write never holds _lock (readers of device state — the motion thread
+                // sampling a live aux position — must not wait on serial I/O). Order is preserved.
                 lock (_lock)
                 {
                     while (_commandQueue.Count > 0)
-                        SafeWrite(_commandQueue.Dequeue());
+                        outgoing.Add(_commandQueue.Dequeue());
                 }
+                foreach (var cmd in outgoing) WriteOutbound(cmd);
+                outgoing.Clear();
 
                 // Read one byte; ReadTimeout=SessionReadTimeoutMs means we spin back to flush the queue
                 try

@@ -69,6 +69,36 @@ Run from step starts the program at a chosen step:
 
 Background programs ignore breakpoints, step mode and run from step; a plain start clears them.
 
+## Alarms
+
+The controller keeps an alarm history (the newest 500): program errors, joint-limit faults, the
+e-stop, the motor driver or an IO board disconnecting, and plugin crashes. Open it from Robot →
+Alarms, or from the badge on the e-stop banner. Active alarms are listed first, then the history;
+each one expands to its cause and remedy. **Acknowledge** marks an alarm seen; it leaves the active
+list once its condition has also gone (a program error has no lasting condition, so acknowledging
+it is enough). **Clear** empties the history of everything that has returned to normal. Clients use
+`GetAlarms`, `AcknowledgeAlarm`, `ClearAlarms` and `GetAlarmCatalog`; `GetStatus` carries
+`activeAlarmCount` and `lastAlarmUpdate`.
+
+## Emergency stop
+
+With the hardwired e-stop monitored (Robot → Configure → Emergency stop; wiring in the controller's
+`docs/estop.md` — **not a certified safety function**), pressing it stops motion, ends every program
+with `emergencyStop` and marks the robot unhomed. A red banner shows on every screen until it is
+reset. Moves, jogs, homing and program starts are refused meanwhile (`estopActive` /
+`estopLatched`). To recover: release the button, re-energise the drivers, press **Reset** on the
+banner (refused while the input still reads open), home the robot, then run the program again.
+
+## Backup and restore
+
+Robot → Backup & restore downloads one zip of everything you made on this controller: programs,
+points, tools, locals, grids, stacks, robot and device configuration, vision programs, calibrations,
+cell packages, persistent variables and plugin settings (plugins themselves are listed, not
+included — reinstall them). Restoring is a step-by-step dialog: pick the zip, review what it will
+replace, confirm. The controller saves a pre-restore backup first, refuses while a program runs or
+the robot moves, then restarts with the restored data. Home the robot afterwards. Over HTTP this is
+`GET /backup` and `POST /backup/restore` (`?apply=true` to apply).
+
 ## Debugging tips
 
 - Put `status "…{$var}…"` steps at interesting places — the message appears on the monitor and in

@@ -6,6 +6,7 @@
 | [Move Joint](#ref-MoveJ) | `MoveJ` | Joint-interpolated: all joints start and stop together. |
 | [Jump Linear / Joint](#ref-JumpL) | `JumpL` / `JumpJ` | Lift, traverse, lower — the pick-and-place move. |
 | [Move Arc](#ref-MoveC) | `MoveC` | Circular arc through a via point. |
+| [Move to Joints](#ref-MoveJoints) | `MoveJoints` (`MoveAbsJ`) | Joint-interpolated to explicit joint values â€” no Cartesian target. |
 | [Thread Move](#ref-ThreadMove) | `ThreadMove` | Z travel synchronised with RZ rotation. |
 | [CNC Program](#ref-CncProgram) | `CncProgram` | A toolpath from a DXF or SVG file. |
 | [Run Homing](#ref-RunHoming) | `RunHoming` | The full homing sequence. |
@@ -41,6 +42,55 @@ MoveL Pick1, speed=50
 The speed a program move actually runs at is *speed × operator override × speed factor / 100*. The
 speed factor can only slow a program down; manual jogging is never affected by either. Read the
 current values in expressions as `$robot.speedS`, `$robot.speedOverride` and `$program.speedFactor`.
+
+## Motion profile: trapezoid or S-curve
+
+By default every move ramps with constant acceleration — a **trapezoid** speed profile, the
+acceleration stepping on and off. The robot configuration's **Motion profile** can select an
+**S-curve** instead: a jerk-limited profile in which the acceleration itself ramps up and down,
+so the start and stop are smoother and excite less vibration.
+
+| Setting | Meaning |
+|---|---|
+| Motion profile | `trapezoid` (default) or `scurve`. |
+| Smoothness (1–100 %, default 50) | The share *f* of each acceleration phase spent ramping the acceleration. 100 % = no constant-acceleration part at all. |
+| Jerk (optional) | An absolute jerk limit (mm/s³ for linear moves, joint units/s³ for joint moves). Empty = derived from the smoothness: *jerk = a² (2 − f) / (f · v<sub>max</sub>)*. |
+
+A single move can pick its own profile with `profile=`:
+
+```srs
+MoveL Pick1, profile=scurve
+JumpJ Place1, z=60, profile=trapezoid
+```
+
+With the same speed and acceleration an S-curve move takes a little longer than a trapezoid
+one — the ramps are gentler — so raise the acceleration a little if cycle time matters. Blended
+paths, Jumps and arcs use it along the whole path. Homing and jogging always keep the trapezoid.
+
+## Moving to joint values
+
+[Move to Joints](#ref-MoveJoints) moves straight to joint values, with no Cartesian target and no
+inverse kinematics (RAPID `MoveAbsJ`). Joints follow the robot's joint-limit layout: on ASTRO
+`j1` is the base rotation (°), `j2` the radial reach (mm), `j3` the vertical (mm) and `j4` the tool
+rotation (°); on a CNC they are X, Y, Z and RZ. A joint left empty keeps its current value.
+
+```srs
+var home: list record
+SavePosition $home, source=joints               # capture the joints here: {j1, j2, j3, j4}
+MoveJoints j1=90, j2=250, j3=120, j4=0, speed=50
+MoveJoints $home[0], j4=45                      # a saved joints value, one joint changed
+MoveJoints (jointsOf("Pick1"))                  # the joints that reach a saved point
+```
+
+A joint value outside its soft limit fails with `outOfReach` before the robot moves.
+
+## Reach checks
+
+Every move checks its target **before** it starts: the inverse kinematics must solve and every
+joint must be inside its soft limits. A Move Linear checks its whole line, a Jump its lift and
+traverse points, a blended run every corner and an arc every point. An unreachable target fails
+with the catchable `outOfReach`, so a [Try](#errors) can skip a part instead of stopping the cell.
+To ask without moving, use `reachable(…)` and `jointsOf(…)` ([Expressions](#expressions)).
 
 ## Blending
 
@@ -129,7 +179,8 @@ end
 |---|---|---|
 | `pointNotFound` | yes | A template or list target names no saved point. |
 | `arcDegenerate` | yes | Move Arc points on one line. |
+| `outOfReach` | yes | Checked before the move: the target has no inverse kinematics solution, or a joint would be outside its soft limits. |
 | `motionFault` | no | The motion system reports a fault. |
-| `jointLimit` | no | A target is outside a joint's soft limits. |
+| `jointLimit` | no | A joint crosses its soft limit while the robot is moving. |
 | `driverDisconnected` | no | The motor driver is not connected. |
 | `emergencyStop` | no | The emergency stop was pressed. |

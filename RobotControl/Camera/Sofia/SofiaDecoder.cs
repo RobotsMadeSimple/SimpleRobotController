@@ -56,6 +56,14 @@ namespace Controller.RobotControl.Camera.Sofia
         public const string DecoderOpenCv = "opencv";
         public const string DecoderFfmpeg = "ffmpeg";
 
+        /// <summary>The in-process ("opencv") elementary-stream decoder for this OS. Windows opens a
+        /// loopback TCP socket (its bundled FFmpeg has the tcp protocol); Linux's bundled FFmpeg has
+        /// no network protocols, so it uses a named FIFO opened by path instead.</summary>
+        public static SofiaDecoder CreateOpenCv(string tag, int readTimeoutMs) =>
+            OperatingSystem.IsWindows()
+                ? new LoopbackEsDecoder(tag, readTimeoutMs)
+                : new FifoEsDecoder(tag, readTimeoutMs);
+
         /// <summary><c>opencv</c> or <c>ffmpeg</c>.</summary>
         public abstract string Kind { get; }
 

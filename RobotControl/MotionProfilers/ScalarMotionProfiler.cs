@@ -21,6 +21,9 @@ namespace Controller.RobotControl.MotionProfilers
 
         public bool IsFinished { get; private set; }
 
+        /// <summary>The profile's planned duration (s) — conveyor tracking's MoveJ intercept estimate.</summary>
+        public double TotalTime => totalTime;
+
         // -----------------------------------------
         // Setup (normalized 0 → 1)
         // -----------------------------------------
