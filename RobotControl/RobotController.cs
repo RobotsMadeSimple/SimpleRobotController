@@ -280,13 +280,18 @@ namespace Controller.RobotControl
         // ── Aux Stepper Axes ──────────────────────────────────────────────────
         public AuxAxisManager AuxAxisManager { get; private set; } = null!;
 
-        /// <summary>Every IO device's live state — the Nano edge devices plus any aux-stepper
-        /// device that has spare-pin IO configured. This is the single source the GetIO response
-        /// and the GetStatus `ioDevices` field both serialize.</summary>
+        /// <summary>SimplePLC heads (24 V Ethernet IO over the native host protocol); their module
+        /// slots are surfaced as IO devices too (GetAllIoStates).</summary>
+        public SimplePlc.SimplePlcManager SimplePlcManager { get; private set; } = null!;
+
+        /// <summary>Every IO device's live state — the Nano edge devices, any aux-stepper device that
+        /// has spare-pin IO configured, and the SimplePLC heads' module bits. This is the single source
+        /// the GetIO response and the GetStatus `ioDevices` field both serialize.</summary>
         public List<Io.IoDeviceState> GetAllIoStates()
         {
             var states = NanoManager.GetAllStates();
             states.AddRange(AuxAxisManager.GetAllIoStates());
+            states.AddRange(SimplePlcManager.GetAllIoStates());
             return states;
         }
 
@@ -372,6 +377,8 @@ namespace Controller.RobotControl
 
             AuxAxisManager = new AuxAxisManager("aux_config.json");
 
+            SimplePlcManager = new SimplePlc.SimplePlcManager("simple_plc.json");
+
             CameraManager = new Camera.CameraManager("camera_config.json");
 
             DeviceManager = new Devices.DeviceManager("device_config.json");
@@ -431,6 +438,7 @@ namespace Controller.RobotControl
             NanoManager.Start();
             RelayManager.Start();
             AuxAxisManager.Start();
+            SimplePlcManager.Start();
             CameraManager.Start();
 
             stb.Start();

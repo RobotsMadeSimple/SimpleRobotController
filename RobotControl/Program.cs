@@ -69,6 +69,7 @@ class Program
         catch (Exception ex) { Console.WriteLine($"[Plugins] Discovery failed: {ex.Message}"); }
         lifetime.ApplicationStarted.Register(() => robot.PluginManager.StartAll(ListeningPort(app, port)));
         lifetime.ApplicationStopping.Register(() => robot.PluginManager.StopAll());
+        lifetime.ApplicationStopping.Register(() => robot.SimplePlcManager.Stop());
 
         // ── mDNS discovery ────────────────────────────────────────────────────
         // Optional: set "enableMdns": false in robot-config.json to run without
