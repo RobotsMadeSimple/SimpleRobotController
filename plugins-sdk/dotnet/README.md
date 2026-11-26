@@ -88,6 +88,10 @@ Notes:
   default code `stepFailed`). Any other exception is reported as `error: "exception"`.
 - `ctx.CommandAsync(name, params)` can call any command from docs/websocket-api.md; failures throw
   `CommandException` with the controller's `Code`.
+- `ctx.Robot` bundles built-in command helpers so you don't hand-type command strings:
+  `MoveL`/`MoveJ(x, y, z, rx, ry, rz, speed, accel)`, `Home()`, `Stop()`, `GetPoints()`,
+  `TeachPoint(name)`, `GetGrids()`, `GetStacks()`, `Position()` → `PluginPoint`, `IsMoving()`. Thin
+  wrappers over `CommandAsync`; everything else stays reachable with it (see docs/plugins.md §8).
 - Others: `ctx.GetVariablesAsync()`, `ctx.SetVariablesAsync(new { count = 3 })`,
   `ctx.SetStatus("degraded", "no scale")`, `ctx.ClearProperties()`, `ctx.Config`.
 

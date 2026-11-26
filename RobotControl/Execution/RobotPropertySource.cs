@@ -24,7 +24,7 @@ namespace Controller.RobotControl.Execution
     /// snapshot; a program that never mentions a property pays nothing for it. Names are
     /// case-insensitive. Robot reads are the same lock-free snapshots GetStatus uses.
     /// </remarks>
-    internal sealed class RobotPropertySource : IPropertySource
+    internal sealed partial class RobotPropertySource : IPropertySource
     {
         private readonly RobotController? _robot;
         private readonly IProgramRunInfo? _run;
@@ -111,7 +111,7 @@ namespace Controller.RobotControl.Execution
 
         /// <summary>The first segment of every property name — a <c>$name.…</c> starting with one of these is a property reference.</summary>
         public static readonly IReadOnlySet<string> Roots =
-            new HashSet<string>(["robot", "program", "time", "aux", "camera", "device"], StringComparer.OrdinalIgnoreCase);
+            new HashSet<string>(["robot", "program", "time", "aux", "camera", "device", "conveyor"], StringComparer.OrdinalIgnoreCase);
 
         public bool TryGet(string name, out double value)
         {
@@ -142,6 +142,9 @@ namespace Controller.RobotControl.Execution
 
             if (name.StartsWith("device.", StringComparison.OrdinalIgnoreCase))
                 return TryGetDevice(name, out value);
+
+            if (name.StartsWith("conveyor.", StringComparison.OrdinalIgnoreCase))
+                return TryGetConveyor(name, out value);
 
             // $<pluginId>.<name>. Plugin ids can never be one of the roots above (manifest
             // rule), so asking after them is the documented computed → plugin → robot order
@@ -184,6 +187,19 @@ namespace Controller.RobotControl.Execution
             return mgr.TryGetChannel(rest[..dot], rest[(dot + 1)..], out value);
         }
 
+        // $conveyor.<conveyorId>.<prop> — travel, speed, count, inWindow, tracking, part.x, part.id,
+        // latched, picked, missed (docs/conveyor-tracking.md). The id is the first segment; the
+        // property is the rest, so "part.x" stays intact.
+        private bool TryGetConveyor(string name, out double value)
+        {
+            value = 0;
+            if (_robot?.Conveyors is not { } svc) return false;
+            var rest = name["conveyor.".Length..];
+            int dot = rest.IndexOf('.');
+            if (dot <= 0 || dot == rest.Length - 1) return false;
+            return svc.TryGetProperty(rest[..dot], rest[(dot + 1)..], out value);
+        }
+
         // $aux.<deviceId>.<axisIndex>.position  and  $aux.<deviceId>.moving
         private bool TryGetAux(string name, out double value)
         {
@@ -207,6 +223,21 @@ namespace Controller.RobotControl.Execution
             {
                 value = mgr.GetPosition(deviceId, axis);
                 return true;
+            }
+            // Silo role (docs/aux-silo.md): parts left, and whether the lift is homed.
+            if (parts.Length == 4 && int.TryParse(parts[2], out int siloAxis)
+                && mgr.GetAxisConfig(deviceId, siloAxis) is { } siloCfg)
+            {
+                if (parts[3].Equals("siloCount", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = siloCfg.SiloCount;
+                    return true;
+                }
+                if (parts[3].Equals("siloHomed", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = B(mgr.IsSiloHomed(deviceId, siloAxis));
+                    return true;
+                }
             }
             return false;
         }
@@ -233,10 +264,20 @@ namespace Controller.RobotControl.Execution
                     yield return ($"aux.{d.Id}.{a.AxisIndex}.position",
                                   $"Aux '{d.Name}' axis {a.AxisIndex}{(string.IsNullOrEmpty(a.Name) ? "" : $" ({a.Name})")} position (steps)",
                                   "number");
+                foreach (var a in d.Axes.Where(a => a.Role == AuxAxis.AuxAxisRole.Silo))
+                {
+                    yield return ($"aux.{d.Id}.{a.AxisIndex}.siloCount", $"Parts left in silo '{d.Name}' axis {a.AxisIndex}", "number");
+                    yield return ($"aux.{d.Id}.{a.AxisIndex}.siloHomed", $"1 while silo '{d.Name}' axis {a.AxisIndex} is homed", "boolean");
+                }
             }
 
             foreach (var id in CameraIds())
                 yield return ($"camera.{id}.calibrated", $"1 when camera '{id}' has a camera-to-robot calibration", "boolean");
+
+            if (_robot.Conveyors is { } conveyors)
+                foreach (var (id, cname) in conveyors.Ids())
+                    foreach (var (prop, desc, type) in Conveyors.ConveyorService.PropertyNames)
+                        yield return ($"conveyor.{id}.{prop}", $"Conveyor '{cname}': {desc}", type);
 
             if (_robot.DeviceManager is { } devices)
                 foreach (var (id, channel, unit) in devices.ListChannels())

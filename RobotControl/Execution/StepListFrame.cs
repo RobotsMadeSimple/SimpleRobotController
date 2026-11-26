@@ -51,6 +51,10 @@ namespace Controller.RobotControl.Execution
         /// <summary>A blocking SetOutput pulse: the state set on entry (reverted when the pulse ends).</summary>
         public bool PulseValue { get; set; }
 
+        /// <summary>SerialCommand: the device rx sequence captured before the command was sent, so only
+        /// reply lines that arrive afterwards are collected.</summary>
+        public long SerialMark { get; set; }
+
         // ── Loop state ────────────────────────────────────────────────────────
 
         /// <summary>CountLoop / ForEach: variable receiving the 0-based iteration ("" = none).</summary>

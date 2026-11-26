@@ -115,6 +115,36 @@
       "catchable": true
     },
     {
+      "code": "outOfReach",
+      "label": "Target out of reach",
+      "catchable": true
+    },
+    {
+      "code": "conveyorWindow",
+      "label": "Conveyor part left the window",
+      "catchable": true
+    },
+    {
+      "code": "conveyorTimeout",
+      "label": "No conveyor part in time",
+      "catchable": true
+    },
+    {
+      "code": "conveyorSpeed",
+      "label": "Conveyor too fast to track",
+      "catchable": true
+    },
+    {
+      "code": "siloNotHomed",
+      "label": "Silo not homed",
+      "catchable": true
+    },
+    {
+      "code": "siloEmpty",
+      "label": "Silo empty",
+      "catchable": true
+    },
+    {
       "code": "userError",
       "label": "Raised error",
       "catchable": true
@@ -163,6 +193,11 @@
       "code": "badListOperation",
       "label": "List step does not fit the list",
       "catchable": false
+    },
+    {
+      "code": "siloConfig",
+      "label": "Silo axis not set up",
+      "catchable": false
     }
   ],
   "steps": [
@@ -175,7 +210,7 @@
       "aliases": [],
       "background": false,
       "body": null,
-      "syntax": "MoveL <target>[, speed=…][, blend=…][, offset=(…)][, until=…]",
+      "syntax": "MoveL <target>[, speed=…][, blend=…][, offset=(…)][, profile=scurve][, until=…]",
       "summary": "→ {target} · {speed} · blend {blendRadius}",
       "fields": [
         {
@@ -242,6 +277,28 @@
           "min": 0,
           "exprKey": "decel",
           "required": false
+        },
+        {
+          "key": "motionProfile",
+          "arg": "profile",
+          "position": null,
+          "label": "Motion profile",
+          "group": "Dynamics",
+          "kind": "enum",
+          "default": null,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop."
         },
         {
           "key": "blend",
@@ -453,7 +510,7 @@
       "aliases": [],
       "background": false,
       "body": null,
-      "syntax": "MoveJ <target>[, speed=…][, offset=(…)][, until=…]",
+      "syntax": "MoveJ <target>[, speed=…][, offset=(…)][, profile=scurve][, until=…]",
       "summary": "→ {target} · {speed}",
       "fields": [
         {
@@ -520,6 +577,28 @@
           "min": 0,
           "exprKey": "decel",
           "required": false
+        },
+        {
+          "key": "motionProfile",
+          "arg": "profile",
+          "position": null,
+          "label": "Motion profile",
+          "group": "Dynamics",
+          "kind": "enum",
+          "default": null,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop."
         },
         {
           "key": "offset",
@@ -623,6 +702,212 @@
             "localId",
             "localName"
           ]
+        },
+        {
+          "key": "moveStopCondition",
+          "arg": "until",
+          "position": null,
+          "label": "Stop condition",
+          "group": "Stop condition",
+          "kind": "condition",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000."
+        },
+        {
+          "key": "moveStopMode",
+          "arg": "untilMode",
+          "position": null,
+          "label": "When true",
+          "group": "Stop condition",
+          "kind": "enum",
+          "default": "stop",
+          "options": [
+            {
+              "value": "stop",
+              "label": "Stop the move"
+            },
+            {
+              "value": "record",
+              "label": "Record the position, keep moving"
+            }
+          ],
+          "exprKey": null,
+          "required": false
+        },
+        {
+          "key": "moveStopPositionVariableName",
+          "arg": "untilPos",
+          "position": null,
+          "label": "Position variable",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "A Points list set to the one pose where the condition fired.",
+          "varKinds": [
+            "list:Point"
+          ]
+        },
+        {
+          "key": "moveStopFlagVariableName",
+          "arg": "untilFlag",
+          "position": null,
+          "label": "Fired flag",
+          "group": "Stop condition",
+          "kind": "varWrite",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Set to 1 if the condition fired during the move, else 0.",
+          "varKinds": [
+            "boolean",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "MoveJoints",
+      "category": "motion",
+      "label": "Move to Joints",
+      "description": "Move to explicit joint values by joint interpolation (no Cartesian target)",
+      "keyword": "MoveJoints",
+      "aliases": [
+        "MoveAbsJ"
+      ],
+      "background": false,
+      "body": null,
+      "syntax": "MoveJoints [<joints>][, j1=…][, j2=…][, j3=…][, j4=…][, speed=…][, profile=scurve][, until=…]",
+      "summary": "→ {jointsExpr} J1 {j1} · J2 {j2} · J3 {j3} · J4 {j4} · {speed}",
+      "fields": [
+        {
+          "key": "jointsExpr",
+          "arg": "",
+          "position": 0,
+          "label": "Joints value",
+          "group": "Joints",
+          "kind": "expr",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Optional: $home[0] (an Objects list with j1…j4, e.g. from Save Position → Joint values) or jointsOf(…)."
+        },
+        {
+          "key": "j1",
+          "arg": "j1",
+          "position": null,
+          "label": "J1",
+          "group": "Joints",
+          "kind": "number",
+          "unit": "° (CNC: X mm)",
+          "default": null,
+          "exprKey": "j1",
+          "required": false,
+          "help": "ASTRO: base rotation. CNC: X."
+        },
+        {
+          "key": "j2",
+          "arg": "j2",
+          "position": null,
+          "label": "J2",
+          "group": "Joints",
+          "kind": "number",
+          "unit": "mm (CNC: Y)",
+          "default": null,
+          "exprKey": "j2",
+          "required": false,
+          "help": "ASTRO: radial reach. CNC: Y."
+        },
+        {
+          "key": "j3",
+          "arg": "j3",
+          "position": null,
+          "label": "J3",
+          "group": "Joints",
+          "kind": "number",
+          "unit": "mm (CNC: Z)",
+          "default": null,
+          "exprKey": "j3",
+          "required": false,
+          "help": "ASTRO: vertical. CNC: Z."
+        },
+        {
+          "key": "j4",
+          "arg": "j4",
+          "position": null,
+          "label": "J4",
+          "group": "Joints",
+          "kind": "number",
+          "unit": "° (CNC: RZ)",
+          "default": null,
+          "exprKey": "j4",
+          "required": false,
+          "help": "ASTRO: tool rotation. CNC: RZ."
+        },
+        {
+          "key": "speed",
+          "arg": "speed",
+          "position": null,
+          "label": "Speed",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "°/s · mm/s",
+          "default": null,
+          "min": 0,
+          "exprKey": "speed",
+          "required": false,
+          "help": "Overrides the program's speed for this move only."
+        },
+        {
+          "key": "accel",
+          "arg": "accel",
+          "position": null,
+          "label": "Acceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "accel",
+          "required": false
+        },
+        {
+          "key": "decel",
+          "arg": "decel",
+          "position": null,
+          "label": "Deceleration",
+          "group": "Dynamics",
+          "kind": "number",
+          "unit": "mm/s²",
+          "default": null,
+          "min": 0,
+          "exprKey": "decel",
+          "required": false
+        },
+        {
+          "key": "motionProfile",
+          "arg": "profile",
+          "position": null,
+          "label": "Motion profile",
+          "group": "Dynamics",
+          "kind": "enum",
+          "default": null,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop."
         },
         {
           "key": "moveStopCondition",
@@ -805,6 +1090,28 @@
           "min": 0,
           "exprKey": "decel",
           "required": false
+        },
+        {
+          "key": "motionProfile",
+          "arg": "profile",
+          "position": null,
+          "label": "Motion profile",
+          "group": "Dynamics",
+          "kind": "enum",
+          "default": null,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop."
         },
         {
           "key": "blend",
@@ -1119,6 +1426,28 @@
           "min": 0,
           "exprKey": "decel",
           "required": false
+        },
+        {
+          "key": "motionProfile",
+          "arg": "profile",
+          "position": null,
+          "label": "Motion profile",
+          "group": "Dynamics",
+          "kind": "enum",
+          "default": null,
+          "options": [
+            {
+              "value": "trapezoid",
+              "label": "Trapezoid"
+            },
+            {
+              "value": "scurve",
+              "label": "S-curve (jerk-limited)"
+            }
+          ],
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop."
         },
         {
           "key": "offset",
@@ -1747,12 +2076,12 @@
       "type": "SavePosition",
       "category": "motion",
       "label": "Save Position",
-      "description": "Store the current position in a Points list or a saved point",
+      "description": "Store the current position (or joint values) in a list or a saved point",
       "keyword": "SavePosition",
       "aliases": [],
       "background": true,
       "body": null,
-      "syntax": "SavePosition $<list>[, mode=replace|append|insert|set][, index=…][, source=actual|target] | SavePosition point <name>",
+      "syntax": "SavePosition $<list>[, mode=replace|append|insert|set][, index=…][, source=actual|target|joints] | SavePosition point <name>",
       "summary": "→ {variableName}{pointId} · {savePositionMode}",
       "fields": [
         {
@@ -1766,7 +2095,7 @@
           "options": [
             {
               "value": "variable",
-              "label": "Points variable"
+              "label": "List variable"
             },
             {
               "value": "point",
@@ -1780,7 +2109,7 @@
           "key": "variableName",
           "arg": "",
           "position": 0,
-          "label": "Points variable",
+          "label": "List variable",
           "group": "Destination",
           "kind": "listVar",
           "default": null,
@@ -1792,8 +2121,10 @@
               "variable"
             ]
           },
+          "help": "A Points list for a position; an Objects list (fields j1…j4) for joint values.",
           "varKinds": [
-            "list:Point"
+            "list:Point",
+            "list:Record"
           ]
         },
         {
@@ -1889,10 +2220,15 @@
             {
               "value": "target",
               "label": "Last commanded target"
+            },
+            {
+              "value": "joints",
+              "label": "Joint values (j1…j4)"
             }
           ],
           "exprKey": null,
-          "required": false
+          "required": false,
+          "help": "Joint values go into an Objects list as {j1, j2, j3, j4} — what Move to Joints and poseOf() read."
         }
       ]
     },
@@ -2528,6 +2864,30 @@
               "label": "List index out of range"
             },
             {
+              "value": "outOfReach",
+              "label": "Target out of reach"
+            },
+            {
+              "value": "conveyorWindow",
+              "label": "Conveyor part left the window"
+            },
+            {
+              "value": "conveyorTimeout",
+              "label": "No conveyor part in time"
+            },
+            {
+              "value": "conveyorSpeed",
+              "label": "Conveyor too fast to track"
+            },
+            {
+              "value": "siloNotHomed",
+              "label": "Silo not homed"
+            },
+            {
+              "value": "siloEmpty",
+              "label": "Silo empty"
+            },
+            {
               "value": "userError",
               "label": "Raised error"
             }
@@ -2998,7 +3358,7 @@
               "set"
             ]
           },
-          "help": "For Number and Boolean lists."
+          "help": "For Number and Boolean lists — or a whole value for Points / Objects lists: $pts[i], poseOf(…), jointsOf(…)."
         },
         {
           "key": "listFields",
@@ -4317,6 +4677,165 @@
       ]
     },
     {
+      "type": "ConveyorTrack",
+      "category": "io",
+      "label": "Conveyor Track",
+      "description": "Start following the oldest part in a conveyor's pick window",
+      "keyword": "ConveyorTrack",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "ConveyorTrack <conveyor>[, wait=off][, timeout=…]",
+      "summary": "{conveyorId} · timeout {trackTimeoutMs}",
+      "fields": [
+        {
+          "key": "conveyorId",
+          "arg": "",
+          "position": 0,
+          "label": "Conveyor",
+          "group": "Conveyor",
+          "kind": "conveyorRef",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "trackWait",
+          "arg": "wait",
+          "position": null,
+          "label": "Wait for a part",
+          "group": "Tracking",
+          "kind": "bool",
+          "default": true,
+          "exprKey": null,
+          "required": false,
+          "help": "Wait until a part enters the window. Off: carry on untracked when none is there ($conveyor.<id>.tracking reads 0)."
+        },
+        {
+          "key": "trackTimeoutMs",
+          "arg": "timeout",
+          "position": null,
+          "label": "Timeout",
+          "group": "Tracking",
+          "kind": "integer",
+          "unit": "ms",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false,
+          "showIf": {
+            "field": "trackWait",
+            "in": [
+              "true"
+            ]
+          },
+          "help": "Empty or 0 = wait forever; otherwise fail with conveyorTimeout (catchable)."
+        }
+      ]
+    },
+    {
+      "type": "ConveyorEndTracking",
+      "category": "io",
+      "label": "Conveyor End Tracking",
+      "description": "Stop following the tracked part — the robot stays where it is",
+      "keyword": "ConveyorEndTracking",
+      "aliases": [],
+      "background": false,
+      "body": null,
+      "syntax": "ConveyorEndTracking [<conveyor>][, release=on]",
+      "summary": "{conveyorId}",
+      "fields": [
+        {
+          "key": "conveyorId",
+          "arg": "",
+          "position": 0,
+          "label": "Conveyor",
+          "group": "Conveyor",
+          "kind": "conveyorRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "Empty = the conveyor being tracked."
+        },
+        {
+          "key": "conveyorRelease",
+          "arg": "release",
+          "position": null,
+          "label": "Release the part",
+          "group": "Tracking",
+          "kind": "bool",
+          "default": false,
+          "exprKey": null,
+          "required": false,
+          "help": "On: the part stays on the belt (not counted as picked) and is never tracked again."
+        }
+      ]
+    },
+    {
+      "type": "ConveyorAddPart",
+      "category": "io",
+      "label": "Conveyor Add Part",
+      "description": "Queue a part at a known position on the belt (e.g. from vision)",
+      "keyword": "ConveyorAddPart",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "ConveyorAddPart <conveyor>, x=…",
+      "summary": "{conveyorId} · x {partOffsetMm}",
+      "fields": [
+        {
+          "key": "conveyorId",
+          "arg": "",
+          "position": 0,
+          "label": "Conveyor",
+          "group": "Conveyor",
+          "kind": "conveyorRef",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        },
+        {
+          "key": "partOffsetMm",
+          "arg": "x",
+          "position": null,
+          "label": "Part X",
+          "group": "Part",
+          "kind": "number",
+          "unit": "mm",
+          "default": 0,
+          "exprKey": "partOffsetMm",
+          "required": true,
+          "help": "The part's X in the conveyor frame now (along the belt)."
+        }
+      ]
+    },
+    {
+      "type": "ConveyorClearQueue",
+      "category": "io",
+      "label": "Conveyor Clear Queue",
+      "description": "Forget every queued part of a conveyor",
+      "keyword": "ConveyorClearQueue",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "ConveyorClearQueue <conveyor>",
+      "summary": "{conveyorId}",
+      "fields": [
+        {
+          "key": "conveyorId",
+          "arg": "",
+          "position": 0,
+          "label": "Conveyor",
+          "group": "Conveyor",
+          "kind": "conveyorRef",
+          "default": null,
+          "exprKey": null,
+          "required": true
+        }
+      ]
+    },
+    {
       "type": "RotaryIndex",
       "category": "io",
       "label": "Rotary Index",
@@ -4361,6 +4880,95 @@
           "step": 1,
           "exprKey": null,
           "required": false
+        },
+        {
+          "key": "auxDeviceId",
+          "arg": "device",
+          "position": null,
+          "label": "Device",
+          "group": "Axis",
+          "kind": "deviceRef",
+          "default": null,
+          "exprKey": null,
+          "required": false,
+          "help": "The aux IO card."
+        },
+        {
+          "key": "auxAxisIndex",
+          "arg": "axis",
+          "position": null,
+          "label": "Axis",
+          "group": "Axis",
+          "kind": "integer",
+          "default": 0,
+          "min": 0,
+          "step": 1,
+          "exprKey": null,
+          "required": false
+        }
+      ]
+    },
+    {
+      "type": "SiloAction",
+      "category": "io",
+      "label": "Silo",
+      "description": "Home a silo, present its top part at the rim, refill it or set its count",
+      "keyword": "SiloAction",
+      "aliases": [],
+      "background": true,
+      "body": null,
+      "syntax": "SiloAction home|present|refill|setcount[, count=…][, device=…, axis=…]",
+      "summary": "{siloAction} {siloCount}",
+      "fields": [
+        {
+          "key": "siloAction",
+          "arg": "",
+          "position": 0,
+          "label": "Action",
+          "group": "Silo",
+          "kind": "enum",
+          "default": "Present",
+          "options": [
+            {
+              "value": "Home",
+              "label": "Home"
+            },
+            {
+              "value": "Present",
+              "label": "Present"
+            },
+            {
+              "value": "Refill",
+              "label": "Refill"
+            },
+            {
+              "value": "SetCount",
+              "label": "Set count"
+            }
+          ],
+          "exprKey": null,
+          "required": true,
+          "help": "Present needs the silo homed (siloNotHomed) and a part in it (siloEmpty) — both catchable."
+        },
+        {
+          "key": "siloCount",
+          "arg": "count",
+          "position": null,
+          "label": "Count",
+          "group": "Silo",
+          "kind": "integer",
+          "default": null,
+          "min": 0,
+          "step": 1,
+          "exprKey": "siloCount",
+          "required": true,
+          "showIf": {
+            "field": "siloAction",
+            "in": [
+              "SetCount"
+            ]
+          },
+          "help": "Parts now in the silo (0 to its capacity)."
         },
         {
           "key": "auxDeviceId",

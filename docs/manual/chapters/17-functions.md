@@ -25,5 +25,10 @@ properties and the IO names.
 - The list functions take a bare list reference: `sum($vals)`, `avg($samples.v)` (a field of each
   element of a Point or Record list). An empty list gives 0.
 - An unknown function is `unknownFunction`; a wrong number of arguments is `badArity`.
+- `reachable`, `jointsOf` and `poseOf` take a point (`$pts[i]`, `"Name"`, `grid("G", r, c)`,
+  `stack("S", i)`) or joints (`$j[i]` with `j1…j4`, `jointsOf(…)`), not numbers, and use the robot's
+  own kinematics and joint limits (SPEL+ `TargetOK`, RAPID `CalcJointT` / `CalcRobT`). `jointsOf` and
+  `poseOf` are read one component at a time — `.j1`…`.j4`, `.x`…`.rz` — except where a step takes a
+  whole value (Move to Joints, a List step's value). See [Expressions](#expressions).
 - A running plugin's functions are called as `<pluginId>.<name>(…)`, its properties read as
   `$<pluginId>.<name>` — see [Plugins](#plugins).

@@ -268,7 +268,7 @@ public class MoveStopConditionTests
         Directory.CreateDirectory(tmp);
         try
         {
-            var robot    = new RobotController();
+            var robot    = new RobotController().WithIdentityKinematics();
             var programs = new ProgramCycleManager();
             var points   = new PointRepository(Path.Combine(tmp, "points.json"), Path.Combine(tmp, "pointsHistory.json"));
             var grids    = new GridRepository(Path.Combine(tmp, "grids.json"));

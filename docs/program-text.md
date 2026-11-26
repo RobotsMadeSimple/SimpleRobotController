@@ -151,10 +151,44 @@ SetJointPosition J3, 90
 CncProgram "part.dxf", safeZ=5                # the toolpath itself travels in @with
 SavePosition $pts, mode=append                # replace | append | insert | set
 SavePosition point Pick1                      # overwrite (or create) a saved point
+SavePosition $home, source=joints             # joint values {j1…j4} into an Objects list
+MoveJoints j1=90, j2=250, j3=120, j4=0, speed=50   # move to joint values (MoveAbsJ)
+MoveJoints $home[0], j4=45, profile=scurve    # a joints value, one joint overridden
+MoveJoints (jointsOf($pts[0]))                # the joints that reach a point
+MoveAbsJ j4=($a + 90)                         # alias; empty joints keep their current value
+MoveL Pick1, profile=scurve                   # this move's profile: trapezoid | scurve
 ```
 
 `offset=` adds to the target, `set=` replaces an axis outright, `toolOffset=` applies in the
 tool frame. Axes are `x y z rx ry rz`; each value may be an expression.
+
+MoveJoints joints follow the controller's joint-limit layout: ASTRO `j1` J1 °, `j2` radial
+reach mm, `j3` vertical mm, `j4` J4 °; CNC `X Y Z RZ`. Its positional value is a joints value —
+a `$list[i]` token as is, anything else (`jointsOf(…)`) in parentheses, like any positional
+expression. `profile=` picks the move's speed profile; without it the robot config's
+`motionProfile` applies (trapezoid by default).
+
+### Reach checks
+
+Every move checks its target before it starts and fails with the catchable `outOfReach` when
+the robot cannot get there. The same check is a function (SPEL+ `TargetOK`, RAPID `CalcJointT`
+/ `CalcRobT`):
+
+```srs
+if reachable($pts[$i])                        # 1 / 0 — IK solves and every joint is inside its limits
+  MoveL $pts[$i]
+end
+$ok = reachable("Pick", "Gripper", "Fixture1")   # a saved point, a tool, a local ("" = active, "none")
+$ok = reachable(grid("Tray", $r, $c))         # a grid cell; stack("Bins", $i) for a stack slot
+$j2 = jointsOf("Pick").j2                     # one joint of the solution (.j1 … .j4, or [n])
+$z = poseOf($home[0]).z                       # forward kinematics of a joints value (.x … .rz)
+$home.append(jointsOf($pts[0]))               # a whole joints value into an Objects list
+try
+  MoveL $pts[$i]
+catch $msg, code=$code, only=(outOfReach)
+  status warning "Skipped: {$msg}"
+end
+```
 
 ### Motion settings
 
@@ -471,7 +505,7 @@ keyword, `name=` a named value.
 #### Motion
 
 **Move Linear** — Move to a target in a straight line.  
-`MoveL <target>[, speed=…][, blend=…][, offset=(…)][, until=…]`
+`MoveL <target>[, speed=…][, blend=…][, offset=(…)][, profile=scurve][, until=…]`
 
 | In text | Field | Value | Unit | Default |
 |---|---|---|---|---|
@@ -479,6 +513,7 @@ keyword, `name=` a named value.
 | `speed=` | Speed | number or `(expr)` | mm/s |  |
 | `accel=` | Acceleration | number or `(expr)` | mm/s² |  |
 | `decel=` | Deceleration | number or `(expr)` | mm/s² |  |
+| `profile=` | Motion profile | `trapezoid` \| `scurve` |  |  |
 | `blend=` | Blend into next move | `on` / `off` |  | off |
 | `blendRadius=` | Blend radius | number or `(expr)` | mm |  |
 | `offset=` | Offset | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
@@ -491,7 +526,7 @@ keyword, `name=` a named value.
 | `untilFlag=` | Fired flag | `$variable` |  |  |
 
 **Move Joint** — Move to a target by joint interpolation.  
-`MoveJ <target>[, speed=…][, offset=(…)][, until=…]`
+`MoveJ <target>[, speed=…][, offset=(…)][, profile=scurve][, until=…]`
 
 | In text | Field | Value | Unit | Default |
 |---|---|---|---|---|
@@ -499,10 +534,30 @@ keyword, `name=` a named value.
 | `speed=` | Speed | number or `(expr)` | mm/s |  |
 | `accel=` | Acceleration | number or `(expr)` | mm/s² |  |
 | `decel=` | Deceleration | number or `(expr)` | mm/s² |  |
+| `profile=` | Motion profile | `trapezoid` \| `scurve` |  |  |
 | `offset=` | Offset | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
 | `set=` | Override | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
 | `toolOffset=` | Tool offset | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
 | `local=` | Local frame | local name |  |  |
+| `until=` | Stop condition | condition |  |  |
+| `untilMode=` | When true | `stop` \| `record` |  | stop |
+| `untilPos=` | Position variable | `$variable` |  |  |
+| `untilFlag=` | Fired flag | `$variable` |  |  |
+
+**Move to Joints** — Move to explicit joint values by joint interpolation (no Cartesian target).  
+`MoveJoints [<joints>][, j1=…][, j2=…][, j3=…][, j4=…][, speed=…][, profile=scurve][, until=…]`
+
+| In text | Field | Value | Unit | Default |
+|---|---|---|---|---|
+| position 1 | Joints value | expression |  |  |
+| `j1=` | J1 | number or `(expr)` | ° (CNC: X mm) |  |
+| `j2=` | J2 | number or `(expr)` | mm (CNC: Y) |  |
+| `j3=` | J3 | number or `(expr)` | mm (CNC: Z) |  |
+| `j4=` | J4 | number or `(expr)` | ° (CNC: RZ) |  |
+| `speed=` | Speed | number or `(expr)` | °/s · mm/s |  |
+| `accel=` | Acceleration | number or `(expr)` | mm/s² |  |
+| `decel=` | Deceleration | number or `(expr)` | mm/s² |  |
+| `profile=` | Motion profile | `trapezoid` \| `scurve` |  |  |
 | `until=` | Stop condition | condition |  |  |
 | `untilMode=` | When true | `stop` \| `record` |  | stop |
 | `untilPos=` | Position variable | `$variable` |  |  |
@@ -520,6 +575,7 @@ keyword, `name=` a named value.
 | `speed=` | Speed | number or `(expr)` | mm/s |  |
 | `accel=` | Acceleration | number or `(expr)` | mm/s² |  |
 | `decel=` | Deceleration | number or `(expr)` | mm/s² |  |
+| `profile=` | Motion profile | `trapezoid` \| `scurve` |  |  |
 | `blend=` | Blend into next move | `on` / `off` |  | off |
 | `blendRadius=` | Blend radius | number or `(expr)` | mm |  |
 | `offset=` | Offset | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
@@ -543,6 +599,7 @@ keyword, `name=` a named value.
 | `speed=` | Speed | number or `(expr)` | mm/s |  |
 | `accel=` | Acceleration | number or `(expr)` | mm/s² |  |
 | `decel=` | Deceleration | number or `(expr)` | mm/s² |  |
+| `profile=` | Motion profile | `trapezoid` \| `scurve` |  |  |
 | `offset=` | Offset | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
 | `set=` | Override | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
 | `toolOffset=` | Tool offset | `(x=…, y=…, z=…, rx=…, ry=…, rz=…)` | mm / deg |  |
@@ -603,17 +660,17 @@ keyword, `name=` a named value.
 | position 1 | File | text |  |  |
 | `safeZ=` | Safe Z | number | mm |  |
 
-**Save Position** — Store the current position in a Points list or a saved point.  
-`SavePosition $<list>[, mode=replace\|append\|insert\|set][, index=…][, source=actual\|target] \| SavePosition point <name>`
+**Save Position** — Store the current position (or joint values) in a list or a saved point.  
+`SavePosition $<list>[, mode=replace\|append\|insert\|set][, index=…][, source=actual\|target\|joints] \| SavePosition point <name>`
 
 | In text | Field | Value | Unit | Default |
 |---|---|---|---|---|
 | `to=` | Save to | `variable` \| `point` |  | variable |
-| position 1 | Points variable | `$list` |  |  |
+| position 1 | List variable | `$list` |  |  |
 | `point=` | Saved point | point name |  |  |
 | `mode=` | Mode | `replace` \| `append` \| `insert` \| `set` |  | replace |
 | `index=` | Index | number or `(expr)` |  |  |
-| `source=` | Position | `actual` \| `target` |  | actual |
+| `source=` | Position | `actual` \| `target` \| `joints` |  | actual |
 
 
 #### Motion Settings
@@ -874,6 +931,18 @@ keyword, `name=` a named value.
 | position 2 | Path | `"text {$var}"` |  |  |
 | rows / sugar | Columns | rows |  |  |
 
+**Send Serial Command** — Send a command to a serial device, optionally waiting for a reply.  
+`SerialCommand device=…[, command=…\|text="…"][, reply=on, into=$<var>][, timeout=…]`
+
+| In text | Field | Value | Unit | Default |
+|---|---|---|---|---|
+| position 1 | Device | device name |  |  |
+| `command=` | Saved command | text |  |  |
+| `text=` | Text | `"text {$var}"` |  |  |
+| `reply=` | Wait for reply | `on` / `off` |  | off |
+| `into=` | Into variable | `$variable` |  |  |
+| `timeout=` | Reply timeout | duration (`500ms`, `2s`) | ms | 1000 |
+
 **Aux Move** — Move an aux axis by a distance or a number of steps.  
 `AuxMove device=…, axis=…, distance=…\|steps=…[, unit=mm\|deg][, velocity=…][, absolute=on][, wait=off][, until=…]`
 
@@ -949,6 +1018,38 @@ keyword, `name=` a named value.
 | `device=` | Device | device name |  |  |
 | `axis=` | Axis | number |  | 0 |
 
+**Conveyor Track** — Start following the oldest part in a conveyor's pick window.  
+`ConveyorTrack <conveyor>[, wait=off][, timeout=…]`
+
+| In text | Field | Value | Unit | Default |
+|---|---|---|---|---|
+| position 1 | Conveyor | conveyor name |  |  |
+| `wait=` | Wait for a part | `on` / `off` |  | on |
+| `timeout=` | Timeout | duration (`500ms`, `2s`) | ms |  |
+
+**Conveyor End Tracking** — Stop following the tracked part — the robot stays where it is.  
+`ConveyorEndTracking [<conveyor>][, release=on]`
+
+| In text | Field | Value | Unit | Default |
+|---|---|---|---|---|
+| position 1 | Conveyor | conveyor name |  |  |
+| `release=` | Release the part | `on` / `off` |  | off |
+
+**Conveyor Add Part** — Queue a part at a known position on the belt (e.g. from vision).  
+`ConveyorAddPart <conveyor>, x=…`
+
+| In text | Field | Value | Unit | Default |
+|---|---|---|---|---|
+| position 1 | Conveyor | conveyor name |  |  |
+| `x=` | Part X | number or `(expr)` | mm | 0 |
+
+**Conveyor Clear Queue** — Forget every queued part of a conveyor.  
+`ConveyorClearQueue <conveyor>`
+
+| In text | Field | Value | Unit | Default |
+|---|---|---|---|---|
+| position 1 | Conveyor | conveyor name |  |  |
+
 **Rotary Index** — Index a rotary axis a number of positions.  
 `RotaryIndex +1\|-1[, count=…][, device=…, axis=…]`
 
@@ -956,6 +1057,16 @@ keyword, `name=` a named value.
 |---|---|---|---|---|
 | position 1 | Direction | number |  | 1 |
 | `count=` | Count | number |  | 1 |
+| `device=` | Device | device name |  |  |
+| `axis=` | Axis | number |  | 0 |
+
+**Silo** — Home a silo, present its top part at the rim, accept a part onto it, refill it or set its count.  
+`SiloAction home\|present\|accept\|refill\|setcount[, count=…][, device=…, axis=…]`
+
+| In text | Field | Value | Unit | Default |
+|---|---|---|---|---|
+| position 1 | Action | `home` \| `present` \| `accept` \| `refill` \| `setcount` |  | Present |
+| `count=` | Count | number or `(expr)` |  |  |
 | `device=` | Device | device name |  |  |
 | `axis=` | Axis | number |  | 0 |
 

@@ -36,6 +36,7 @@ public class DocTableTests
         K.VisionRef => "vision program name",
         K.DeviceRef => "device name",
         K.CameraRef => "camera name",
+        K.ConveyorRef => "conveyor name",
         K.LabelRef => "label name",
         K.Target => "target",
         K.Axes6 => "`(x=…, y=…, z=…, rx=…, ry=…, rz=…)`",

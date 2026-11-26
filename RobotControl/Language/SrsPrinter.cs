@@ -156,7 +156,7 @@ internal sealed class SrsPrinter
     private string? RefText(SrsRefKind kind, string? id, string? name)
     {
         var n = _names.NameOf(kind, id) ?? name;
-        if (string.IsNullOrEmpty(n) && kind is SrsRefKind.Device or SrsRefKind.Camera) n = id;
+        if (string.IsNullOrEmpty(n) && kind is SrsRefKind.Device or SrsRefKind.Camera or SrsRefKind.Conveyor) n = id;
         return _names.RefName(kind, id, n);
     }
 
@@ -305,9 +305,15 @@ internal sealed class SrsPrinter
             case K.VisionRef:  return RefText(SrsRefKind.Vision, s.VisionProgramId, s.VisionProgramName);
             case K.DeviceRef:
             case K.CameraRef:
+            case K.ConveyorRef:
             {
                 if (Prop(j, f.Key) is not JsonValue dv || !dv.TryGetValue<string>(out var id) || id.Length == 0) return null;
-                return RefText(f.Kind == K.DeviceRef ? SrsRefKind.Device : SrsRefKind.Camera, id, null);
+                return RefText(f.Kind switch
+                {
+                    K.DeviceRef   => SrsRefKind.Device,
+                    K.ConveyorRef => SrsRefKind.Conveyor,
+                    _             => SrsRefKind.Camera,
+                }, id, null);
             }
             case K.Target: return TargetText(s, via: f.Key == "via") ?? (f.Key == "via" ? null : "here");
             case K.Axes6: return AxesText(s, j, f);
@@ -475,7 +481,10 @@ internal sealed class SrsPrinter
         foreach (var (text, depth, body, bodyPath) in form.Lines)
         {
             if (text != null) { Emit(text, indent + depth); continue; }
-            if (branchesInWith && bodyPath != null && (bodyPath.Contains(".elseIfBranches[") || bodyPath.Contains(".switchCases["))) continue;
+            // Only this step's own branches ride in @with — test the path below the step, not an
+            // enclosing If's / Switch's branch the step itself sits in.
+            var rel = bodyPath != null && bodyPath.StartsWith(path, StringComparison.Ordinal) ? bodyPath[path.Length..] : bodyPath;
+            if (branchesInWith && rel != null && (rel.StartsWith(".elseIfBranches[", StringComparison.Ordinal) || rel.StartsWith(".switchCases[", StringComparison.Ordinal))) continue;
             PrintSteps(body, indent + 1, bodyPath!);
         }
         _map.Add(new ProgramTextMapEntry { StepId = s.Id, StepPath = path, Line = start, EndLine = _line - 1 });

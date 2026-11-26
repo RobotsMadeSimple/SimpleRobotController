@@ -562,6 +562,13 @@ catchable code). Generated from `ErrorCodes.cs`:
 | `pointNotFound` | Point not found | yes |
 | `arcDegenerate` | Arc points are in a line | yes |
 | `indexOutOfRange` | List index out of range | yes |
+| `outOfReach` | Target out of reach | yes |
+| `conveyorWindow` | Conveyor part left the window | yes |
+| `conveyorTimeout` | No conveyor part in time | yes |
+| `conveyorSpeed` | Conveyor too fast to track | yes |
+| `siloNotHomed` | Silo not homed | yes |
+| `siloEmpty` | Silo empty | yes |
+| `siloFull` | Silo full | yes |
 | `userError` | Raised error | yes |
 | `motionFault` | Motion fault | **no — fatal** |
 | `jointLimit` | Joint limit | **no — fatal** |
@@ -572,6 +579,7 @@ catchable code). Generated from `ErrorCodes.cs`:
 | `expressionSyntax` | Expression error | **no — fatal** |
 | `computedVariable` | Write to a computed variable | **no — fatal** |
 | `badListOperation` | List step does not fit the list | **no — fatal** |
+| `siloConfig` | Silo axis not set up | **no — fatal** |
 | any other identifier (`raise …, code=myCode`) | your own RaiseError code | yes |
 <!-- END GENERATED errors -->
 
@@ -998,6 +1006,7 @@ Every step type, its text keyword, catalog category, body kind and whether a bac
 |---|---|---|---|---|
 | `MoveL` | `MoveL` | motion |  | **no — skipped** |
 | `MoveJ` | `MoveJ` | motion |  | **no — skipped** |
+| `MoveJoints` | `MoveJoints` `MoveAbsJ` | motion |  | **no — skipped** |
 | `JumpL` | `JumpL` | motion |  | **no — skipped** |
 | `JumpJ` | `JumpJ` | motion |  | **no — skipped** |
 | `MoveC` | `MoveC` | motion |  | **no — skipped** |
@@ -1036,13 +1045,19 @@ Every step type, its text keyword, catalog category, body kind and whether a bac
 | `StartRecording` | `StartRecording` | io |  | yes |
 | `StopRecording` | `StopRecording` | io |  | yes |
 | `ExportData` | `ExportData` | io | mapping | yes |
+| `SerialCommand` | `SerialCommand` | io |  | yes |
 | `AuxMove` | `AuxMove` | io |  | yes |
 | `AuxContinuous` | `AuxContinuous` | io |  | yes |
 | `AuxStop` | `AuxStop` | io |  | yes |
 | `AuxEnable` | `AuxEnable` | io |  | yes |
 | `GripperAction` | `GripperAction` | io |  | yes |
 | `ConveyorAction` | `ConveyorAction` | io |  | yes |
+| `ConveyorTrack` | `ConveyorTrack` | io |  | **no — skipped** |
+| `ConveyorEndTracking` | `ConveyorEndTracking` | io |  | **no — skipped** |
+| `ConveyorAddPart` | `ConveyorAddPart` | io |  | yes |
+| `ConveyorClearQueue` | `ConveyorClearQueue` | io |  | yes |
 | `RotaryIndex` | `RotaryIndex` | io |  | yes |
+| `SiloAction` | `SiloAction` | io |  | yes |
 | `RunVision` | `RunVision` | vision | mapping | yes |
 | `CaptureImage` | `CaptureImage` | vision |  | yes |
 | `SaveImage` | `SaveImage` | vision |  | yes |
@@ -1074,7 +1089,7 @@ text word when it differs), range. **Expr key**: the `expressions` key that may 
 #### STEP MoveL — Move Linear
 
 Move to a target in a straight line. Background: skipped. Body: none.  
-Text: `MoveL <target>[, speed=…][, blend=…][, offset=(…)][, until=…]`
+Text: `MoveL <target>[, speed=…][, blend=…][, offset=(…)][, profile=scurve][, until=…]`
 
 | Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
 |---|---|---|---|---|---|---|---|
@@ -1082,6 +1097,7 @@ Text: `MoveL <target>[, speed=…][, blend=…][, offset=(…)][, until=…]`
 | `speed=` | `speed` | number | mm/s |  | min 0 | `speed` | Overrides the program's speed for this move only. |
 | `accel=` | `accel` | number | mm/s² |  | min 0 | `accel` |  |
 | `decel=` | `decel` | number | mm/s² |  | min 0 | `decel` |  |
+| `profile=` | `motionProfile` | enum |  |  | `trapezoid` `scurve` |  | Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop. |
 | `blend=` | `blend` | bool |  | false |  |  | Round the corner into the next move instead of stopping. |
 | `blendRadius=` | `blendRadius` | number | mm |  | min 0 | `blendRadius` | when blend ∈ {true}; Empty = the radius set by Set Blend Radius. |
 | `offset=` | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | axes6 | mm / deg |  |  | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | Added to the target (relative move when there is no target). |
@@ -1096,7 +1112,7 @@ Text: `MoveL <target>[, speed=…][, blend=…][, offset=(…)][, until=…]`
 #### STEP MoveJ — Move Joint
 
 Move to a target by joint interpolation. Background: skipped. Body: none.  
-Text: `MoveJ <target>[, speed=…][, offset=(…)][, until=…]`
+Text: `MoveJ <target>[, speed=…][, offset=(…)][, profile=scurve][, until=…]`
 
 | Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
 |---|---|---|---|---|---|---|---|
@@ -1104,10 +1120,32 @@ Text: `MoveJ <target>[, speed=…][, offset=(…)][, until=…]`
 | `speed=` | `speed` | number | mm/s |  | min 0 | `speed` | Overrides the program's speed for this move only. |
 | `accel=` | `accel` | number | mm/s² |  | min 0 | `accel` |  |
 | `decel=` | `decel` | number | mm/s² |  | min 0 | `decel` |  |
+| `profile=` | `motionProfile` | enum |  |  | `trapezoid` `scurve` |  | Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop. |
 | `offset=` | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | axes6 | mm / deg |  |  | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | Added to the target (relative move when there is no target). |
 | `set=` | `overrideX` `overrideY` `overrideZ` `overrideRX` `overrideRY` `overrideRZ` | axes6 | mm / deg |  |  | `overrideX` `overrideY` `overrideZ` `overrideRX` `overrideRY` `overrideRZ` | Replaces an axis of the target outright. |
 | `toolOffset=` | `toolOffsetX` `toolOffsetY` `toolOffsetZ` `toolOffsetRX` `toolOffsetRY` `toolOffsetRZ` | axes6 | mm / deg |  |  | `toolOffsetX` `toolOffsetY` `toolOffsetZ` `toolOffsetRX` `toolOffsetRY` `toolOffsetRZ` | Applied in the tool frame at execution time. |
 | `local=` | `localId` `localName` | localRef |  |  |  |  | Run this move in a local frame instead of the active one. |
+| `until=` | `moveStopCondition` | condition |  |  |  |  | Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000. |
+| `untilMode=` | `moveStopMode` | enum |  | "stop" | `stop` `record` |  |  |
+| `untilPos=` | `moveStopPositionVariableName` | varWrite (list:Point) |  |  |  |  | A Points list set to the one pose where the condition fired. |
+| `untilFlag=` | `moveStopFlagVariableName` | varWrite (boolean, number) |  |  |  |  | Set to 1 if the condition fired during the move, else 0. |
+
+#### STEP MoveJoints — Move to Joints
+
+Move to explicit joint values by joint interpolation (no Cartesian target). Background: skipped. Body: none.  
+Text: `MoveJoints [<joints>][, j1=…][, j2=…][, j3=…][, j4=…][, speed=…][, profile=scurve][, until=…]`
+
+| Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
+|---|---|---|---|---|---|---|---|
+| pos 1 | `jointsExpr` | expr |  |  |  |  | Optional: $home[0] (an Objects list with j1…j4, e.g. from Save Position → Joint values) or jointsOf(…). |
+| `j1=` | `j1` | number | ° (CNC: X mm) |  |  | `j1` | ASTRO: base rotation. CNC: X. |
+| `j2=` | `j2` | number | mm (CNC: Y) |  |  | `j2` | ASTRO: radial reach. CNC: Y. |
+| `j3=` | `j3` | number | mm (CNC: Z) |  |  | `j3` | ASTRO: vertical. CNC: Z. |
+| `j4=` | `j4` | number | ° (CNC: RZ) |  |  | `j4` | ASTRO: tool rotation. CNC: RZ. |
+| `speed=` | `speed` | number | °/s · mm/s |  | min 0 | `speed` | Overrides the program's speed for this move only. |
+| `accel=` | `accel` | number | mm/s² |  | min 0 | `accel` |  |
+| `decel=` | `decel` | number | mm/s² |  | min 0 | `decel` |  |
+| `profile=` | `motionProfile` | enum |  |  | `trapezoid` `scurve` |  | Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop. |
 | `until=` | `moveStopCondition` | condition |  |  |  |  | Watched every tick while the move runs, e.g. $io.Nano.Load >= 2000. |
 | `untilMode=` | `moveStopMode` | enum |  | "stop" | `stop` `record` |  |  |
 | `untilPos=` | `moveStopPositionVariableName` | varWrite (list:Point) |  |  |  |  | A Points list set to the one pose where the condition fired. |
@@ -1127,6 +1165,7 @@ Text: `JumpL <target>, z=…[, zStart=…][, zEnd=…][, speed=…]`
 | `speed=` | `speed` | number | mm/s |  | min 0 | `speed` | Overrides the program's speed for this move only. |
 | `accel=` | `accel` | number | mm/s² |  | min 0 | `accel` |  |
 | `decel=` | `decel` | number | mm/s² |  | min 0 | `decel` |  |
+| `profile=` | `motionProfile` | enum |  |  | `trapezoid` `scurve` |  | Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop. |
 | `blend=` | `blend` | bool |  | false |  |  | Round the corner into the next move instead of stopping. |
 | `blendRadius=` | `blendRadius` | number | mm |  | min 0 | `blendRadius` | when blend ∈ {true}; Empty = the radius set by Set Blend Radius. |
 | `offset=` | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | axes6 | mm / deg |  |  | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | Added to the target (relative move when there is no target). |
@@ -1152,6 +1191,7 @@ Text: `JumpJ <target>, z=…[, zStart=…][, zEnd=…][, speed=…]`
 | `speed=` | `speed` | number | mm/s |  | min 0 | `speed` | Overrides the program's speed for this move only. |
 | `accel=` | `accel` | number | mm/s² |  | min 0 | `accel` |  |
 | `decel=` | `decel` | number | mm/s² |  | min 0 | `decel` |  |
+| `profile=` | `motionProfile` | enum |  |  | `trapezoid` `scurve` |  | Empty = the robot's Motion profile setting. S-curve ramps the acceleration for a smoother start and stop. |
 | `offset=` | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | axes6 | mm / deg |  |  | `offsetX` `offsetY` `offsetZ` `offsetRX` `offsetRY` `offsetRZ` | Added to the target (relative move when there is no target). |
 | `set=` | `overrideX` `overrideY` `overrideZ` `overrideRX` `overrideRY` `overrideRZ` | axes6 | mm / deg |  |  | `overrideX` `overrideY` `overrideZ` `overrideRX` `overrideRY` `overrideRZ` | Replaces an axis of the target outright. |
 | `toolOffset=` | `toolOffsetX` `toolOffsetY` `toolOffsetZ` `toolOffsetRX` `toolOffsetRY` `toolOffsetRZ` | axes6 | mm / deg |  |  | `toolOffsetX` `toolOffsetY` `toolOffsetZ` `toolOffsetRX` `toolOffsetRY` `toolOffsetRZ` | Applied in the tool frame at execution time. |
@@ -1226,17 +1266,17 @@ Text: `CncProgram "<file>"[, safeZ=…]`
 
 #### STEP SavePosition — Save Position
 
-Store the current position in a Points list or a saved point. Background: runs. Body: none.  
-Text: `SavePosition $<list>[, mode=replace|append|insert|set][, index=…][, source=actual|target] | SavePosition point <name>`
+Store the current position (or joint values) in a list or a saved point. Background: runs. Body: none.  
+Text: `SavePosition $<list>[, mode=replace|append|insert|set][, index=…][, source=actual|target|joints] | SavePosition point <name>`
 
 | Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
 |---|---|---|---|---|---|---|---|
 | `to=` | `savePositionTo` | enum |  | "variable" | `variable` `point` |  |  |
-| pos 1 | `variableName` | listVar (list:Point) |  |  |  |  | when savePositionTo ∈ {variable} |
+| pos 1 | `variableName` | listVar (list:Point, list:Record) |  |  |  |  | when savePositionTo ∈ {variable}; A Points list for a position; an Objects list (fields j1…j4) for joint values. |
 | `point=` | `pointId` `pointName` | pointRef |  |  |  |  | when savePositionTo ∈ {point}; Overwritten (or created) with the current position; recorded in the points history. |
 | `mode=` | `savePositionMode` | enum |  | "replace" | `replace` `append` `insert` `set` |  | when savePositionTo ∈ {variable} |
 | `index=` | `savePositionIndex` | integer |  |  | min 0 | `savePositionIndex` | when savePositionMode ∈ {insert, set} |
-| `source=` | `savePositionSource` | enum |  | "actual" | `actual` `target` |  |  |
+| `source=` | `savePositionSource` | enum |  | "actual" | `actual` `target` `joints` |  | Joint values go into an Objects list as {j1, j2, j3, j4} — what Move to Joints and poseOf() read. |
 
 ### Fields: Motion Settings
 
@@ -1464,7 +1504,7 @@ Text: `$<list>.append(…) | .insert(i, …) | .removeAt(i) | .clear() | [i] = �
 | pos 1 | `variableName` | listVar (list) |  |  |  |  | **required** |
 | `action=` | `listAction` | enum |  | "append" | `append` `insert` `removeAt` `clear` `set` `setField` `sort` `reverse` `copyFrom` |  | **required** |
 | `index=` | `listIndex` | integer |  |  | min 0 | `listIndex` | when listAction ∈ {insert, removeAt, set, setField} |
-| `value=` | `listValueExpr` | expr |  |  |  |  | when listAction ∈ {append, insert, set}; For Number and Boolean lists. |
+| `value=` | `listValueExpr` | expr |  |  |  |  | when listAction ∈ {append, insert, set}; For Number and Boolean lists — or a whole value for Points / Objects lists: $pts[i], poseOf(…), jointsOf(…). |
 | `fields=` | `listFields` | exprMap |  |  |  |  | when listAction ∈ {append, insert, set, setField}; For Point and Record lists. Append with no fields on a Points list appends the current position. |
 | `from=` | `listSourceVariable` | listVar (list) |  |  |  |  | when listAction ∈ {copyFrom} |
 | `by=` | `listSortField` | text |  |  |  |  | when listAction ∈ {sort}; Empty = the element value. |
@@ -1565,6 +1605,20 @@ Text: `ExportData csv|json "<path>" … end`
 | pos 2 | `exportPath` | template |  |  |  |  | **required** |
 | rows / sugar | `exportColumns` | rows |  |  |  |  |  |
 
+#### STEP SerialCommand — Send Serial Command
+
+Send a command to a serial device, optionally waiting for a reply. Background: runs. Body: none.  
+Text: `SerialCommand device=…[, command=…|text="…"][, reply=on, into=$<var>][, timeout=…]`
+
+| Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
+|---|---|---|---|---|---|---|---|
+| pos 1 | `serialDeviceId` `serialDeviceName` | deviceRef |  |  |  |  | **required**; The serial device to send to. |
+| `command=` | `serialCommandId` | text |  |  |  |  | A saved command's id. Leave empty to send raw text instead. |
+| `text=` | `serialText` | template |  |  |  |  | Raw line to send when no saved command is chosen. Supports {{expression}} interpolation. |
+| `reply=` | `serialExpectReply` | bool |  | false |  |  |  |
+| `into=` | `serialResultVariable` | varWrite (string) |  |  |  |  | when serialExpectReply ∈ {true}; The first reply line is stored here. |
+| `timeout=` | `serialTimeoutMs` | integer | ms | 1000 | min 0 |  | when serialExpectReply ∈ {true} |
+
 #### STEP AuxMove — Aux Move
 
 Move an aux axis by a distance or a number of steps. Background: runs. Body: none.  
@@ -1652,6 +1706,46 @@ Text: `ConveyorAction forward|reverse|stop[, device=…, axis=…]`
 | `device=` | `auxDeviceId` | deviceRef |  |  |  |  | The aux IO card. |
 | `axis=` | `auxAxisIndex` | integer |  | 0 | min 0 |  |  |
 
+#### STEP ConveyorTrack — Conveyor Track
+
+Start following the oldest part in a conveyor's pick window. Background: skipped. Body: none.  
+Text: `ConveyorTrack <conveyor>[, wait=off][, timeout=…]`
+
+| Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
+|---|---|---|---|---|---|---|---|
+| pos 1 | `conveyorId` | conveyorRef |  |  |  |  | **required** |
+| `wait=` | `trackWait` | bool |  | true |  |  | Wait until a part enters the window. Off: carry on untracked when none is there ($conveyor.<id>.tracking reads 0). |
+| `timeout=` | `trackTimeoutMs` | integer | ms |  | min 0 |  | when trackWait ∈ {true}; Empty or 0 = wait forever; otherwise fail with conveyorTimeout (catchable). |
+
+#### STEP ConveyorEndTracking — Conveyor End Tracking
+
+Stop following the tracked part — the robot stays where it is. Background: skipped. Body: none.  
+Text: `ConveyorEndTracking [<conveyor>][, release=on]`
+
+| Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
+|---|---|---|---|---|---|---|---|
+| pos 1 | `conveyorId` | conveyorRef |  |  |  |  | Empty = the conveyor being tracked. |
+| `release=` | `conveyorRelease` | bool |  | false |  |  | On: the part stays on the belt (not counted as picked) and is never tracked again. |
+
+#### STEP ConveyorAddPart — Conveyor Add Part
+
+Queue a part at a known position on the belt (e.g. from vision). Background: runs. Body: none.  
+Text: `ConveyorAddPart <conveyor>, x=…`
+
+| Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
+|---|---|---|---|---|---|---|---|
+| pos 1 | `conveyorId` | conveyorRef |  |  |  |  | **required** |
+| `x=` | `partOffsetMm` | number | mm | 0 |  | `partOffsetMm` | **required**; The part's X in the conveyor frame now (along the belt). |
+
+#### STEP ConveyorClearQueue — Conveyor Clear Queue
+
+Forget every queued part of a conveyor. Background: runs. Body: none.  
+Text: `ConveyorClearQueue <conveyor>`
+
+| Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
+|---|---|---|---|---|---|---|---|
+| pos 1 | `conveyorId` | conveyorRef |  |  |  |  | **required** |
+
 #### STEP RotaryIndex — Rotary Index
 
 Index a rotary axis a number of positions. Background: runs. Body: none.  
@@ -1661,6 +1755,18 @@ Text: `RotaryIndex +1|-1[, count=…][, device=…, axis=…]`
 |---|---|---|---|---|---|---|---|
 | pos 1 | `rotaryDirection` | integer |  | 1 | `1` `-1` |  |  |
 | `count=` | `rotaryCount` | integer |  | 1 | min 1 |  |  |
+| `device=` | `auxDeviceId` | deviceRef |  |  |  |  | The aux IO card. |
+| `axis=` | `auxAxisIndex` | integer |  | 0 | min 0 |  |  |
+
+#### STEP SiloAction — Silo
+
+Home a silo, present its top part at the rim, accept a part onto it, refill it or set its count. Background: runs. Body: none.  
+Text: `SiloAction home|present|accept|refill|setcount[, count=…][, device=…, axis=…]`
+
+| Text | JSON field(s) | Kind | Unit | Default | Allowed | Expr key | Notes |
+|---|---|---|---|---|---|---|---|
+| pos 1 | `siloAction` | enum |  | "Present" | `Home`(text `home`) `Present`(text `present`) `Accept`(text `accept`) `Refill`(text `refill`) `SetCount`(text `setcount`) |  | **required**; Present needs the silo homed (siloNotHomed) and a part in it (siloEmpty); Accept needs it homed and not full (siloFull) — all catchable. |
+| `count=` | `siloCount` | integer |  |  | min 0 | `siloCount` | **required**; when siloAction ∈ {SetCount}; Parts now in the silo (0 to its capacity). |
 | `device=` | `auxDeviceId` | deviceRef |  |  |  |  | The aux IO card. |
 | `axis=` | `auxAxisIndex` | integer |  | 0 | min 0 |  |  |
 

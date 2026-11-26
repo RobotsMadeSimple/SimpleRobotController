@@ -20,6 +20,8 @@ namespace Controller.RobotControl.Serial
         public const string CapNeopixel = "neopixel";
         public const string CapLoadCell = "loadcell";
         public const string CapStepper  = "stepper";
+        public const string CapPos      = "pos";       // aux stepper: signed step counters, POS?/PS/Z + POS lines
+        public const string CapLatch    = "latch";     // aux stepper: CFG type L latch inputs + LAT lines
 
         /// <summary>First firmware version that answers the extended handshake.</summary>
         public const string FirstReportingVersion = "1.1.0";

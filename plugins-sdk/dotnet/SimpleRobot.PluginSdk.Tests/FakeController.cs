@@ -145,9 +145,14 @@ public sealed class FakeConnection
         {
             case "controller.command":
                 var cmd = p.GetProperty("command").GetString();
-                return cmd == "Fail"
-                    ? SendAsync(new { t = "res", id, ok = false, error = "boom", message = "it broke" })
-                    : SendAsync(new { t = "res", id, ok = true, result = new { echo = cmd, args = p.TryGetProperty("params", out var a) ? (object?)a : null } });
+                return cmd switch
+                {
+                    "Fail" => SendAsync(new { t = "res", id, ok = false, error = "boom", message = "it broke" }),
+                    // Point/grid/stack commands return their list as a JSON *string* (as the controller does).
+                    "GetPoints" => SendAsync(new { t = "res", id, ok = true, result = new { points = "[{\"name\":\"P1\",\"x\":1,\"y\":2,\"z\":3,\"rx\":0,\"ry\":0,\"rz\":0}]" } }),
+                    "GetStatus" => SendAsync(new { t = "res", id, ok = true, result = new { moving = true, x = 10.0, y = 20.0, z = 30.0, rx = 0.0, ry = 0.0, rz = 90.0 } }),
+                    _ => SendAsync(new { t = "res", id, ok = true, result = new { echo = cmd, args = p.TryGetProperty("params", out var a) ? (object?)a : null } }),
+                };
             case "events.subscribe":
                 return SendAsync(new { t = "res", id, ok = true, result = new { subscribed = p.GetProperty("events") } });
             case "variables.get":

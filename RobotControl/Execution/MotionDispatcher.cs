@@ -26,6 +26,9 @@ namespace Controller.RobotControl.Execution
         /// <summary>An aux indexed move with WaitForDone=true is in progress.</summary>
         public bool AwaitingAux { get; set; }
         public ProgramStep? PendingAuxStep { get; set; }
+        /// <summary>Run once when the awaited aux move finishes, before the step is reported complete
+        /// (a silo zeroes after its home move, counts a part after Present). Dropped with the wait.</summary>
+        public Action? PendingAuxCompletion { get; set; }
 
         /// <summary>Program default blend radius (set by SetBlendRadius); per-move BlendRadius overrides it.</summary>
         public double DefaultBlendRadius { get; set; }
@@ -44,6 +47,14 @@ namespace Controller.RobotControl.Execution
         private double _speedFactorPercent = 100;
 
         private double SpeedFactor => _speedFactorPercent / 100.0;
+
+        /// <summary>
+        /// Conveyor tracking: the belt travel at which the last move target was resolved in the
+        /// tracked part's frame (null = not tracking). Stamped on every MoveL / MoveJ dispatched
+        /// from here as <see cref="RobotCommand.TrackTravel"/> — a Jump's later legs too, which were
+        /// resolved together with its target.
+        /// </summary>
+        public double? PlanTravel { get; set; }
 
         // ── Stop-condition watch ──────────────────────────────────────────────
 
@@ -72,6 +83,7 @@ namespace Controller.RobotControl.Execution
         private List<double>?  _lastRunRadii;
         private Vector6?       _lastRunStart;        // robot position when the run was dispatched
         private double? _lastRunSpeed, _lastRunAccel, _lastRunDecel;
+        private string? _lastRunProfile;                // the run's own motionProfile (null = config)
         // Captured at Stop() for Resume() to re-dispatch:
         private RobotCommand?      _resumeCommand;
         private List<Vector6>?     _resumeRunWaypoints;
@@ -99,6 +111,8 @@ namespace Controller.RobotControl.Execution
             _lastRunRadii      = null;
             _lastRunStart      = null;
             if (cmd.ApplySpeedOverride) cmd.SpeedFactor = SpeedFactor;
+            if (PlanTravel is { } travel && cmd.CommandType is "MoveL" or "MoveJ" && _controller.Conveyors?.Tracking != null)
+                cmd.TrackTravel ??= travel;
             _controller.QueuedCommands.Enqueue(cmd);
         }
 
@@ -110,7 +124,7 @@ namespace Controller.RobotControl.Execution
         /// can resume the remainder of the path.
         /// </summary>
         public void StartContinuous(List<Vector6> waypoints, List<double> radii,
-            double? speed, double? accel, double? decel)
+            double? speed, double? accel, double? decel, string? profile = null)
         {
             _lastRunWaypoints  = waypoints;
             _lastRunRadii      = radii;
@@ -118,6 +132,7 @@ namespace Controller.RobotControl.Execution
             _lastRunSpeed      = speed;
             _lastRunAccel      = accel;
             _lastRunDecel      = decel;
+            _lastRunProfile    = profile;
             _lastMotionCommand = null;
             // Enqueue rather than calling StartContinuousMove directly: the blended
             // path must be started on the motion thread (which owns continuousProfiler),
@@ -132,6 +147,7 @@ namespace Controller.RobotControl.Execution
                 Decel              = decel,
                 ApplySpeedOverride = true,
                 SpeedFactor        = SpeedFactor,
+                Profile            = profile,
             });
         }
 
@@ -203,7 +219,7 @@ namespace Controller.RobotControl.Execution
             if (_resumeRunWaypoints is { Count: > 0 })
             {
                 StartContinuous(_resumeRunWaypoints, _resumeRunRadii!,
-                    _lastRunSpeed, _lastRunAccel, _lastRunDecel);
+                    _lastRunSpeed, _lastRunAccel, _lastRunDecel, _lastRunProfile);
                 PendingStep  = _resumePendingStep;
                 PendingSteps = _resumePendingSteps;
                 Watch        = _resumeWatch;
@@ -232,6 +248,7 @@ namespace Controller.RobotControl.Execution
             PendingStep    = null;
             AwaitingAux    = false;
             PendingAuxStep = null;
+            PendingAuxCompletion = null;
             Watch          = null; // nothing is awaited any more, so nothing to watch
         }
 
@@ -240,12 +257,14 @@ namespace Controller.RobotControl.Execution
         {
             DefaultBlendRadius    = 0;
             SpeedFactorPercent    = 100;
+            PlanTravel            = null;
 
             AwaitingMove          = false;
             PendingStep           = null;
             PendingSteps          = null;
             AwaitingAux           = false;
             PendingAuxStep        = null;
+            PendingAuxCompletion  = null;
             Watch                 = null;
 
             _lastMotionCommand    = null;
@@ -253,6 +272,7 @@ namespace Controller.RobotControl.Execution
             _lastRunRadii         = null;
             _lastRunStart         = null;
             _lastRunSpeed = _lastRunAccel = _lastRunDecel = null;
+            _lastRunProfile       = null;
             _resumeCommand        = null;
             _resumeRunWaypoints   = null;
             _resumeRunRadii       = null;

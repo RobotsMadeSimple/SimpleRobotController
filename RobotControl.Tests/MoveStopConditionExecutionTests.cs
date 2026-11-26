@@ -26,7 +26,7 @@ public sealed class MoveStopConditionExecutionTests : IDisposable
     private const string AuxDeviceId = "AUX_STOPTEST";
 
     private readonly string              _tmp;
-    private readonly RobotController     _robot = new();
+    private readonly RobotController     _robot = new RobotController().WithIdentityKinematics();
     private readonly ProgramCycleManager _programs = new();
     private readonly ProgramExecutor     _exec;
     private readonly NanoDevice          _nano;

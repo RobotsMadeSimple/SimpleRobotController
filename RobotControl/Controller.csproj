@@ -13,9 +13,19 @@
     <!-- WebRTC receive (phone H.264 camera → JPEG → CameraDevice.PushFrame). Pure-managed, no native libs. -->
     <PackageReference Include="SIPSorcery" Version="10.0.17" />
     <PackageReference Include="ZXing.Net" Version="0.16.9" />
-    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260602" Condition="$([MSBuild]::IsOSPlatform(Windows))" />
-    <PackageReference Include="OpenCvSharp4.official.runtime.linux-x64" Version="4.13.0.20260602" Condition="$([MSBuild]::IsOSPlatform(Linux))" />
+    <!-- Pick the OpenCvSharp native runtime by the TARGET RID, not the build host OS, so cross-publishing
+         a Linux build from Windows (dotnet publish -r linux-x64) still ships libOpenCvSharpExtern.so.
+         With no RID (plain build/run during local dev) fall back to the host OS. -->
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260602" Condition="$(RuntimeIdentifier.StartsWith('win')) Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform(Windows)))" />
+    <PackageReference Include="OpenCvSharp4.official.runtime.linux-x64" Version="4.13.0.20260602" Condition="$(RuntimeIdentifier.StartsWith('linux')) Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform(Linux)))" />
     <PackageReference Include="System.IO.Ports" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Built-in robot definitions for 3D cell packages (docs/cell-package.md §3.1), compiled in. -->
+    <Content Remove="Cells\Robots\*.json" />
+    <None Remove="Cells\Robots\*.json" />
+    <EmbeddedResource Include="Cells\Robots\*.json" LogicalName="Cells.Robots.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

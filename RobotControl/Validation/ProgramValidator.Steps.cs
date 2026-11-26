@@ -21,7 +21,49 @@ namespace Controller.RobotControl.Validation
                     case StepType.SetSpeedFactor: ValidateSpeedFactor(s, at); break;
                     case StepType.ListOp:         ValidateListOp(s, at); break;
                     case StepType.Prompt:         ValidatePrompt(s, at); break;
+                    case StepType.ConveyorTrack: case StepType.ConveyorAddPart: case StepType.ConveyorClearQueue:
+                    case StepType.ConveyorEndTracking:
+                        ValidateConveyor(s, at); break;
+                    case StepType.SiloAction:     ValidateSilo(s, at); break;
                 }
+            }
+
+            // ── Silo (docs/aux-silo.md) ───────────────────────────────────────
+
+            private void ValidateSilo(ProgramStep s, At at)
+            {
+                var action = string.IsNullOrEmpty(s.SiloAction) ? "Present" : s.SiloAction;
+                if (!Execution.SiloActions.IsKnown(action))
+                {
+                    Add(at, ValidationCodes.MissingField, $"Silo action '{action}' must be Home, Present, Refill or SetCount", "siloAction");
+                    return;
+                }
+                if (string.Equals(action, "SetCount", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (s.SiloCount is null && !HasExpr(s, "siloCount"))
+                        Add(at, ValidationCodes.MissingField, "No count is set", "siloCount");
+                    else if (s.SiloCount is < 0 && !HasExpr(s, "siloCount"))
+                        Add(at, ValidationCodes.MissingField, "The count cannot be negative", "siloCount");
+                }
+            }
+
+            // ── Conveyor tracking ─────────────────────────────────────────────
+
+            private void ValidateConveyor(ProgramStep s, At at)
+            {
+                bool optional = s.Type == StepType.ConveyorEndTracking;
+                if (string.IsNullOrWhiteSpace(s.ConveyorId))
+                {
+                    if (!optional) Add(at, ValidationCodes.MissingField, "No conveyor is selected", "conveyorId");
+                }
+                else if (_ctx.ConveyorExists != null && !_ctx.ConveyorExists(s.ConveyorId))
+                    Add(at, ValidationCodes.UnknownConveyor, $"Conveyor '{s.ConveyorId}' does not exist", "conveyorId");
+
+                if (s.Type == StepType.ConveyorTrack && s.TrackTimeoutMs is < 0)
+                    Add(at, ValidationCodes.MissingField, "Timeout cannot be negative", "trackTimeoutMs");
+                if (s.Type == StepType.ConveyorAddPart && s.PartOffsetMm == null && !HasExpr(s, "partOffsetMm"))
+                    Add(at, ValidationCodes.MissingField, "Part X is not set — the part is queued at X = 0", "partOffsetMm",
+                        ValidationSeverity.Warning);
             }
 
             private static bool HasExpr(ProgramStep s, string key) => s.Expressions?.ContainsKey(key) == true;
@@ -46,12 +88,12 @@ namespace Controller.RobotControl.Validation
                     }
                     else if (expr.Contains('$') || expr.Contains('{'))
                         CheckTemplate(expr, at, "via", ValidationSeverity.Error);
-                    else if (_ctx.PointExists != null && !_ctx.PointExists(null, expr.Trim()))
+                    else if (!PointKnown(null, expr.Trim()))
                         Add(at, ValidationCodes.UnknownPoint, $"Via point '{expr.Trim()}' does not exist", "via");
                 }
                 else if (!string.IsNullOrEmpty(s.ViaPointId) || !string.IsNullOrEmpty(s.ViaPointName))
                 {
-                    if (_ctx.PointExists != null && !_ctx.PointExists(s.ViaPointId, s.ViaPointName))
+                    if (!PointKnown(s.ViaPointId, s.ViaPointName))
                         Add(at, ValidationCodes.UnknownPoint, $"Via point '{s.ViaPointName ?? s.ViaPointId}' does not exist", "via");
                     else if (!string.IsNullOrEmpty(s.ViaPointId) && s.ViaPointId == s.PointId ||
                              string.IsNullOrEmpty(s.ViaPointId) && string.IsNullOrEmpty(s.PointId) &&
@@ -80,18 +122,63 @@ namespace Controller.RobotControl.Validation
                         "arcTolerance", ValidationSeverity.Warning);
             }
 
+            // ── MoveJoints / motion profile ───────────────────────────────────
+
+            private void CheckMoveJoints(ProgramStep s, At at)
+            {
+                bool any = !string.IsNullOrWhiteSpace(s.JointsExpr)
+                           || s.J1 != null || s.J2 != null || s.J3 != null || s.J4 != null
+                           || HasExpr(s, "j1") || HasExpr(s, "j2") || HasExpr(s, "j3") || HasExpr(s, "j4");
+                if (!any)
+                {
+                    Add(at, ValidationCodes.MissingField, "Move to Joints has no joint values — it would not move", "jointsExpr",
+                        ValidationSeverity.Warning);
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(s.JointsExpr)) return;
+
+                var expr = s.JointsExpr.Trim();
+                CheckExpr(expr, at, "jointsExpr");
+                if (!ExpressionEvaluator.TryParse(expr, out _)) return;
+                if (!ExpressionEvaluator.IsValueExpression(expr))
+                {
+                    Add(at, ValidationCodes.MissingField,
+                        $"'{expr}' is a number, not a joints value — use $list[i] (an Objects list with j1…j4) or jointsOf(…)", "jointsExpr");
+                    return;
+                }
+                if (MoveTargetResolver.TryParsePointsRef(expr, out var name, out _) && Lookup(name) is { Kind: SymKind.List } sym
+                    && sym.ElementType != ListElementType.Record)
+                    Add(at, ValidationCodes.UnknownVariable,
+                        $"'${name}' is a {sym.ElementType} list — joint values live in an Objects list (j1…j4); for a point use jointsOf(${name}[…])",
+                        "jointsExpr");
+            }
+
+            private void CheckMotionProfile(ProgramStep s, At at)
+            {
+                if (!string.IsNullOrEmpty(s.MotionProfile) && MotionProfilers.MotionProfileSettings.ParseKind(s.MotionProfile) == null)
+                    Add(at, ValidationCodes.MissingField, $"Motion profile '{s.MotionProfile}' must be trapezoid or scurve", "motionProfile");
+            }
+
             // ── SavePosition ──────────────────────────────────────────────────
 
             private void ValidateSavePosition(ProgramStep s, At at)
             {
-                if (s.SavePositionSource is not (null or "" or "actual" or "target"))
-                    Add(at, ValidationCodes.MissingField, $"Position source '{s.SavePositionSource}' must be actual or target", "savePositionSource");
+                if (s.SavePositionSource is not (null or "" or "actual" or "target" or SavePositionStep.JointsSource))
+                    Add(at, ValidationCodes.MissingField, $"Position source '{s.SavePositionSource}' must be actual, target or joints", "savePositionSource");
+                bool joints = s.SavePositionSource == SavePositionStep.JointsSource;
+                var want = joints ? ListElementType.Record : ListElementType.Point;
+                string wantName = joints ? "an Objects list (joint values)" : "a Points list";
 
+                if (s.SavePositionTo == "point" && joints)
+                {
+                    Add(at, ValidationCodes.UnsupportedOnStep, "Joint values cannot go into a saved point — save them to an Objects list", "savePositionTo");
+                    return;
+                }
                 if (s.SavePositionTo == "point")
                 {
                     if (string.IsNullOrEmpty(s.PointId) && string.IsNullOrWhiteSpace(s.PointName))
                         Add(at, ValidationCodes.MissingField, "No saved point is selected", "pointId");
-                    else if (string.IsNullOrWhiteSpace(s.PointName) && _ctx.PointExists != null && !_ctx.PointExists(s.PointId, null))
+                    else if (string.IsNullOrWhiteSpace(s.PointName) && !PointKnown(s.PointId, null))
                         Add(at, ValidationCodes.UnknownPoint, $"Point '{s.PointId}' does not exist", "pointId");
                     if (_main.IsBackground)
                         Add(at, ValidationCodes.PointWriteInBackground,
@@ -106,17 +193,17 @@ namespace Controller.RobotControl.Validation
                 }
 
                 if (string.IsNullOrWhiteSpace(s.VariableName))
-                    Add(at, ValidationCodes.MissingField, "No Points variable is selected", "variableName");
+                    Add(at, ValidationCodes.MissingField, joints ? "No Objects list is selected" : "No Points variable is selected", "variableName");
                 else
                 {
                     var name = s.VariableName.Trim().TrimStart('$');
                     if (CheckTarget(name, at, "variableName", requireDeclared: false))
                     {
                         var sym = Lookup(name);
-                        if (sym is { Kind: SymKind.List } && sym.ElementType != ListElementType.Point)
-                            Add(at, ValidationCodes.UnknownVariable, $"'${name}' is a {sym.ElementType} list, not a Points list", "variableName");
+                        if (sym is { Kind: SymKind.List } && sym.ElementType != want)
+                            Add(at, ValidationCodes.UnknownVariable, $"'${name}' is a {sym.ElementType} list, not {wantName}", "variableName");
                         else if (sym is { Kind: not SymKind.List })
-                            Add(at, ValidationCodes.UnknownVariable, $"'${name}' is not a list — Save Position needs a Points list", "variableName");
+                            Add(at, ValidationCodes.UnknownVariable, $"'${name}' is not a list — Save Position needs {wantName}", "variableName");
                     }
                 }
 
@@ -196,10 +283,12 @@ namespace Controller.RobotControl.Validation
                     }
                     else if (et is ListElementType.Point or ListElementType.Record)
                     {
-                        if (hasValue)
+                        // A whole value ($pts[i], poseOf(…), jointsOf(…)) is fine; a plain number is not.
+                        bool wholeValue = hasValue && !hasFields && ExpressionEvaluator.IsValueExpression(s.ListValueExpr!);
+                        if (hasValue && !wholeValue)
                             Add(at, ValidationCodes.UnsupportedOnStep,
-                                $"A {et} list element takes fields, not a single value", "listValueExpr");
-                        if (!hasFields && !(et == ListElementType.Point && action == "append"))
+                                $"A {et} list element takes fields or a whole value ($list[i], poseOf(…), jointsOf(…)), not a single number", "listValueExpr");
+                        if (!hasFields && !wholeValue && !(et == ListElementType.Point && action == "append"))
                             Add(at, ValidationCodes.MissingField,
                                 et == ListElementType.Point ? "No axes are set (x, y, z, rx, ry, rz)" : "No fields are set", "listFields");
                     }

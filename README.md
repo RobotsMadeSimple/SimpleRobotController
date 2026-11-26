@@ -105,10 +105,10 @@ All communication is line-based JSON over WebSocket on port `9000`.
 | `JogAxis` | Manually move an axis |
 | `Home` | Home all axes |
 | `GetIO` | Get all IO device states |
-| `SetNanoOutput` | Set an Arduino Nano output pin |
+| `SetIoOutput` | Set an IO device (Nano/Uno) output pin |
 | `SetNeoPixel` | Set NeoPixel strip colors |
-| `ConfigureNanoPin` | Configure a Nano pin type |
-| `RenameNanoPin` | Rename a Nano pin |
+| `ConfigureIoPin` | Configure an IO device pin type |
+| `RenameIoPin` | Rename an IO device pin |
 | `SetSTBOutput` | Set an STB4100 output |
 
 ---

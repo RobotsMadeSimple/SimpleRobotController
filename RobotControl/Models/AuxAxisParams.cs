@@ -64,6 +64,22 @@ public class SetAuxAxisConfigParams
     [JsonPropertyName("gripperCloseTimeSec")] public double GripperCloseTimeSec { get; set; } = 0.0;
     [JsonPropertyName("gripperAccel")]        public double GripperAccel        { get; set; } = 0.0;
     [JsonPropertyName("gripperOverTravelMm")] public double GripperOverTravelMm { get; set; } = 0.0;
+    // Silo geometry (docs/aux-silo.md). Null (left out) = keep the stored value, so a client that
+    // predates the Silo role never wipes it. siloCount is not set here — use SiloAction SetCount.
+    [JsonPropertyName("siloPitchMm")]          public double? SiloPitchMm          { get; set; }
+    [JsonPropertyName("siloCapacity")]         public int?    SiloCapacity         { get; set; }
+    [JsonPropertyName("siloClearanceMm")]      public double? SiloClearanceMm      { get; set; }
+    [JsonPropertyName("siloHomeOverTravelMm")] public double? SiloHomeOverTravelMm { get; set; }
+    [JsonPropertyName("siloHomeSpeed")]        public double? SiloHomeSpeed        { get; set; }
+}
+
+/// <summary>SiloAction (docs/aux-silo.md): action = Home | Present | Refill | SetCount; count for SetCount.</summary>
+public class SiloActionParams
+{
+    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = "";
+    [JsonPropertyName("axis")]     public int    Axis     { get; set; }
+    [JsonPropertyName("action")]   public string Action   { get; set; } = "";
+    [JsonPropertyName("count")]    public int?   Count    { get; set; }
 }
 
 public class SetAuxPositionParams

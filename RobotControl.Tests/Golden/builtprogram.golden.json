@@ -25,6 +25,15 @@
       "paramMode": "inOut"
     }
   ],
+  "points": [
+    {
+      "id": "point-golden-1",
+      "name": "Pickup",
+      "description": "Golden program point",
+      "x": 100, "y": 200, "z": 50, "rx": 0, "ry": 0, "rz": 90,
+      "lastUpdatedUnixMs": 1762480000000
+    }
+  ],
   "displayPageHtml": "<p>page</p>",
   "displayPageMode": "html",
   "lastUpdatedUnixMs": 1762480000000,

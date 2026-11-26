@@ -56,6 +56,13 @@ internal sealed class SrsParser
         ["unknown"] = StepType.Unknown,
     };
 
+    /// <summary>Other names a step type's statement may start with (the catalog's aliases); the
+    /// printer always writes the type name.</summary>
+    private static readonly Dictionary<string, StepType> TypeAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["MoveAbsJ"] = StepType.MoveJoints,
+    };
+
     /// <summary>Every word a statement may start with (for "did you mean").</summary>
     public static IEnumerable<string> AllKeywords =>
         FlowWords.Keys.Concat(StepCatalog.Steps.Select(s => s.Type)).Concat(["SetVariable", "ListOp", "Note", "var", "computed", "param"]);
@@ -79,6 +86,7 @@ internal sealed class SrsParser
         [(StepType.StopwatchControl, "stopwatchAction")] = [("Start", "start"), ("Stop", "stop"), ("Reset", "reset")],
         [(StepType.GripperAction, "gripperAction")]       = [("Open", "open"), ("Close", "close"), ("GripTo", "to")],
         [(StepType.ConveyorAction, "conveyorAction")]     = [("RunForward", "forward"), ("RunReverse", "reverse"), ("Stop", "stop")],
+        [(StepType.SiloAction, "siloAction")]             = [("Home", "home"), ("Present", "present"), ("Accept", "accept"), ("Refill", "refill"), ("SetCount", "setcount")],
     };
 
     // ── Problems ───────────────────────────────────────────────────────────
@@ -501,9 +509,11 @@ internal sealed class SrsParser
         }
         var node = new StepNode { Line = line.Line, EndLine = line.EndLine, Span = SpanOf(line, ws, c.P) };
 
-        // The type-name forms (every StepType name is a keyword) — the fallback the printer uses.
-        if (Enum.TryParse<StepType>(word, ignoreCase: true, out var asType) && Enum.IsDefined(asType) &&
-            !int.TryParse(word, out _) && !FlowWords.ContainsKey(word))
+        // The type-name forms (every StepType name is a keyword) — the fallback the printer uses —
+        // and the type aliases (MoveAbsJ = MoveJoints), which read exactly like the type name.
+        if ((Enum.TryParse<StepType>(word, ignoreCase: true, out var asType) && Enum.IsDefined(asType) &&
+             !int.TryParse(word, out _) && !FlowWords.ContainsKey(word))
+            || TypeAliases.TryGetValue(word, out asType))
         {
             node.Type = asType;
             switch (asType)
@@ -793,6 +803,15 @@ internal sealed class SrsParser
                 return;
             case K.Expr:
                 if (isStr) { n.Json[f.Key] = text; return; }   // a template (e.g. a text prompt's default)
+                // A positional expression other than a $var is written in parentheses (the printer's
+                // PositionalExpr) — they are syntax, not part of the stored expression.
+                if (positional && SrsText.IsWrapped(text))
+                {
+                    var inner = text[1..^1];
+                    int lead = inner.Length - inner.TrimStart().Length;
+                    if (CheckExpr(line, inner.Trim(), st + 1 + lead)) n.Json[f.Key] = inner.Trim();
+                    return;
+                }
                 if (CheckExpr(line, text, st)) n.Json[f.Key] = text;
                 return;
             case K.Condition:
@@ -813,6 +832,7 @@ internal sealed class SrsParser
             case K.VisionRef:  SetRef(n, line, SrsRefKind.Vision, "visionProgramId", "visionProgramName", text, st, en, f.Key, isStr); return;
             case K.DeviceRef:  SetRef(n, line, SrsRefKind.Device, f.Key, null, text, st, en, f.Key, isStr); return;
             case K.CameraRef:  SetRef(n, line, SrsRefKind.Camera, f.Key, null, text, st, en, f.Key, isStr); return;
+            case K.ConveyorRef: SetRef(n, line, SrsRefKind.Conveyor, f.Key, null, text, st, en, f.Key, isStr); return;
             case K.LabelRef:
                 if (!isStr && !SrsCursor.IsIdent(text)) { Error(TextProblemCodes.BadValue, "Expected a label name", line, st, en); return; }
                 n.Json["labelName"] = text;

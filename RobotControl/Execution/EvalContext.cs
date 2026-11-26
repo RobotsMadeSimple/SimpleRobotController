@@ -87,6 +87,15 @@ namespace Controller.RobotControl.Execution
             ExpressionEvaluator.Evaluate(expr, Vars, _scope.Lists, _scope.Properties,
                 _resolveString ??= ResolveString, _stringVariable ??= StringVariable);
 
+        /// <summary>
+        /// Evaluates an expression that stands for a whole value — a list element (<c>$home[0]</c>),
+        /// <c>jointsOf(…)</c> or <c>poseOf(…)</c>. False (nothing evaluated) when it is a plain number.
+        /// </summary>
+        /// <param name="kind">"joints", "pose", or the list's element type (Point, Record, …).</param>
+        public bool TryEvaluateValue(string expr, out ObjectRecord value, out string kind) =>
+            ExpressionEvaluator.TryEvaluateValue(expr, Vars, _scope.Lists, _scope.Properties,
+                _resolveString ??= ResolveString, _stringVariable ??= StringVariable, out value, out kind);
+
         // Cached so a per-tick evaluation does not allocate two delegates.
         private Func<string, string>?  _resolveString;
         private Func<string, string?>? _stringVariable;

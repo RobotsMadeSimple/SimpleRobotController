@@ -135,7 +135,7 @@ Rules:
 | `steps[].timeoutMs` | 0 (default) = none. The step's own `pluginTimeoutMs` overrides. |
 | `functions[].name` | `^[a-z][A-Za-z0-9_]{0,31}$`; called as `<id>.<name>(…)`. `timeoutMs` default 250, max 5000. |
 | `properties[].name` | `^[a-z][A-Za-z0-9_]{0,31}$`; read as `$<id>.<name>`. `type` is `number` or `boolean` (booleans are 0/1). |
-| `ui` | Optional custom GUI (§4.5). `ui.entry` is the entry HTML relative to the plugin folder (must stay inside it); `ui.title` is shown above the embedded page. The app renders it in a WebView on the plugin's detail page. |
+| `ui` | Optional custom GUI (§4.5). `ui.entry` is the entry HTML relative to the plugin folder (must stay inside it); `ui.title` is shown above the embedded page. The app renders it in a WebView on the plugin's detail page. `ui.params` (optional) lists settings a display-page Plugin block can set — same shape as a step param, types `string`/`number`/`boolean`/`enum` — and the page receives them as its URL query string (`?key=value`). |
 
 A manifest that fails validation leaves the plugin listed with state `error`
 and `message` naming the problem; it is never launched.
@@ -272,6 +272,13 @@ The plugin pushes state with `ctx.SetView({...})` (merged) / `ctx.ClearView()` a
 handles actions with `OnAction(id, (ctx, args) => result)` (C#) — the GUI's `invoke`
 result is whatever the handler returns.
 
+**Embedding settings.** A display-page Plugin block embeds the GUI and can pass it
+settings as the page's URL query string, e.g. `ui/index.html?orientation=rotated90`;
+the page reads them with `new URLSearchParams(location.search)`. Declare them in
+`ui.params` so the block shows proper fields (enum → choices, etc.); undeclared ones can
+still be typed as `name=value, …` on the block. The detail page passes none, so every
+setting needs a sensible default.
+
 ## 5. Controller internals (where things live)
 
 ```
@@ -322,7 +329,8 @@ Controller behaviour details (as implemented):
   plugin's initial snapshot); later events carry only changed keys.
 - Transition events are derived by the same poll: `robot.homed` `{ homed: true }`,
   `robot.fault` `{ joint, message }`, `robot.faultCleared` `{}`.
-  `robot.estop` is reserved — the controller has no e-stop signal to report yet.
+  `robot.estop` `{ active, latched, reason, source }` is published by the e-stop monitor when the
+  hardwired e-stop trips, and again (`latched: false`) when it is reset (docs/estop.md).
 - The connection must send `plugin.ready` within 10 s of opening.
 
 The step handler never blocks: it sends `step.execute`, records the
@@ -510,6 +518,30 @@ Max 200 MB (`413 { "error": "tooLarge", "message" }` above it). `GET /plugins/{i
 Custom-GUI HTTP (`GET /plugins/{id}/ui/{**path}`, `GET /plugins/{id}/ui` WebSocket) is in §4.5.
 
 ## 8. SDKs
+
+Both SDKs expose a small set of **built-in command helpers** under `ctx.robot`
+(Python) / `ctx.Robot` (C#) — thin, discoverable wrappers over the generic
+`ctx.command(...)` for the most common controller commands, so authors don't
+hand-type command strings and param bags:
+
+| Helper | Wraps | Returns |
+|---|---|---|
+| `move_l(x, y, z, rx=0, ry=0, rz=0, *, speed=, accel=)` | `MoveL` | the command ack |
+| `move_j(x, y, z, rx=0, ry=0, rz=0, *, speed=, accel=)` | `MoveJ` | the command ack |
+| `home()` | `Home` | — |
+| `stop()` | `StopJog` | — |
+| `get_points()` | `GetPoints` | `[{name,x,y,z,rx,ry,rz}, …]` (parsed from the JSON string) |
+| `teach_point(name)` | `TeachPoint` | — (saves the current pose, base frame) |
+| `get_grids()` / `get_stacks()` | `GetGrids` / `GetStacks` | parsed array |
+| `position()` | `GetStatus` | `{x,y,z,rx,ry,rz}` (C#: `PluginPoint`) |
+| `is_moving()` | `GetStatus` | bool |
+
+These are convenience only — the full WebSocket API stays reachable with
+`ctx.command(name, …)`, and a brand-new controller command works there on day one,
+gaining a typed helper only when the SDK next ships. Moves are queued on the motion
+thread, so a helper returns when the move is *accepted*, not when it finishes; await
+`is_moving()` or subscribe to `robot.position` to know it has stopped. On the 4-axis
+ASTRO the only orientation DOF is `rz` (J4); `rx`/`ry` stay 0.
 
 ### 8.1 Python — `plugins-sdk/python/simplerobot_plugin`
 

@@ -5,18 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>Checkers</title>
 <style>
+  /* ?theme=dark|light (a display page passes its own) — tokens from the app's display design guide. */
   :root {
-    --bg: #0f1216; --panel: #171b21; --ink: #e8eaed; --muted: #9aa3ad;
-    --dark: #7a5230; --light: #e7c9a0; --sel: #ffd54a; --target: #46d27a;
-    --last: rgba(255, 213, 74, 0.28); --accent: #4f8cff; --danger: #ff5d5d;
+    --bg: #16191E; --panel: #1D2127; --line: #262B33; --ink: #E7E9EC; --muted: #A2A9B4;
+    --dark: #7a5230; --light: #e7c9a0; --sel: #ffd54a; --target: #3FB950;
+    --last: rgba(255, 213, 74, 0.28); --accent: #4C8DFF; --danger: #F0524D;
+  }
+  html[data-theme=light] {
+    --bg: #FFFFFF; --panel: #F3F4F6; --line: #E2E5E9; --ink: #14171C; --muted: #4B5361;
+    --target: #1A7F37; --accent: #2563EB; --danger: #CF222E;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
     background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 14px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 14px;
   }
-  .bar { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 480px; }
+  .bar { display: flex; align-items: center; gap: 10px; width: min(100%, calc(100vh - 150px)); }
   .turn { display: flex; align-items: center; gap: 8px; font-weight: 600; }
   .disc { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.4); }
   .disc.white { background: #f4f1ea; } .disc.black { background: #23262b; border-color: #000; }
@@ -24,11 +29,12 @@
   .status { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); }
   .status.on { background: var(--target); }
 
-  .boardWrap { position: relative; width: 100%; max-width: 480px; aspect-ratio: 1 / 1; }
+  /* The board is as big as the frame allows: by width, and by height less the bar and footer. */
+  .boardWrap { position: relative; width: min(100%, calc(100vh - 150px)); aspect-ratio: 1 / 1; }
   .board {
     display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
     width: 100%; height: 100%; border-radius: 10px; overflow: hidden;
-    box-shadow: 0 6px 24px rgba(0,0,0,.45); border: 2px solid #0a0c0f;
+    box-shadow: 0 2px 10px rgba(0,0,0,.25); border: 1px solid var(--line);
   }
   .cell { position: relative; }
   .cell.light { background: var(--light); }
@@ -47,21 +53,21 @@
   .piece.king::after { content: "\2605"; font-size: 46%; color: #ffd54a; }
   .piece.black.king::after { color: #ffd54a; }
   .cell.sel .piece { outline: 3px solid var(--sel); outline-offset: -1px; }
-  .cell.movable .hint { position: absolute; inset: 38%; border-radius: 50%; border: 2px solid rgba(70,210,122,.7); }
+  .cell.movable .hint { position: absolute; inset: 38%; border-radius: 50%; border: 2px solid var(--accent); opacity: .85; }
   .cell.target .dot {
     position: absolute; inset: 33%; border-radius: 50%; background: var(--target); opacity: .85;
   }
   .cell.target.occupied .dot { inset: 6%; background: none; border: 4px solid var(--target); }
 
-  .foot { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { color: var(--muted); min-height: 18px; }
+  .foot { width: min(100%, calc(100vh - 150px)); display: flex; flex-direction: column; gap: 10px; }
+  .msg { color: var(--muted); min-height: 18px; font-size: 13px; }
   .msg.win { color: var(--sel); font-weight: 600; }
   .btns { display: flex; gap: 10px; }
   button {
-    flex: 1; padding: 11px 12px; border-radius: 10px; border: 1px solid #2a2f37;
-    background: #222831; color: var(--ink); font-size: 14px; font-weight: 600; cursor: pointer;
+    flex: 1; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;
   }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
   button:disabled { opacity: .5; cursor: default; }
   .offline { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
     background: rgba(15,18,22,.72); color: var(--muted); font-weight: 600; border-radius: 10px; }
@@ -92,15 +98,30 @@
 
 <script src="ui-bridge.js"></script>
 <script>
+  if (new URLSearchParams(location.search).get("theme") === "light") document.documentElement.setAttribute("data-theme", "light");
   var SQUARES = 32;
   function rcToIdx(r, c) { return ((r + c) % 2 === 0) ? -1 : (r * 4 + Math.floor(c / 2)); }
+
+  // ?orientation= turns the drawn board to match a camera view (manifest ui.params; the same
+  // names as detectMove): where black's side (board row 0) is — normal (top), rotated90 (right),
+  // rotated180 (bottom), rotated270 (left).
+  var TURNS = { rotated90: 1, rotated180: 2, rotated270: 3 }[new URLSearchParams(location.search).get("orientation")] || 0;
+  // The board square drawn at screen row/col dr/dc (the inverse of the plugin's CameraCell).
+  function boardAt(dr, dc) {
+    switch (TURNS) {
+      case 1: return [7 - dc, dr];
+      case 2: return [7 - dr, 7 - dc];
+      case 3: return [dc, 7 - dr];
+      default: return [dr, dc];
+    }
+  }
 
   // Build the 8x8 grid once; dark playable squares carry a data-idx and a tap handler.
   var boardEl = document.getElementById("board");
   var cells = {}; // idx -> cell element
-  for (var r = 0; r < 8; r++) {
-    for (var c = 0; c < 8; c++) {
-      var idx = rcToIdx(r, c);
+  for (var dr = 0; dr < 8; dr++) {
+    for (var dc = 0; dc < 8; dc++) {
+      var rc = boardAt(dr, dc), idx = rcToIdx(rc[0], rc[1]);
       var cell = document.createElement("div");
       cell.className = "cell " + (idx >= 0 ? "dark playable" : "light");
       if (idx >= 0) {

@@ -61,6 +61,14 @@ a fixed cadence. Keep the producer (write loop) bounded to what the consumer
 that. Every overshoot regression came from breaking this balance, not from loop
 cadence being "too slow."
 
+## Motion profiles (S-curve) do not touch these loops
+
+The optional jerk-limited S-curve profile (robot config `motionProfile: "scurve"`) only changes
+the setpoints the profilers hand to `RunMotion` — upstream of all three loops. It adds no gate,
+sleep or read to the motion loop and changes neither STB loop's cadence or sensor handling.
+Homing keeps the trapezoid: `HomingSequencer`'s joint moves go through `IHomingHost.MoveJoints`,
+which always builds a trapezoid profiler, and jogging keeps its own profilers.
+
 ## If homing overshoots again
 
 It is almost certainly **not** these loops — they are the empirically-good

@@ -25,6 +25,21 @@ public static class ErrorCodes
     public const string ArcDegenerate    = "arcDegenerate";
     /// <summary>A ListOp / SavePosition index outside the list.</summary>
     public const string IndexOutOfRange  = "indexOutOfRange";
+    /// <summary>A move target (or a <c>jointsOf()</c> point) the robot cannot reach: no inverse
+    /// kinematics solution, or a joint outside its soft limits. Checked before the move starts.</summary>
+    public const string OutOfReach       = "outOfReach";
+    /// <summary>The tracked conveyor part left the pick window; tracking stopped.</summary>
+    public const string ConveyorWindow   = "conveyorWindow";
+    /// <summary>ConveyorTrack waited longer than trackTimeoutMs for a part to enter the window.</summary>
+    public const string ConveyorTimeout  = "conveyorTimeout";
+    /// <summary>The belt runs faster than the robot's linear speed; tracking stopped.</summary>
+    public const string ConveyorSpeed    = "conveyorSpeed";
+    /// <summary>SiloAction Present on a silo that is not homed (docs/aux-silo.md).</summary>
+    public const string SiloNotHomed     = "siloNotHomed";
+    /// <summary>SiloAction Present on a silo with no parts left.</summary>
+    public const string SiloEmpty        = "siloEmpty";
+    /// <summary>SiloAction Accept on a silo already holding its capacity.</summary>
+    public const string SiloFull         = "siloFull";
     /// <summary>The default RaiseError code.</summary>
     public const string UserError        = "userError";
 
@@ -41,6 +56,9 @@ public static class ErrorCodes
     /// <summary>A List / Save Position step that does not fit its list: fields on a Number list,
     /// a Number value for a Points list, a missing value, an unknown action. An authoring bug.</summary>
     public const string BadListOperation = "badListOperation";
+    /// <summary>A SiloAction on an axis that is not a usable silo (role, linear unit, capacity,
+    /// part height) or with an unknown action. A setup bug.</summary>
+    public const string SiloConfig       = "siloConfig";
 
     public static readonly IReadOnlyList<ErrorCodeSpec> All =
     [
@@ -57,6 +75,13 @@ public static class ErrorCodes
         new() { Code = PointNotFound,    Label = "Point not found",                   Catchable = true },
         new() { Code = ArcDegenerate,    Label = "Arc points are in a line",          Catchable = true },
         new() { Code = IndexOutOfRange,  Label = "List index out of range",           Catchable = true },
+        new() { Code = OutOfReach,       Label = "Target out of reach",               Catchable = true },
+        new() { Code = ConveyorWindow,   Label = "Conveyor part left the window",     Catchable = true },
+        new() { Code = ConveyorTimeout,  Label = "No conveyor part in time",          Catchable = true },
+        new() { Code = ConveyorSpeed,    Label = "Conveyor too fast to track",        Catchable = true },
+        new() { Code = SiloNotHomed,     Label = "Silo not homed",                    Catchable = true },
+        new() { Code = SiloEmpty,        Label = "Silo empty",                        Catchable = true },
+        new() { Code = SiloFull,         Label = "Silo full",                         Catchable = true },
         new() { Code = UserError,        Label = "Raised error",                      Catchable = true },
         new() { Code = MotionFault,      Label = "Motion fault",                      Catchable = false },
         new() { Code = JointLimit,       Label = "Joint limit",                       Catchable = false },
@@ -67,6 +92,7 @@ public static class ErrorCodes
         new() { Code = ExpressionSyntax, Label = "Expression error",                  Catchable = false },
         new() { Code = ComputedVariable, Label = "Write to a computed variable",      Catchable = false },
         new() { Code = BadListOperation, Label = "List step does not fit the list",  Catchable = false },
+        new() { Code = SiloConfig,       Label = "Silo axis not set up",              Catchable = false },
     ];
 
     private static readonly Dictionary<string, ErrorCodeSpec> ByCode =

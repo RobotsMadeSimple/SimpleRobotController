@@ -123,6 +123,12 @@ public sealed class PluginUiDef
     public string Entry { get; set; } = "";
     /// <summary>Optional title shown above the embedded GUI.</summary>
     public string? Title { get; set; }
+    /// <summary>
+    /// Settings a place that embeds the GUI (a display-page Plugin block) can set, shown as fields
+    /// there. Values reach the page as its URL query string (<c>?key=value</c>). Same shape as a
+    /// step param; types <c>string number boolean enum</c>.
+    /// </summary>
+    public List<PluginStepParam>? Params { get; set; }
 }
 
 /// <summary>
@@ -140,6 +146,7 @@ public sealed class PluginManifest
     public static readonly IReadOnlySet<string> ReservedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "robot", "program", "time", "aux", "camera", "stb", "relay", "io", "plugin", "global", "local", "list", "time_ms",
+        "conveyor",
     };
 
     public static readonly IReadOnlySet<string> Runtimes        = Set("python", "dotnet", "exe", "external");
@@ -323,6 +330,18 @@ public sealed class PluginManifest
                 Add("badUi", "ui.entry is required when ui is present", "ui.entry");
             else if (!IsInsideFolder(Ui.Entry))
                 Add("entryOutsideFolder", $"ui.entry '{Ui.Entry}' must stay inside the plugin folder", "ui.entry");
+            var uiKeys = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < (Ui.Params?.Count ?? 0); i++)
+            {
+                var p = Ui.Params![i];
+                string at = $"ui.params[{i}]";
+                if (string.IsNullOrWhiteSpace(p.Key) || !uiKeys.Add(p.Key))
+                    Add("badUiParam", $"ui param key '{p.Key}' must be non-empty and unique", $"{at}.key");
+                if (p.Type is not ("string" or "number" or "boolean" or "enum"))
+                    Add("badUiParam", $"ui param '{p.Key}' type '{p.Type}' must be string, number, boolean or enum", $"{at}.type");
+                else if (p.Type == "enum" && (p.Options?.Count ?? 0) == 0)
+                    Add("badUiParam", $"ui param '{p.Key}' is an enum with no options", $"{at}.options");
+            }
         }
 
         // ── properties ──

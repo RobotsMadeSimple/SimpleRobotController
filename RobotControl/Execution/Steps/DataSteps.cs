@@ -197,7 +197,14 @@ namespace Controller.RobotControl.Execution
                     {
                         if (!string.IsNullOrWhiteSpace(step.ListValueExpr))
                         {
-                            why = "a Points list element needs axes (x, y, z, rx, ry, rz), not a single value";
+                            // A whole pose: another list's element ($pts[2]) or poseOf(…).
+                            if (ctx.Eval.TryEvaluateValue(step.ListValueExpr, out var pose, out var kind)
+                                && kind is "pose" or nameof(ListElementType.Point))
+                            {
+                                element = ObjectRecord.FromPoint(pose.ToPoint());
+                                return true;
+                            }
+                            why = "a Points list element needs axes (x, y, z, rx, ry, rz) or a whole pose ($pts[i], poseOf(…)), not a single value";
                             return false;
                         }
                         if (!allowHere) { why = "no axes are set"; return false; }
@@ -213,6 +220,17 @@ namespace Controller.RobotControl.Execution
 
                 default: // Record
                 {
+                    // A whole value: jointsOf(…) (a joints value j1…j4), poseOf(…), or another list's element.
+                    if (fields is not { Count: > 0 } && !string.IsNullOrWhiteSpace(step.ListValueExpr))
+                    {
+                        if (!ctx.Eval.TryEvaluateValue(step.ListValueExpr, out var whole, out _))
+                        {
+                            why = "an Objects list element needs fields, or a whole value ($list[i], jointsOf(…), poseOf(…)), not a single number";
+                            return false;
+                        }
+                        element = whole;
+                        return true;
+                    }
                     if (fields is not { Count: > 0 }) { why = "no fields are set"; return false; }
                     if (!TryEvalFields(fields, ctx, type, out var values, out why)) return false;
                     element = existing != null ? Clone(existing) : new ObjectRecord();

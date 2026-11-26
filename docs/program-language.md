@@ -125,11 +125,11 @@ the id-over-name rule. Fixing that is out of scope here, but it is listed in §4
 | Motion | `MoveL` `MoveJ` | target (below), `speed accel decel`, `blend blendRadius`, `offset*`, `override*`, `toolOffset*`, `localId`, `moveStop*` | Only consecutive `MoveL` steps blend. |
 | | `JumpL` `JumpJ` | the above, plus `jumpZ jumpZStart jumpZEnd` | This is the SPEL `Jump … LimZ` gate move. No arch rounding (SPEL `Arch`). |
 | | `ThreadMove` | `threadDistance threadPitch threadPeck threadPeckDepth threadPeckRetract threadExitHeight threadReverseOut` | |
-| | `RunHoming`; `SetJointPosition` (declares a joint value, no motion); `CncProgram` (`cncSpec`, edited in cnc-builder) | | No joint-target move (RAPID `MoveAbsJ`) and no arc (`MoveC` / `Arc3`). |
+| | `RunHoming`; `SetJointPosition` (declares a joint value, no motion); `CncProgram` (`cncSpec`, edited in cnc-builder) | | No joint-target move (RAPID `MoveAbsJ`) and no arc (`MoveC` / `Arc3`). *(Both added since: `MoveJoints` and `MoveC`, §4.3.)* |
 | Motion settings | `SetSpeedL` `SetSpeedJ` `SetBlendRadius` `SetTool` `SetLocal` `ClearLocal` | | No program speed factor (`VelSet`, SPEL `Power Low`). |
 | Logic & flow | `IfCondition` (if / elseIf[] / else); `Loop` (count with 0 = infinite, forEach, while); `CallRoutine`; `Label`; `GoToLabel`; `PauseProgram` | `ConditionGroup{combinator, items[{expr, join}]}` | No break, continue, return, exit, switch, try or raise. Routines have no parameters. |
 | Variables & timing | `SetVariable` (a numeric expression, or a template for a string variable); `StopwatchControl`; `Wait` (duration, or condition + `waitTimeoutMs` + timed-out flag) | | A timeout can only continue. There are no list operations. |
-| I/O & aux | `SetOutput` (card stb / relay / io, pulse, blocking pulse); `Tare` `ReadLoadCell` `StartRecording` `StopRecording` `ExportData`; `AuxMove` `AuxContinuous` `AuxStop` `AuxEnable` `GripperAction` `ConveyorAction` `RotaryIndex` | | `outputValue` is literal only. No toggle. |
+| I/O & aux | `SetOutput` (card stb / relay / io, pulse, blocking pulse); `Tare` `ReadLoadCell` `StartRecording` `StopRecording` `ExportData`; `AuxMove` `AuxContinuous` `AuxStop` `AuxEnable` `GripperAction` `ConveyorAction` `RotaryIndex` `SiloAction` ([aux-silo.md](aux-silo.md)) | | `outputValue` is literal only. No toggle. |
 | Vision | `RunVision` (`toolOutputs[]`, `outputFrame`); `CaptureImage`; `SaveImage` | | |
 | Background | `StartBackground` `StopBackground` `WaitForBackground` | | |
 | Communication | `HttpRequest` (`jsonOutbound` / `jsonInbound`); `HttpReceive`; `StatusUpdate` | | No operator prompt (RAPID `TPReadFK` / `UIMsgBox`, SPEL `MsgBox` / `Input`). |
@@ -319,7 +319,7 @@ standard and stable.
 | Timers | `TmReset`/`Tmr`, `Time$`, `Date$` | `ClkStart/Stop/Read`, `CDate`, `CTime` | Stopwatch, `$time.*` |
 | Comms | `OpenCom`, `OpenNet`, `Print #`, `Input #`, `ChkNet`, `AOpen`/`ROpen`/`WOpen` | `Open`/`Write`/`ReadStr`, `Socket*` | HttpRequest / HttpReceive, ExportData (CSV/JSON); serial/TCP is plugin territory |
 | Operator | `Print`, `Input`, `MsgBox`, GUI Builder | `TPWrite`, `TPReadNum`, `TPReadFK`, `UIMsgBox`, `UINumEntry` | StatusUpdate (one-way), display pages |
-| Vision / force / conveyor | `VRun`/`VGet`, Force Guide, `Cnv_*` | Integrated Vision, FC, conveyor wobj | RunVision (robot frame), load-cell stop conditions, ConveyorAction (no tracking) |
+| Vision / force / conveyor | `VRun`/`VGet`, Force Guide, `Cnv_*` | Integrated Vision, FC, conveyor wobj | RunVision (robot frame), load-cell stop conditions, ConveyorAction, conveyor tracking (ConveyorTrack … ConveyorEndTracking, §4.3.1) |
 | Comments | `'` | `!` | step `comment` |
 
 **Takeaways for a generic hobby/maker 4-axis arm.** ASTRO is J1 rotary, J2/J3 CoreXY, J4 wrist, with
@@ -345,7 +345,7 @@ Arduino IO and a phone/web editor.
   - typed records and PERS-in-source;
   - group and BCD IO, analog speed outputs;
   - path recorder;
-  - conveyor encoder tracking and multimove;
+  - multimove (conveyor tracking has landed: §4.3.1);
   - preprocessor includes;
   - raw socket and serial in the core language. Plugins are the extension point for those.
 
@@ -400,6 +400,12 @@ handlers that end in a *runtime* error to call `Fail` with a code.
   - `httpFailed`, `httpTimeout`, `receiveTimeout`;
   - `pluginFailed`, `pluginTimeout`, `pluginNotRunning`;
   - `promptTimeout`, `pointNotFound` (a template target that names no point), `arcDegenerate`;
+  - `outOfReach` (a move target, MoveJoints target or `jointsOf()` point the robot cannot reach:
+    no IK solution, or a joint outside its soft limits — checked before the move starts; §4.3;
+    while tracking a conveyor part also when the belt is carrying the robot out of reach);
+  - `conveyorWindow` (the tracked part left the pick window), `conveyorTimeout` (ConveyorTrack
+    waited longer than its timeout), `conveyorSpeed` (the belt runs faster than the robot's linear
+    speed) — conveyor tracking, §4.3.1;
   - `userError`, and any `RaiseError` code.
 - **Fatal codes, never catchable:**
   - motion faults, joint limits, driver disconnects and e-stop;
@@ -414,12 +420,43 @@ Use the Try variables instead.
 
 | Block | Category | Fields | Semantics | App UI |
 |---|---|---|---|---|
-| **SavePosition** (SPEL `P1 = Here`, RAPID `CRobT`) | Motion | `savePositionTo: "variable" \| "point"` (default variable); `variableName` (a Points list); `savePositionMode?: "replace" \| "append" \| "insert" \| "set"` (default replace = a one-element list, as `moveStopPositionVariableName` does); `savePositionIndex?` (*expression*, key `savePositionIndex`); `pointId` / `pointName` (when `to = point`); `savePositionSource?: "actual" \| "target"` (default actual) | Writes the TCP pose. It is expressed in the **active local frame**, so a later move to it under the same local returns to the same place. `to = point` overwrites or creates a saved point through `PointRepository`, so points history records it. Validator: `pointWriteInBackground` (warning). | Point/variable picker + mode. Text: `SavePosition $pts, mode=append` / `SavePosition point Pick1`. |
+| **SavePosition** (SPEL `P1 = Here`, RAPID `CRobT`) | Motion | `savePositionTo: "variable" \| "point"` (default variable); `variableName` (a Points list); `savePositionMode?: "replace" \| "append" \| "insert" \| "set"` (default replace = a one-element list, as `moveStopPositionVariableName` does); `savePositionIndex?` (*expression*, key `savePositionIndex`); `pointId` / `pointName` (when `to = point`); `savePositionSource?: "actual" \| "target" \| "joints"` (default actual; `joints` writes the live joint values `{j1, j2, j3, j4}` into an **Objects** list instead) | Writes the TCP pose. It is expressed in the **active local frame**, so a later move to it under the same local returns to the same place. `to = point` overwrites or creates a saved point through `PointRepository`, so points history records it. Validator: `pointWriteInBackground` (warning). | Point/variable picker + mode. Text: `SavePosition $pts, mode=append` / `SavePosition point Pick1`. |
 | **SetSpeedFactor** (RAPID `VelSet`, SPEL `Power Low`) | Motion settings | `speedFactor` (*expression*, %, 1–100, default 100) | effective = operator override × factor / 100, for this program's moves (blended runs too). Resets to 100 when the program finishes or is reset. Readable as `$program.speedFactor`. A factor cannot exceed the operator's override (safety). | A slider + fx. Text: `SetSpeedFactor 50`. |
 | **MoveC** (RAPID `MoveC`, SPEL `Arc3`) | Motion | end target = the standard target fields; `viaPointId` / `viaPointName` / `viaPointNameExpr` (the same resolution as the target; grid/stack via is P3); `speed accel decel`; `arcTolerance?` (mm, default 0.1); `localId`, `offset*` (applied to both via and end) | Circle through start, via and end, in 3D. Start is the current pose, or the previous waypoint inside a blended run. It is tessellated so the chord error is ≤ `arcTolerance` (maximum 2° per segment), then dispatched with `Motion.StartContinuous(waypoints, radii)` (the existing blended path). RZ is interpolated linearly by arc angle. Collinear points → `Fail("arcDegenerate")`. No stop condition in v1 (validator: `unsupportedOnStep`). | Two target pickers (Via, End). The modal preview card shows the arc in XY. Text: `MoveC P3, via=P2, speed=50`. |
+| **MoveJoints** (RAPID `MoveAbsJ`; text alias `MoveAbsJ`) | Motion | `jointsExpr?` (a joints value: `$home[0]` — an Objects-list element with `j1…j4` — or `jointsOf(…)`); `j1` `j2` `j3` `j4` (*expressions*; a joint left empty keeps its current value); `speed accel decel`; `motionProfile?`; `moveStop*` | Joint-interpolated move to joint values, no IK. Joints follow the controller's joint-limit layout: ASTRO J1 °, J2 radial reach mm, J3 vertical mm, J4 °; CNC4Axis X, Y, Z, RZ (identity kinematics). A joint outside its soft limit → `Fail("outOfReach")` before moving. Queued as the motion command `MoveJoints` (joint vector X/Y/Z/RZ = J1…J4); the target pose shown as `$robot.target*` is its FK. Background: skipped. | Joints value picker (Objects lists) + four joint fields with fx, and a "Use current joints" button. Text: `MoveJoints j1=90, j2=250, j3=120, j4=0` / `MoveJoints $home[0], j4=45`. |
+| **Motion profile** | Motion | `motionProfile?: "trapezoid" \| "scurve"` on MoveL, MoveJ, JumpL, JumpJ, MoveJoints; robot config `motionProfile` (default `trapezoid`), `scurveSmoothness` (1–100 %, default 50), `scurveJerk?` | Empty = the config's. The S-curve is a jerk-limited profile (acceleration ramps, never steps); setpoints only — the STB loops are untouched. Homing and jogging always use the trapezoid. | A segmented control in the step's Dynamics group; robot config "Motion profile". Text: `profile=scurve`. |
+| **Reach check** (SPEL `TargetOK`, RAPID ERR_ROBLIMIT / ERR_OUTSIDE_REACH) | — | — | Every move checks before dispatch with the real IK and the enforced joint windows: MoveL its end and its line (sampled every ~5 mm, unless the start is already out of range), MoveJ its end, a Jump its lift point, the point above the target and the target, a blended run every corner, MoveC every arc point, MoveJoints its joints. Unreachable → `Fail("outOfReach")` (catchable). A mid-move crossing stays the fatal `jointLimit` fault. | — |
+| **Conveyor tracking** | I/O & aux | see §4.3.1 | `ConveyorTrack`, `ConveyorEndTracking`, `ConveyorAddPart`, `ConveyorClearQueue`. | — |
 | **ListOp** | Variables & timing | `variableName` (list); `listAction: "append" \| "insert" \| "removeAt" \| "clear" \| "set" \| "setField" \| "sort" \| "reverse" \| "copyFrom"`; `listIndex?` (*expression*, key `listIndex`); `listValueExpr?` (expression, for a Number / Boolean element); `listFields?: {field: expr}` (Point / Record element, or the one field for `setField`); `listSourceVariable?` (copyFrom); `listSortField?`; `listSortDescending?: bool` | Mutates the list in the variable scope. An out-of-range index → `Fail("indexOutOfRange")`, catchable. `append` with no fields on a Point list appends the current TCP pose ("append Here"). Globals: the global list is updated. | A segment for the action, then fields shown with `showIf` (catalog-driven, no bespoke JSX). Text: method-call statements (§6.6). |
 | **Prompt** (RAPID `TPReadFK` / `UIMsgBox` / `TPReadNum`, SPEL `MsgBox` / `Input`) | Communication | `promptTitle?` (template); `promptMessage` (template, required); `promptButtons?: string[]` (1–4, default `["OK"]`); `promptInput?: "none" \| "number" \| "text"`; `promptDefault?` (expression or template); `promptMin?` / `promptMax?` (number); `promptResultVariableName?` (number = button index from 0, or a string variable = button label); `promptInputVariableName?`; `promptTimeoutMs?` (0 = wait forever); `promptTimeoutButton?` (index chosen on timeout; null → `Fail("promptTimeout")`) | The step publishes `prompt {id, stepId, programName, title, message, buttons, input, default, min, max, timeoutMs}` in the program status (package A adds the DTO) and yields. **`AnswerPrompt {promptId, button, value?}`** completes it; the first answer wins and later ones get `stalePrompt`. Stop cancels the prompt, and Continue re-shows it. Background programs can prompt too: prompts are queued per program. | `PromptDialog` mounted app-wide (package G). Text: `prompt "Load the tray", buttons=("Go", "Skip"), result=$choice`. |
 | **Expression functions** | — | `inBox(x, y, z, x1, y1, z1, x2, y2, z2)` → 1/0; `inCircle(x, y, cx, cy, r)` → 1/0. String helpers that return **numbers**: `$s.length`, `$s.indexOf("x")` (−1 if absent), `$s.toNumber()` (NaN → evaluates to 0 and sets nothing; see open question 6). | Added to `ExpressionEvaluator.Functions` / `StringMethodNode`; `GetExpressionSymbols` lists them. | appear in the helper panel automatically |
+| **Reach functions** (SPEL `TargetOK`, RAPID `CalcJointT` / `CalcRobT`) | — | `reachable(point[, tool][, local])` → 1/0; `jointsOf(point[, tool][, local])` → a joints value, read as `.j1…j4`; `poseOf(joints[, tool][, local])` → a pose, read as `.x…rz` | The controller's real IK, FK and enforced joint windows (`ExpressionEvaluator.Reach.cs`, `Reachability`). `jointsOf` of an unreachable point → `outOfReach` (catchable). Details: [expressions-and-variables.md](expressions-and-variables.md) §2. | appear in the helper panel automatically |
+
+### 4.3.1 Conveyor tracking blocks
+
+The contract (travel sources, sensor latching, motion integration, calibration) is
+[conveyor-tracking.md](conveyor-tracking.md). `conveyorId` links a configured conveyor by its stable
+id (field kind `conveyorRef`; the text writes the conveyor's name).
+
+| Block (RAPID `WaitWObj`/`DropWObj`, SPEL `Cnv_*`) | Category | Fields | Semantics | Text |
+|---|---|---|---|---|
+| **ConveyorTrack** | I/O & aux | `conveyorId` (required); `trackWait?: bool` (default true); `trackTimeoutMs?` (null/0 = forever) | Picks the oldest queued part inside the window (not released) and starts tracking it. With `trackWait` it waits for one; past the timeout → `Fail("conveyorTimeout")`. Without `trackWait` and no part in the window it carries on untracked (`$conveyor.<id>.tracking` reads 0). A belt faster than the robot's linear speed (Set Speed (Linear)) → `Fail("conveyorSpeed")`. Starting a new track ends the previous one (counted picked). Background: skipped. | `ConveyorTrack Infeed, timeout=5s` / `ConveyorTrack Infeed, wait=off` |
+| **ConveyorEndTracking** | I/O & aux | `conveyorId?` (empty = the tracked one); `conveyorRelease?: bool` | Stops tracking: the robot stays where it is and later moves are normal. The part counts as `picked` and leaves the queue — or with `conveyorRelease` stays on the belt, uncounted, never tracked again. Nothing tracked = no-op. Background: skipped. | `ConveyorEndTracking` / `ConveyorEndTracking release=on` |
+| **ConveyorAddPart** | I/O & aux | `conveyorId` (required); `partOffsetMm` (*expression*, mm) | Queues a part at conveyor X = `partOffsetMm` now — a software trigger, e.g. from a vision result. | `ConveyorAddPart Infeed, x=($hit[0].x)` |
+| **ConveyorClearQueue** | I/O & aux | `conveyorId` (required) | Drops every queued part (a tracked one stops being tracked). | `ConveyorClearQueue Infeed` |
+
+**While tracking**, MoveL / MoveJ / Jump / ThreadMove targets resolve in the **part frame** (the
+conveyor frame shifted along its X to the part) instead of the program's active local — a taught
+point is "where on the part". A step-level `localId` still wins. Each move is dispatched on its own
+(blending is off while tracking). The motion thread adds the belt's travel since the target was
+resolved: a MoveL that starts untracked blends the offset in over the move, one that starts on the
+part is synchronised from its first tick; a MoveJ aims at the predicted intercept and the next MoveL
+synchronises. Between moves the robot **holds on the part**, so waits and gripper steps happen while
+following. The pre-move reach check also checks the end where the belt will have carried it, and the
+motion thread re-checks the followed pose (with a short look-ahead) every 20 ms — unreachable →
+`outOfReach`, the part left the window → `conveyorWindow`; both stop tracking (the robot freezes)
+and are raised for the step running at that moment. A Stop halts the robot dead; Continue resumes
+the interrupted move, which blends back onto the part. The run ending always ends its tracking.
 
 ### 4.4 P2 — after P1
 
@@ -707,6 +744,10 @@ MoveL Pick1, until=$io.Nano.Load >= 2000, untilMode=record, untilPos=$hitPts, un
 JumpL Place1, z=50                         # jumpZ;  zStart=40, zEnd=60 for jumpZStart / jumpZEnd
 JumpJ grid Tray[$r, $c], z=$safeZ
 MoveC P3, via=P2, speed=50, tolerance=0.1
+MoveJoints j1=90, j2=250, j3=120, j4=0, speed=50   # joint values; an empty joint keeps its current value
+MoveJoints $home[0], j4=45, profile=scurve # a joints value ($list[i] with j1…j4) + overrides
+MoveAbsJ (jointsOf($pts[0]))               # alias; a positional value that is not a $var goes in ( )
+MoveL Pick1, profile=scurve                # motionProfile: trapezoid | scurve (empty = robot config)
 ThreadMove distance=10, pitch=0.5, peck=on, peckDepth=2, peckRetract=1, exitHeight=5, reverseOut=on
 RunHoming
 SetJointPosition J3, 90                    # jointIndex 2; value may be an expression: SetJointPosition J1, ($enc * 0.1)
@@ -718,7 +759,8 @@ SetSpeedFactor 50
 SetTool Gripper
 SetLocal Fixture1
 ClearLocal
-SavePosition $pts, mode=append            # mode=replace|append|insert|set, index=…, source=actual|target
+SavePosition $pts, mode=append            # mode=replace|append|insert|set, index=…, source=actual|target|joints
+SavePosition $home, source=joints          # joint values {j1…j4} into an Objects list
 SavePosition point Pick1
 ```
 
@@ -731,6 +773,8 @@ SavePosition point Pick1
 | `toolOffset=(…)` | `toolOffsetX…toolOffsetRZ` |
 | `local` | `localId` + `localName` |
 | `until` / `untilMode` / `untilPos` / `untilFlag` | `moveStopCondition` / `moveStopMode` / `moveStopPositionVariableName` / `moveStopFlagVariableName` |
+| `profile` | `motionProfile` (MoveL, MoveJ, JumpL, JumpJ, MoveJoints) |
+| `j1` `j2` `j3` `j4`; positional value (MoveJoints) | `j1…j4` (+ `expressions.j1…j4`); `jointsExpr` |
 
 **I/O, load cell, aux**
 

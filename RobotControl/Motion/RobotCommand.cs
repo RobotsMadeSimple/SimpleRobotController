@@ -37,6 +37,26 @@ public class RobotCommand
     public double? TRZ { get; set; }
 
 
+    /// <summary>
+    /// A MoveL / MoveJ to a grid cell: the grid's stable id plus zero-based <see cref="Row"/> /
+    /// <see cref="Col"/>. Resolved when the command arrives (MoveTargetResolver.GridCell + the active
+    /// local), reach-checked, and queued as the resolved x…rz — it takes precedence over
+    /// <see cref="Name"/> and x…rz (a client may send those too, as the target an older controller uses).
+    /// </summary>
+    [JsonPropertyName("grid")]
+    public string? Grid { get; set; }
+    [JsonPropertyName("row")]
+    public int? Row { get; set; }
+    [JsonPropertyName("col")]
+    public int? Col { get; set; }
+
+    /// <summary>A MoveL / MoveJ to a stack slot: the stack's stable id plus zero-based <see cref="Index"/>
+    /// (see <see cref="Grid"/>).</summary>
+    [JsonPropertyName("stack")]
+    public string? Stack { get; set; }
+    [JsonPropertyName("index")]
+    public int? Index { get; set; }
+
     public double? Speed { get; set; }
     public double? Accel { get; set; }
     public double? Decel { get; set; }
@@ -58,6 +78,22 @@ public class RobotCommand
     /// </summary>
     [JsonIgnore]
     public double SpeedFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// A program move's own speed profile ("trapezoid" | "scurve"); null = the robot config's
+    /// <c>motionProfile</c>. Set by the program executor from the step's <c>motionProfile</c>.
+    /// </summary>
+    [JsonIgnore]
+    public string? Profile { get; set; }
+
+    /// <summary>
+    /// Conveyor tracking (docs/conveyor-tracking.md): the belt travel (mm) at which this move's
+    /// target was resolved in the tracked part's frame. Set → the motion thread adds the belt's
+    /// travel since then to the target every tick (MoveL) or aims at the predicted intercept
+    /// (MoveJ). Null = an ordinary move. Stamped by the program's motion dispatcher; JsonIgnore-d.
+    /// </summary>
+    [JsonIgnore]
+    public double? TrackTravel { get; set; }
 
     /// <summary>
     /// Optional status update attached to this command.

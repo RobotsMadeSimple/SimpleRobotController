@@ -12,9 +12,11 @@
 
 const MOTION_FATAL = [
   ["motionFault", "The motion system reports a fault (fatal)."],
-  ["jointLimit", "The target is outside a joint's soft limits (fatal)."],
+  ["jointLimit", "A joint crosses its soft limit while the robot moves (fatal)."],
   ["driverDisconnected", "The motor driver is not connected (fatal)."],
 ];
+// Checked before every move starts (catchable) — the move does not start.
+const REACH = ["outOfReach", "The target cannot be reached — no inverse kinematics solution, or a joint would be outside its soft limits. Checked before the robot moves; catchable."];
 const EXPR = [
   ["unknownVariable", "An expression names a variable that does not exist (fatal)."],
   ["expressionSyntax", "An expression does not parse (fatal)."],
@@ -39,7 +41,7 @@ export default {
       "A Move Linear with a stop condition never blends.",
       ...TARGET_NOTES, ...STOP_NOTES,
     ],
-    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point, or the Points list is empty."], ...MOTION_FATAL, ...EXPR],
+    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point, or the Points list is empty."], REACH, ...MOTION_FATAL, ...EXPR],
     example: `MoveL Approach, speed=150
 MoveL Pick1, offset=(z=20), blend=5
 MoveL Pick1`,
@@ -52,7 +54,7 @@ MoveL Pick1`,
       "Move Joint does not blend.",
       ...TARGET_NOTES, ...STOP_NOTES,
     ],
-    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point."], ...MOTION_FATAL, ...EXPR],
+    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point."], REACH, ...MOTION_FATAL, ...EXPR],
     example: `MoveJ Home
 MoveJ Pick1, speed=50, accel=100, decel=100`,
     seeAlso: ["MoveL", "JumpJ", "SetSpeedJ"],
@@ -65,7 +67,7 @@ MoveJ Pick1, speed=50, accel=100, decel=100`,
       "With a stop condition the jump takes the stepped (non-blended) path and the watch spans all three legs; in stop mode the remaining legs are skipped.",
       ...TARGET_NOTES.slice(0, 3), TARGET_NOTES[3],
     ],
-    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point."], ...MOTION_FATAL, ...EXPR],
+    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point."], REACH, ...MOTION_FATAL, ...EXPR],
     example: `JumpL Place1, z=60
 JumpL grid Tray[2, 1], z=40, zEnd=50`,
     seeAlso: ["JumpJ", "MoveL", "GripperAction"],
@@ -76,7 +78,7 @@ JumpL grid Tray[2, 1], z=40, zEnd=50`,
       "Like Jump Linear, but each leg is a joint-interpolated move — faster, with a curved path between the lift and lower points.",
       ...TARGET_NOTES.slice(0, 3), TARGET_NOTES[3],
     ],
-    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point."], ...MOTION_FATAL, ...EXPR],
+    errors: [["pointNotFound", "A template or `$list[i]` target names no saved point."], REACH, ...MOTION_FATAL, ...EXPR],
     example: `JumpJ stack Bins[0], z=50
 JumpJ Pick1, z=50, speed=80`,
     seeAlso: ["JumpL", "MoveJ"],
@@ -90,12 +92,28 @@ JumpJ Pick1, z=50, speed=80`,
       "`offset=`, `set=` and `local=` apply to both the via and the end. Stop conditions are not supported; tool offset and blending are ignored.",
       "Not run in background programs.",
     ],
-    errors: [["arcDegenerate", "Start, via and end are on one line, or two of them are the same."], ["pointNotFound", "The via or end names no saved point."], ...MOTION_FATAL],
+    errors: [["arcDegenerate", "Start, via and end are on one line, or two of them are the same."], ["pointNotFound", "The via or end names no saved point."], REACH, ...MOTION_FATAL],
     example: `MoveL Pick1
 MoveC Place1, via=Via1, speed=80, tolerance=0.1`,
     seeAlso: ["MoveL", "SetSpeedL"],
   },
-  ThreadMove: {
+  MoveJoints: {
+    chapter: "motion",
+    notes: [
+      "Moves straight to joint values by joint interpolation — no Cartesian target and no inverse kinematics (RAPID `MoveAbsJ`; the text also accepts `MoveAbsJ`).",
+      "Joints follow the robot's joint-limit layout: ASTRO `j1` base rotation (°), `j2` radial reach (mm), `j3` vertical (mm), `j4` tool rotation (°); a CNC's X, Y, Z and RZ.",
+      "The positional value is a joints value: an element of an Objects list with fields `j1 j2 j3 j4` (`$home[0]`, made by Save Position with `source=joints`) or `jointsOf(…)` in parentheses. `j1=` … `j4=` set single joints on top of it; a joint left empty keeps its current value.",
+      "`profile=` picks this move's speed profile (`trapezoid` or `scurve`); empty = the robot's Motion profile setting.",
+      ...STOP_NOTES,
+      "Not run in background programs.",
+    ],
+    errors: [["outOfReach", "A joint value is outside its soft limit (checked before the robot moves; catchable)."], ...MOTION_FATAL, ...EXPR],
+    example: `var home: list record
+SavePosition $home, source=joints
+MoveJoints j1=90, j2=250, j3=120, j4=0, speed=50
+MoveJoints $home[0], j4=45, profile=scurve`,
+    seeAlso: ["MoveJ", "SavePosition", "SetSpeedJ"],
+  },  ThreadMove: {
     chapter: "motion",
     notes: [
       "Moves the tool `distance=` along Z while turning RZ by one revolution per `pitch=` mm — screwing in or tapping.",
@@ -140,6 +158,7 @@ end`,
       "Into a Points list: `mode=replace` (the list becomes exactly this pose), `append`, `insert` or `set` (at `index=`). A list that does not exist is created.",
       "`SavePosition point <name>` overwrites a saved point (or creates it); the change is recorded in the points history.",
       "`source=target` stores the last commanded target instead of the measured position.",
+      "`source=joints` stores the joint values instead, as one element `{j1, j2, j3, j4}` of an Objects list — what Move to Joints and `poseOf()` read. Joint values cannot go into a saved point.",
     ],
     errors: [["indexOutOfRange", "`index=` is outside the list (catchable)."], ["badListOperation", "The variable is not a Points list (fatal)."], ["pointNotFound", "A point linked by id no longer exists."]],
     example: `var taught: list point
@@ -553,7 +572,25 @@ ConveyorAction stop, device=Aux_Stepper, axis=2`,
     notes: ["Turns a rotary-role aux axis by `count` positions in the given direction (+1 or −1)."],
     errors: [],
     example: `RotaryIndex +1, count=3, device=Aux_Stepper, axis=3`,
-    seeAlso: ["ConveyorAction"],
+    seeAlso: ["ConveyorAction", "SiloAction"],
+  },
+  SiloAction: {
+    chapter: "io",
+    notes: [
+      "Drives a silo-role aux axis: a tube of identical flat parts on a platform the axis lifts. The robot always picks the top part at the rim.",
+      "`home` drives the platform down past its full travel into the bottom stop, then zeroes the axis. `present` lifts the top part level with the rim and counts it as taken. `refill` sets the count to the capacity and homes. `setcount, count=…` sets the count without moving.",
+      "Read the state with `$aux.<device>.<axis>.siloCount` and `$aux.<device>.<axis>.siloHomed`. Any other move or zero of the axis clears the homed flag.",
+    ],
+    errors: [
+      ["siloNotHomed", "Present on a silo that has not been homed since it last moved or reconnected (catchable)."],
+      ["siloEmpty", "Present on a silo with no parts left (catchable)."],
+      ["siloConfig", "The axis is not a silo with a linear unit, a capacity and a part height (fatal)."],
+      ...EXPR,
+    ],
+    example: `SiloAction home, device=Aux_Stepper, axis=1
+SiloAction present, device=Aux_Stepper, axis=1
+SiloAction setcount, count=12, device=Aux_Stepper, axis=1`,
+    seeAlso: ["AuxMove", "RotaryIndex"],
   },
 
   // ── Vision ──────────────────────────────────────────────────────────────

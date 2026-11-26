@@ -122,6 +122,9 @@ internal sealed class IoCommands
             "Unconfigured" => PinType.Unconfigured,
             _              => PinType.Input,
         };
+        // "Latch" = an aux-stepper Input whose edges carry exact step counts (conveyor part sensor).
+        // It stays an Input in the IO state; Nano boards have no such mode.
+        bool latch = p.Type == "Latch";
         // Route by id: Nano edge device, else aux-stepper spare-pin IO (Input/Output only).
         // Returns false when the device isn't live — surface that instead of ACKing a no-op.
         // Removing a pin (Unconfigured) needs nothing from the firmware, so it is never gated.
@@ -129,6 +132,8 @@ internal sealed class IoCommands
         bool ok;
         if (nano != null)
         {
+            if (latch)
+                throw new InvalidOperationException("Latch inputs are only available on an aux stepper board — use Input on a Nano.");
             if (type == PinType.Neopixel)
                 nano.RequireCapability(FirmwareInfo.CapNeopixel, FeatureNeopixel);
             else if (type != PinType.Unconfigured)
@@ -139,7 +144,9 @@ internal sealed class IoCommands
         {
             if (type != PinType.Unconfigured)
                 _robot.AuxAxisManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
-            ok = _robot.AuxAxisManager.SetIoPinType(p.DeviceId, p.Pin, type);
+            if (latch)
+                _robot.AuxAxisManager.GetDevice(p.DeviceId)?.RequireCapability(FirmwareInfo.CapLatch, "Latch inputs");
+            ok = _robot.AuxAxisManager.SetIoPinType(p.DeviceId, p.Pin, type, latch);
         }
         if (!ok)
             throw new InvalidOperationException(

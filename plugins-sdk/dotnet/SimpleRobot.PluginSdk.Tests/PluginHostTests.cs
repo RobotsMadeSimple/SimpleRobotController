@@ -329,6 +329,50 @@ public class PluginHostTests
     }
 
     [Fact]
+    public async Task Robot_helpers_wrap_controller_commands()
+    {
+        IPluginContext? ctx = null;
+        await using var h = await Harness.StartAsync(p => p.OnReady(x => { ctx = x; return Task.CompletedTask; }));
+        var c = await h.ConnectedAsync();
+        await Task.Delay(50);
+        Assert.NotNull(ctx);
+
+        Task<JsonElement> Command(string cmd) => c.WaitForAsync(f =>
+            f.TryGetProperty("method", out var m) && m.GetString() == "controller.command"
+            && f.GetProperty("params").GetProperty("command").GetString() == cmd);
+
+        // motion: one controller.command carrying the pose (+ optional speed)
+        await ctx!.Robot.MoveL(1, 2, 3, rz: 90, speed: 100);
+        var move = await Command("MoveL");
+        var mp = move.GetProperty("params").GetProperty("params");
+        Assert.Equal(1.0, mp.GetProperty("x").GetDouble());
+        Assert.Equal(90.0, mp.GetProperty("rz").GetDouble());
+        Assert.Equal(100.0, mp.GetProperty("speed").GetDouble());
+
+        await ctx.Robot.Home();
+        await Command("Home");
+        await ctx.Robot.Stop();
+        await Command("StopJog");
+
+        await ctx.Robot.TeachPoint("P2");
+        var teach = await Command("TeachPoint");
+        Assert.Equal("P2", teach.GetProperty("params").GetProperty("params").GetProperty("name").GetString());
+
+        // GetPoints parses the JSON-string list the controller returns
+        var pts = await ctx.Robot.GetPoints();
+        Assert.Equal(JsonValueKind.Array, pts.ValueKind);
+        Assert.Equal("P1", pts[0].GetProperty("name").GetString());
+
+        // Position / IsMoving read GetStatus
+        var pose = await ctx.Robot.Position();
+        Assert.Equal(10.0, pose.X);
+        Assert.Equal(90.0, pose.RZ);
+        Assert.True(await ctx.Robot.IsMoving());
+
+        await h.ShutdownAsync(c);
+    }
+
+    [Fact]
     public async Task Background_runs_while_connected_and_is_cancelled_on_shutdown()
     {
         var started = new TaskCompletionSource();

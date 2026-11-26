@@ -559,8 +559,9 @@ namespace Controller.RobotControl.Camera.WebRtc
 
         private void StartReader()
         {
-            // OpenCV/FFmpeg loopback decoder: no external ffmpeg binary, reuses the bundled plugin.
-            _decoder = new LoopbackEsDecoder(_tag, NetworkCameraSource.DefaultReadTimeoutMs);
+            // OpenCV/FFmpeg in-process decoder: no external ffmpeg binary, reuses the bundled plugin.
+            // Transport is per-OS (loopback TCP on Windows, FIFO on Linux) — see SofiaDecoder.CreateOpenCv.
+            _decoder = SofiaDecoder.CreateOpenCv(_tag, NetworkCameraSource.DefaultReadTimeoutMs);
             _feeder  = new Thread(FeederLoop) { IsBackground = true, Name = $"WebRtcFeed-{_tag}" };
             _feeder.Start();
             _reader  = new Thread(ReaderLoop) { IsBackground = true, Name = $"WebRtc-{_tag}" };

@@ -11,7 +11,14 @@ namespace Controller.RobotControl;
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum StepType { MoveL, MoveJ, JumpL, JumpJ, SetOutput, Wait, Loop, StatusUpdate, CallRoutine, SetSpeedL, SetSpeedJ, SetVariable, PauseProgram, Label, GoToLabel, IfCondition, SetTool, RunHoming, SetJointPosition, AuxMove, AuxContinuous, AuxStop, AuxEnable, GripperAction, ConveyorAction, RotaryIndex, RunVision, SetLocal, ClearLocal, StartBackground, StopBackground, WaitForBackground, StopwatchControl, SaveImage, ThreadMove, CncProgram, SetBlendRadius, HttpRequest, CaptureImage, HttpReceive, Plugin, Tare, ReadLoadCell, StartRecording, StopRecording, ExportData, Unknown,
     // Program editor v2 (docs/program-language.md §4). Appended after Unknown so existing ordinals stay put.
-    Note, LoopControl, Return, EndProgram, RaiseError, Switch, Try, SavePosition, SetSpeedFactor, ListOp, Prompt, MoveC }
+    Note, LoopControl, Return, EndProgram, RaiseError, Switch, Try, SavePosition, SetSpeedFactor, ListOp, Prompt, MoveC,
+    MoveJoints,
+    // Conveyor tracking (docs/conveyor-tracking.md).
+    ConveyorTrack, ConveyorEndTracking, ConveyorAddPart, ConveyorClearQueue,
+    // Silo-role aux axis (docs/aux-silo.md).
+    SiloAction,
+    // Generic serial device — send a named/raw command, optionally wait for a reply (serial-device contract §4).
+    SerialCommand }
 
 /// <summary>6-DOF value stored in a Points-type program variable or written by RunVision.</summary>
 public class Vector6Val
@@ -417,6 +424,22 @@ public class ProgramStep
     [JsonPropertyName("gripTargetMm")]   public double? GripTargetMm   { get; set; }
     // ConveyorAction: "RunForward" | "RunReverse" | "Stop" (continuous; a later Stop ends a run).
     [JsonPropertyName("conveyorAction")] public string? ConveyorAction { get; set; }
+    // SiloAction (docs/aux-silo.md): "Home" | "Present" | "Refill" | "SetCount". siloCount is the
+    // part count for SetCount only (expression key siloCount; clamped to 0…capacity).
+    [JsonPropertyName("siloAction")]     public string? SiloAction     { get; set; }
+    [JsonPropertyName("siloCount")]      public int?    SiloCount      { get; set; }
+
+    // Conveyor tracking (docs/conveyor-tracking.md) — ConveyorTrack / ConveyorEndTracking /
+    // ConveyorAddPart / ConveyorClearQueue. conveyorId links the conveyor by its stable id
+    // (ConveyorEndTracking: empty = the one being tracked). trackWait (default true) waits for a
+    // part to enter the window, up to trackTimeoutMs (null/0 = forever; then fails conveyorTimeout).
+    // partOffsetMm: the part's X in the conveyor frame now (expression key partOffsetMm).
+    // conveyorRelease: EndTracking leaves the part on the belt (released) instead of counting it picked.
+    [JsonPropertyName("conveyorId")]      public string? ConveyorId      { get; set; }
+    [JsonPropertyName("trackWait")]       public bool?   TrackWait       { get; set; }
+    [JsonPropertyName("trackTimeoutMs")]  public int?    TrackTimeoutMs  { get; set; }
+    [JsonPropertyName("partOffsetMm")]    public double? PartOffsetMm    { get; set; }
+    [JsonPropertyName("conveyorRelease")] public bool?   ConveyorRelease { get; set; }
     // RotaryIndex: direction +1 / -1, and how many index increments to advance.
     [JsonPropertyName("rotaryDirection")] public int? RotaryDirection { get; set; }
     [JsonPropertyName("rotaryCount")]     public int? RotaryCount     { get; set; }
@@ -536,6 +559,20 @@ public class ProgramStep
     [JsonPropertyName("viaPointNameExpr")] public string? ViaPointNameExpr { get; set; }
     [JsonPropertyName("arcTolerance")]     public double? ArcTolerance     { get; set; }
 
+    // MoveJoints (alias MoveAbsJ) — a joint target. JointsExpr is an expression giving a joints value
+    // (an Objects-list element with fields j1…j4, e.g. "$home[0]", or "jointsOf($pts[0])"); J1…J4
+    // (each also an expression under expressions.j1…j4) set single joints on top of it. A joint left
+    // empty keeps its current value. ASTRO: J1 °, J2 radial mm, J3 vertical mm, J4 °; CNC: X, Y, Z, RZ.
+    [JsonPropertyName("jointsExpr")] public string? JointsExpr { get; set; }
+    [JsonPropertyName("j1")]         public double? J1         { get; set; }
+    [JsonPropertyName("j2")]         public double? J2         { get; set; }
+    [JsonPropertyName("j3")]         public double? J3         { get; set; }
+    [JsonPropertyName("j4")]         public double? J4         { get; set; }
+
+    // MoveL / MoveJ / MoveJoints / JumpL / JumpJ — this move's speed profile: "trapezoid" | "scurve".
+    // Null = the robot config's motionProfile.
+    [JsonPropertyName("motionProfile")] public string? MotionProfile { get; set; }
+
     // ListOp — mutates the list in VariableName. listAction: append | insert | removeAt | clear | set |
     // setField | sort | reverse | copyFrom. listIndex may be an expression (expressions.listIndex).
     [JsonPropertyName("listAction")]         public string?                     ListAction         { get; set; }
@@ -560,6 +597,19 @@ public class ProgramStep
     [JsonPropertyName("promptInputVariableName")]  public string?       PromptInputVariableName  { get; set; }
     [JsonPropertyName("promptTimeoutMs")]          public int?          PromptTimeoutMs          { get; set; }
     [JsonPropertyName("promptTimeoutButton")]      public int?          PromptTimeoutButton      { get; set; }
+
+    // SerialCommand (serial-device contract §4) — send to a generic serial device.
+    // serialDeviceId is the stable DeviceRef; serialDeviceName a display cache. Use a saved
+    // command (serialCommandId) OR raw serialText (supports {{expr}} interpolation). When
+    // serialExpectReply, the first reply line is stored into serialResultVariable; serialTimeoutMs
+    // bounds the wait (default 1000).
+    [JsonPropertyName("serialDeviceId")]     public string? SerialDeviceId     { get; set; }
+    [JsonPropertyName("serialDeviceName")]   public string? SerialDeviceName   { get; set; }
+    [JsonPropertyName("serialCommandId")]    public string? SerialCommandId    { get; set; }
+    [JsonPropertyName("serialText")]         public string? SerialText         { get; set; }
+    [JsonPropertyName("serialExpectReply")]  public bool?   SerialExpectReply  { get; set; }
+    [JsonPropertyName("serialResultVariable")] public string? SerialResultVariable { get; set; }
+    [JsonPropertyName("serialTimeoutMs")]    public int?    SerialTimeoutMs    { get; set; }
 
     // Unknown — placeholder for steps whose type string could not be parsed
     [JsonPropertyName("unknownStepType")]

@@ -36,6 +36,8 @@ namespace Controller.RobotControl.Validation
         public const string UnknownLocal         = "unknownLocal";
         public const string UnknownRoutine       = "unknownRoutine";
         public const string UnknownVisionProgram = "unknownVisionProgram";
+        /// <summary>A conveyor step names a conveyor id that is not configured.</summary>
+        public const string UnknownConveyor      = "unknownConveyor";
         /// <summary>A RunVision toolOutputs entry names a tool its vision program does not have.</summary>
         public const string UnknownVisionTool    = "unknownVisionTool";
         public const string UnknownGrid          = "unknownGrid";
@@ -153,6 +155,8 @@ namespace Controller.RobotControl.Validation
         public Func<string, (string BasePointName, bool HasSpacing)?>? StackBase { get; init; }
         /// <summary>By vision program id.</summary>
         public Func<string, bool>? VisionProgramExists { get; init; }
+        /// <summary>By conveyor id (conveyor steps).</summary>
+        public Func<string, bool>? ConveyorExists      { get; init; }
         /// <summary>The tool ids of a vision program (null when unknown); checks RunVision toolOutputs.</summary>
         public Func<string, IReadOnlyCollection<string>?>? VisionToolIds { get; init; }
         /// <summary>A vision program's camera and whether it has a camera-to-robot calibration; null for an unknown program.</summary>
@@ -242,6 +246,24 @@ namespace Controller.RobotControl.Validation
             }
 
             private static string Key(BuiltProgram p) => !string.IsNullOrEmpty(p.Id) ? "id:" + p.Id : "name:" + p.Name;
+
+            /// <summary>
+            /// A point reference is known if the context resolves it (the global library) OR the
+            /// program currently being walked (the routine on top of the call stack, else the main
+            /// program) carries it as its own point — mirroring the executor's program-first composite
+            /// point source. Offline (no predicate) means names are not checked, so everything is known.
+            /// </summary>
+            private bool PointKnown(string? id, string? name)
+            {
+                if (_ctx.PointExists == null) return true;
+                if (_ctx.PointExists(id, name)) return true;
+                var owner = _callStack.Count > 0 ? _callStack[^1] : _main;
+                var pts = owner.Points;
+                if (pts == null) return false;
+                if (!string.IsNullOrEmpty(id)   && pts.Any(p => p.Id == id)) return true;
+                if (!string.IsNullOrEmpty(name) && pts.Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))) return true;
+                return false;
+            }
 
             // ── Entry ─────────────────────────────────────────────────────────
 
@@ -377,7 +399,11 @@ namespace Controller.RobotControl.Validation
                         if (s.PromptInput is "number" or "text") Implicit(s.PromptInputVariableName, SymKind.Number);
                         break;
                     case StepType.SavePosition when s.SavePositionTo != "point":
-                        Implicit(s.VariableName, SymKind.List, ListElementType.Point); break;
+                        Implicit(s.VariableName, SymKind.List,
+                            s.SavePositionSource == SavePositionStep.JointsSource ? ListElementType.Record : ListElementType.Point);
+                        break;
+                    case StepType.MoveJoints:
+                        Implicit(s.MoveStopFlagVariableName, SymKind.Boolean); break;
                 }
                 if (s.Type == StepType.RunVision)
                 {
@@ -732,6 +758,13 @@ namespace Controller.RobotControl.Validation
                             _ctx.LocalExists != null && !_ctx.LocalExists(s.LocalId, s.LocalName))
                             Add(at, ValidationCodes.UnknownLocal, $"Local '{s.LocalName ?? s.LocalId}' does not exist", "localName");
                         CheckMoveStop(s, at, aux: false);
+                        CheckMotionProfile(s, at);
+                        break;
+
+                    case StepType.MoveJoints:
+                        CheckMoveJoints(s, at);
+                        CheckMoveStop(s, at, aux: false);
+                        CheckMotionProfile(s, at);
                         break;
 
                     case StepType.AuxMove:
@@ -1133,7 +1166,7 @@ namespace Controller.RobotControl.Validation
                 if (info is not { } b) return;
                 if (string.IsNullOrWhiteSpace(b.BasePointName))
                     Add(at, ValidationCodes.MissingField, $"{kind} '{id}' has no base point", field);
-                else if (_ctx.PointExists != null && !_ctx.PointExists(null, b.BasePointName))
+                else if (!PointKnown(null, b.BasePointName))
                     Add(at, ValidationCodes.UnknownPoint, $"{kind} '{id}' base point '{b.BasePointName}' does not exist", field);
                 if (!b.HasSpacing)
                     Add(at, ValidationCodes.UntaughtGrid,
@@ -1176,12 +1209,12 @@ namespace Controller.RobotControl.Validation
                     }
                     else if (expr.Contains('$') || expr.Contains('{'))
                         CheckTemplate(expr, at, "pointNameExpr", ValidationSeverity.Error);
-                    else if (_ctx.PointExists != null && !_ctx.PointExists(null, expr.Trim()))
+                    else if (!PointKnown(null, expr.Trim()))
                         Add(at, ValidationCodes.UnknownPoint, $"Point '{expr.Trim()}' does not exist", "pointNameExpr");
                 }
                 else if (!string.IsNullOrEmpty(s.PointId) || !string.IsNullOrEmpty(s.PointName))
                 {
-                    if (_ctx.PointExists != null && !_ctx.PointExists(s.PointId, s.PointName))
+                    if (!PointKnown(s.PointId, s.PointName))
                         Add(at, ValidationCodes.UnknownPoint, $"Point '{s.PointName ?? s.PointId}' does not exist", "pointName");
                 }
             }
@@ -1359,7 +1392,7 @@ namespace Controller.RobotControl.Validation
                 }
                 else if (t.Contains('$') || t.Contains('{'))
                     CheckTemplate(t, at, field, ValidationSeverity.Error);
-                else if (_ctx.PointExists != null && !_ctx.PointExists(null, t))
+                else if (!PointKnown(null, t))
                     Add(at, ValidationCodes.UnknownPoint, $"Point '{t}' does not exist", field);
             }
 

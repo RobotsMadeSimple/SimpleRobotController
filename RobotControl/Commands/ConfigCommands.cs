@@ -57,7 +57,10 @@ internal sealed class ConfigCommands
             astroJoint1GearRatio      = c.AstroJoint1GearRatio,
             astroJoint4GearRatio      = c.AstroJoint4GearRatio,
             astroCoreXyPulleyPcdMm    = c.AstroCoreXyPulleyPcdMm,
-            cncStepsPerRevX           = c.CncStepsPerRevX,
+            astroVerticalTravelMm     = c.AstroVerticalTravelMm,
+            astroRadialTravelMm       = c.AstroRadialTravelMm,
+            activeCellId              = c.ActiveCellId,
+            cncStepsPerRevX          = c.CncStepsPerRevX,
             cncStepsPerRevY           = c.CncStepsPerRevY,
             cncStepsPerRevZ           = c.CncStepsPerRevZ,
             cncStepsPerRevRZ          = c.CncStepsPerRevRZ,
@@ -81,6 +84,9 @@ internal sealed class ConfigCommands
             joint3Max                 = c.Joint3Max,
             joint4Min                 = c.Joint4Min,
             joint4Max                 = c.Joint4Max,
+            motionProfile             = c.MotionProfile,
+            scurveSmoothness          = c.ScurveSmoothness,
+            scurveJerk                = c.ScurveJerk,
         };
     }
 
@@ -96,6 +102,25 @@ internal sealed class ConfigCommands
         {
             return new { ok = false, error = "Cannot change robot type while the robot is moving or homing." };
         }
+
+        // activeCellId: present = authoritative (null/"" clears); it must name a stored package.
+        // Checked before anything is applied so a bad id rejects the whole patch.
+        bool activeCellPresent = false;
+        string? activeCellId   = null;
+        if (msg.Params is { ValueKind: JsonValueKind.Object } rawActive && rawActive.TryGetProperty("activeCellId", out var acEl))
+        {
+            activeCellPresent = true;
+            activeCellId = acEl.ValueKind == JsonValueKind.String ? acEl.GetString() : null;
+            if (string.IsNullOrEmpty(activeCellId)) activeCellId = null;
+            if (activeCellId != null && _robot.Cells?.Exists(activeCellId) != true)
+                return new { ok = false, error = $"No cell package '{activeCellId}'." };
+        }
+        string? prevRobotType = c.RobotType;
+
+        // Motion profile: "trapezoid" | "scurve" — anything else rejects the patch up front.
+        var profileKind = p.MotionProfile != null ? MotionProfilers.MotionProfileSettings.ParseKind(p.MotionProfile) : null;
+        if (p.MotionProfile != null && profileKind == null)
+            return new { ok = false, error = $"Unknown motionProfile '{p.MotionProfile}' (trapezoid or scurve)." };
 
         // Kinematics / motor-direction reinit runs on the motion thread (it
         // swaps the kinematics and reconfigures the STB motors it drives).
@@ -174,10 +199,28 @@ internal sealed class ConfigCommands
             ApplyLimit("joint3Max", v => c.Joint3Max = v);
             ApplyLimit("joint4Min", v => c.Joint4Min = v);
             ApplyLimit("joint4Max", v => c.Joint4Max = v);
+            // Same present-is-authoritative rule: null (or ≤ 0) = derive the jerk from the smoothness.
+            ApplyLimit("scurveJerk", v => c.ScurveJerk = v is > 0 ? v : null);
+        }
+        if (profileKind is { } kind)
+            c.MotionProfile = kind == MotionProfilers.MotionProfileKind.SCurve
+                ? MotionProfilers.MotionProfileSettings.SCurveName : MotionProfilers.MotionProfileSettings.TrapezoidName;
+        if (p.ScurveSmoothness is { } smooth && double.IsFinite(smooth))
+            c.ScurveSmoothness = Math.Clamp(smooth, 1, 100);
+        // Cell viewer: build lengths + active package. These never touch kinematics; any change
+        // (and a robot-type switch, which swaps the built-in robot) bumps lastCellUpdate.
+        bool cellChanged = !string.Equals(prevRobotType, c.RobotType, StringComparison.Ordinal);
+        if (p.AstroVerticalTravelMm is { } vt && vt != c.AstroVerticalTravelMm) { c.AstroVerticalTravelMm = vt; cellChanged = true; }
+        if (p.AstroRadialTravelMm   is { } rt && rt != c.AstroRadialTravelMm)   { c.AstroRadialTravelMm   = rt; cellChanged = true; }
+        if (activeCellPresent && !string.Equals(c.ActiveCellId, activeCellId, StringComparison.Ordinal))
+        {
+            c.ActiveCellId = activeCellId;
+            cellChanged = true;
         }
         if (motorDirectionsChanged || kinematicsChanged)
             _robot.ReapplyConfigOnMotionThread(motorDirectionsChanged, kinematicsChanged);
         RobotConfigService.Save(c);
+        if (cellChanged) _robot.Cells?.Touch();
         return null;
     }
 
@@ -232,6 +275,12 @@ internal sealed class ConfigCommands
         d.EnableRelayCard = c.EnableRelayCard;
         d.EnableAuxAxis   = c.EnableAuxAxis;
         d.EnableCameras   = c.EnableCameras;
+        // The robot's physical build lengths and its active cell package are not tuning.
+        d.AstroVerticalTravelMm = c.AstroVerticalTravelMm;
+        d.AstroRadialTravelMm   = c.AstroRadialTravelMm;
+        d.ActiveCellId          = c.ActiveCellId;
+        // The e-stop input is safety wiring, not tuning — a settings reset never turns it off.
+        d.Estop                 = c.Estop;
 
         _robot.ResetConfigOnMotionThread(d);
         RobotConfigService.Save(d);

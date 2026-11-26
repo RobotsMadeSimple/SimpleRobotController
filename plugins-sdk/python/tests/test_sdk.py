@@ -303,6 +303,36 @@ async def test_ctx_notifications_and_requests(fc: FakeController) -> None:
 
 
 @scenario
+async def test_ctx_robot_helpers(fc: FakeController) -> None:
+    p = make_plugin(fc)
+    fc.command_results["GetPoints"] = {"ok": True, "result": {"points": json.dumps([{"name": "P1", "x": 1, "y": 2, "z": 3}])}}
+    fc.command_results["GetGrids"] = {"ok": True, "result": {"grids": json.dumps([{"name": "G1"}])}}
+    fc.command_results["GetStacks"] = {"ok": True, "result": {"stacks": json.dumps([])}}
+    fc.command_results["GetStatus"] = {"ok": True, "result": {"moving": True, "x": 10, "y": 20, "z": 30, "rx": 0, "ry": 0, "rz": 90}}
+    async with running(p, fc):
+        r = p.ctx.robot
+        # motion helpers issue one controller.command with the pose (+ optional speed/accel)
+        await r.move_l(1, 2, 3, rz=90, speed=100)
+        cmds = fc.frames(method="controller.command")
+        assert cmds[0]["params"] == {"command": "MoveL", "params": {"x": 1, "y": 2, "z": 3, "rx": 0.0, "ry": 0.0, "rz": 90, "speed": 100}}
+        await r.move_j(4, 5, 6)
+        assert any(f["params"]["command"] == "MoveJ" for f in fc.frames(method="controller.command"))
+        await r.home()
+        assert any(f["params"]["command"] == "Home" for f in fc.frames(method="controller.command"))
+        await r.stop()
+        assert any(f["params"]["command"] == "StopJog" for f in fc.frames(method="controller.command"))
+        await r.teach_point("P2")
+        assert any(f["params"] == {"command": "TeachPoint", "params": {"name": "P2"}} for f in fc.frames(method="controller.command"))
+        # list helpers parse the JSON-string the controller returns
+        assert await r.get_points() == [{"name": "P1", "x": 1, "y": 2, "z": 3}]
+        assert await r.get_grids() == [{"name": "G1"}]
+        assert await r.get_stacks() == []
+        # state helpers read GetStatus
+        assert await r.position() == {"x": 10, "y": 20, "z": 30, "rx": 0, "ry": 0, "rz": 90}
+        assert await r.is_moving() is True
+
+
+@scenario
 async def test_background_runs_and_stops_on_shutdown(fc: FakeController) -> None:
     p = make_plugin(fc)
     state = {"ticks": 0, "cancelled": False}

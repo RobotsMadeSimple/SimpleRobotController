@@ -30,7 +30,9 @@ internal sealed class GridCommands
         {
             Id            = p.Id,
             Name          = p.Name,
+            Description   = p.Description,
             BasePointName = p.BasePointName,
+            BasePointId   = p.BasePointId,
             RowOffsetX    = p.RowOffsetX,
             RowOffsetY    = p.RowOffsetY,
             RowOffsetZ    = p.RowOffsetZ,
@@ -40,6 +42,9 @@ internal sealed class GridCommands
             RowCount      = p.RowCount,
             ColCount      = p.ColCount,
             Rotation      = p.Rotation,
+            Method        = p.Method,
+            RowSide       = p.RowSide,
+            Corners       = p.Corners,
         });
     }
 

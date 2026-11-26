@@ -39,6 +39,11 @@ namespace Controller.RobotControl.Execution
         /// from (docs/plugins.md §4.4); null or returning null: no events.</summary>
         public Func<global::Controller.RobotControl.Plugins.PluginManager?>? Plugins { get; init; }
 
+        /// <summary>The alarm history a program error is recorded in, and the running program's stable
+        /// id for the alarm's source; null: no alarms (tests).</summary>
+        public Func<global::Controller.RobotControl.Alarms.AlarmHistory?>? Alarms { get; init; }
+        public Func<string?>? ProgramId { get; init; }
+
         // ── Plugin events ─────────────────────────────────────────────────────
 
         /// <summary>The manager when some connected plugin subscribes to <paramref name="name"/>, else null —
@@ -385,7 +390,9 @@ namespace Controller.RobotControl.Execution
             switch (status)
             {
                 case ProgramStatus.Error:
-                    PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramError, description); break;
+                    PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramError, description);
+                    RecordAlarm(description, failCode, failStepId);
+                    break;
                 case ProgramStatus.Stopped:
                     PublishProgram(global::Controller.RobotControl.Plugins.PluginEvents.ProgramStopped); break;
                 default:
@@ -406,6 +413,27 @@ namespace Controller.RobotControl.Execution
                 CurrentToolOffsetX  = null, CurrentToolOffsetY  = null, CurrentToolOffsetZ  = null,
                 CurrentToolOffsetRX = null, CurrentToolOffsetRY = null, CurrentToolOffsetRZ = null,
             });
+        }
+
+        /// <summary>A program error goes into the alarm history as a one-off event (it has no lasting
+        /// condition, so it is active until acknowledged). The e-stop raises its own alarm.</summary>
+        private void RecordAlarm(string description, string? code, string? stepId)
+        {
+            if (code == global::Controller.RobotControl.Programs.ErrorCodes.EmergencyStop) return;
+            try
+            {
+                Alarms?.Invoke()?.Raise(code ?? global::Controller.RobotControl.Alarms.AlarmCatalog.ProgramError,
+                    $"{ProgramName}: {description}",
+                    new global::Controller.RobotControl.Alarms.AlarmSource
+                    {
+                        ProgramId   = ProgramId?.Invoke(),
+                        ProgramName = ProgramName,
+                        StepId      = stepId,
+                        Background  = IsBackground ? true : null,
+                    },
+                    cleared: true);
+            }
+            catch (Exception ex) { Console.WriteLine($"[Alarms] Program error not recorded: {ex.Message}"); }
         }
 
         // ── Descriptions ──────────────────────────────────────────────────────
@@ -482,9 +510,25 @@ namespace Controller.RobotControl.Execution
                 StepType.ListOp             => $"${step.VariableName ?? "?"}.{step.ListAction ?? "?"}",
                 StepType.Prompt             => $"Prompt: {step.PromptMessage ?? ""}",
                 StepType.MoveC              => $"MoveC → {MoveTargetLabel(step)} via {step.ViaPointName ?? step.ViaPointNameExpr ?? step.ViaPointId ?? "?"}",
+                StepType.MoveJoints         => $"MoveJoints → {JointsLabel(step)}",
                 _                           => step.Type.ToString(),
             };
             return string.IsNullOrEmpty(step.Name) ? type : $"{step.Name}  ({type})";
+        }
+
+        /// <summary>"$home[0]", "J1 90 · J4 45" or both — what a MoveJoints step moves to, as written
+        /// (expressions shown as their text).</summary>
+        private static string JointsLabel(ProgramStep step)
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(step.JointsExpr)) parts.Add(step.JointsExpr.Trim());
+            void Add(string key, double? v)
+            {
+                if (step.Expressions?.TryGetValue(key, out var e) == true && !string.IsNullOrWhiteSpace(e)) parts.Add($"{key.ToUpperInvariant()} ({e})");
+                else if (v is double d) parts.Add($"{key.ToUpperInvariant()} {d.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}");
+            }
+            Add("j1", step.J1); Add("j2", step.J2); Add("j3", step.J3); Add("j4", step.J4);
+            return parts.Count == 0 ? "current joints" : string.Join(" · ", parts);
         }
 
         private static string? FirstLine(string? text)

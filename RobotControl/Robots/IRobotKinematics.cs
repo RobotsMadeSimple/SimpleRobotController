@@ -7,6 +7,10 @@ namespace Controller.RobotControl.Robots
         /// <summary>Compute TCP position from current internal joint state and tool offset.</summary>
         Vector6 ForwardKinematics(Vector6 toolOffset);
 
+        /// <summary>TCP pose of an arbitrary joint-space vector (the layout <see cref="InverseKinematics"/>
+        /// returns) — pure: the internal joint state is not read or changed.</summary>
+        Vector6 ForwardFromJoints(Vector6 joints, Vector6 toolOffset);
+
         /// <summary>Compute joint-space targets from a TCP target and tool offset.</summary>
         Vector6 InverseKinematics(Vector6 tcp, Vector6 toolOffset);
 

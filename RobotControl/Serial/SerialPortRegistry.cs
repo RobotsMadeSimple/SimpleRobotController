@@ -33,6 +33,10 @@ namespace Controller.RobotControl.Serial
         public static bool IsClaimedByOther(string port, string ownerId) =>
             _claimed.TryGetValue(port, out var owner) && owner != ownerId;
 
+        /// <summary>The owner id of the device currently using this port, or null if unclaimed.</summary>
+        public static string? OwnerOf(string port) =>
+            _claimed.TryGetValue(port, out var owner) ? owner : null;
+
         /// <summary>Mark a port as owned by a connected device.</summary>
         public static void Claim(string port, string ownerId) => _claimed[port] = ownerId;
 

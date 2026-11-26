@@ -211,6 +211,14 @@ namespace Controller.RobotControl
             foreach (var e in executors) e.Stop();
         }
 
+        /// <summary>Ends every running background program with an uncatchable error (the e-stop).</summary>
+        public void AbortAll(string code, string message)
+        {
+            List<ProgramExecutor> executors;
+            lock (_lock) executors = _running.Values.ToList();
+            foreach (var e in executors) e.AbortWithError(code, message);
+        }
+
         /// <summary>Called by a background executor when it finishes (any terminal state).</summary>
         public void OnExecutorFinished(string id)
         {

@@ -70,8 +70,25 @@ public class PersistenceTests : IDisposable
     public void GridAndStackRepositories_RoundTrip()
     {
         var grids = new GridRepository(P("grids.json"));
-        var g = grids.Upsert(new Grid { Name = "g", RowCount = 2, ColCount = 3 });
-        Assert.Equal(2, new GridRepository(P("grids.json")).Get(g.Id)!.RowCount);
+        var g = grids.Upsert(new Grid
+        {
+            Name = "g", RowCount = 2, ColCount = 3, Description = "teach at the far corner",
+            Method = "3pt", BasePointId = "pt-a", BasePointName = "g A", RowSide = "left",
+            Corners = new()
+            {
+                new GridCorner { Role = "A", PointId = "pt-a", PointName = "g A" },
+                new GridCorner { Role = "B", PointId = "pt-b", PointName = "g B" },
+                new GridCorner { Role = "C", PointId = "pt-c", PointName = "g C" },
+            },
+        });
+        var reloadedGrid = new GridRepository(P("grids.json")).Get(g.Id)!;
+        Assert.Equal(2, reloadedGrid.RowCount);
+        Assert.Equal("3pt", reloadedGrid.Method);
+        Assert.Equal("teach at the far corner", reloadedGrid.Description);
+        Assert.Equal("pt-a", reloadedGrid.BasePointId);
+        Assert.Equal(3, reloadedGrid.Corners!.Count);
+        Assert.Equal("B", reloadedGrid.Corners![1].Role);
+        Assert.Equal("pt-c", reloadedGrid.Corners![2].PointId);
 
         var stacks = new StackRepository(P("stacks.json"));
         var s = stacks.Upsert(new RobotStack { Name = "s", MaxCount = 4 });

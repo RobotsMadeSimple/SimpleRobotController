@@ -84,6 +84,7 @@ var x = 0
 var w = 0
 var rec: list record
 var copy: list number
+var jhome: list record
 
 ## Motion
 @name "Approach"
@@ -98,6 +99,19 @@ MoveL Pick1, until=$io.Nano.Load >= 2000, untilMode=record, untilPos=$hitPts, un
 JumpL Place1, z=50, zStart=40, zEnd=60
 JumpJ grid Tray[$r, $c], z=($n * 2)
 JumpL stack Bins[$i], z=10
+MoveJoints j1=90, j2=250, j3=120, j4=0, speed=50
+MoveJoints $jhome[0], j4=($n * 2), profile=scurve, until=$io.Nano.Load >= 10
+MoveAbsJ (jointsOf($pts[0])), speed=30
+MoveL Pick1, profile=scurve
+JumpJ Place1, z=50, profile=trapezoid
+SavePosition $jhome, mode=append, source=joints
+$ok = reachable($pts[0]) and reachable("Pick 1", "Gripper")
+$x = jointsOf(grid("Tray", $r, $c)).j2 + jointsOf($pts[1], "", "Fixture1")[3]
+$w = poseOf($jhome[0], "none", $label).z
+if not reachable(stack("Bins", $i))
+  raise "Bin {$i} is out of reach", code=outOfReach
+end
+$jhome.append(jointsOf(poseOf($jhome[0])))
 MoveL "bin{$i}"
 MoveC Place1, via=Pick1, speed=50, tolerance=0.1
 ThreadMove distance=10, pitch=0.5, peck=on, peckDepth=2, peckRetract=1, exitHeight=5, reverseOut=on
@@ -141,7 +155,16 @@ AuxEnable on, device=Aux, axis=0
 GripperAction close, device=Aux, axis=1, until=$io.Nano.Grip >= 300
 GripperAction to 25, device=Aux, axis=1
 ConveyorAction forward, device=Aux, axis=2
+ConveyorAddPart Infeed, x=($count * 10)
+ConveyorTrack Infeed, timeout=5s
+ConveyorEndTracking release=on
+ConveyorTrack "Out Belt", wait=off
+ConveyorEndTracking Infeed
+ConveyorClearQueue Infeed
 RotaryIndex +1, count=3, device=Aux, axis=3
+SiloAction home, device=Aux, axis=0
+SiloAction present, device=Aux, axis=0
+SiloAction setcount, count=($count + 1), device=Aux, axis=0
 
 ## Flow
 if $count > 5 and $ok

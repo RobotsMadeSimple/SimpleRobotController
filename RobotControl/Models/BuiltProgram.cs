@@ -19,6 +19,14 @@ public class BuiltProgram
     [JsonPropertyName("variables")]
     public List<ProgramVariable>? Variables { get; set; }
     /// <summary>
+    /// Points that belong to THIS program (taught from the Program page), bundled with it so they
+    /// travel with the program. They coexist with the global point library; a move step's
+    /// PointId/PointName resolves against these first, then the global repo (see the executor's
+    /// composite point source). Null/empty = the program defines no points of its own.
+    /// </summary>
+    [JsonPropertyName("points")]
+    public List<Point>? Points { get; set; }
+    /// <summary>
     /// Optional user-authored HTML for a custom display page: a dashboard that shows this
     /// program's variables/state/images/graphs and offers inputs + a run button. Rendered in a
     /// sandboxed WebView in the app, which brokers data through the host bridge — see the app's
@@ -66,6 +74,7 @@ public class SaveBuiltProgramParams
     [JsonPropertyName("description")]          public string Description          { get; set; } = "";
     [JsonPropertyName("steps")]                public List<ProgramStep> Steps     { get; set; } = new();
     [JsonPropertyName("variables")]            public List<ProgramVariable>? Variables { get; set; }
+    [JsonPropertyName("points")]               public List<Point>? Points         { get; set; }
     [JsonPropertyName("displayPageHtml")]      public string? DisplayPageHtml      { get; set; }
     [JsonPropertyName("displayPageMode")]      public string? DisplayPageMode      { get; set; }
     [JsonPropertyName("displayPageLayout")]    public JsonElement? DisplayPageLayout { get; set; }

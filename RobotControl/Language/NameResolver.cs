@@ -3,7 +3,7 @@ using Controller.RobotControl.Validation;
 namespace Controller.RobotControl.Language;
 
 /// <summary>The repositories the text language names things in.</summary>
-public enum SrsRefKind { Point, Tool, Local, Grid, Stack, Routine, Program, Vision, Device, Camera }
+public enum SrsRefKind { Point, Tool, Local, Grid, Stack, Routine, Program, Vision, Device, Camera, Conveyor }
 
 /// <summary>One named thing: its stable id and its current name.</summary>
 public readonly record struct SrsNamed(string Id, string Name);
@@ -68,6 +68,7 @@ internal sealed class ControllerSrsNames(RobotController robot) : ISrsNames
                 SrsRefKind.Vision => robot.VisionRepo?.GetAll().Select(v => new SrsNamed(v.Id, v.Name)).ToList() ?? [],
                 SrsRefKind.Device => Devices(),
                 SrsRefKind.Camera => robot.CameraManager?.GetState().Select(c => new SrsNamed(c.Id, c.Name)).ToList() ?? [],
+                SrsRefKind.Conveyor => robot.Conveyors?.GetAll().Select(c => new SrsNamed(c.Id, c.Name)).ToList() ?? [],
                 _ => [],
             };
         }
@@ -204,6 +205,7 @@ internal sealed class NameResolver(ISrsNames names)
         SrsRefKind.Vision  => ValidationCodes.UnknownVisionProgram,
         SrsRefKind.Device  => TextProblemCodes.UnknownDevice,
         SrsRefKind.Camera  => TextProblemCodes.UnknownCamera,
+        SrsRefKind.Conveyor => TextProblemCodes.UnknownConveyor,
         _ => TextProblemCodes.Syntax,
     };
 

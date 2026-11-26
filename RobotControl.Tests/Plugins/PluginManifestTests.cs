@@ -126,6 +126,20 @@ public class PluginManifestTests
     }
 
     [Fact]
+    public void UiParamRules()
+    {
+        static PluginStepParam P(string key, string type, params string[] options) =>
+            new() { Key = key, Type = type, Options = options.Length > 0 ? [.. options] : null };
+        PluginManifest With(params PluginStepParam[] ps) { var m = Doc(); m.Ui = new PluginUiDef { Entry = "ui/index.html", Params = [.. ps] }; return m; }
+
+        Assert.Empty(With(P("view", "enum", "normal", "rotated90"), P("zoom", "number"), P("dark", "boolean"), P("label", "string")).Validate());
+        Assert.Contains("badUiParam", Codes(With(P("", "string"))));
+        Assert.Contains("badUiParam", Codes(With(P("a", "string"), P("a", "number"))));
+        Assert.Contains("badUiParam", Codes(With(P("a", "point"))));
+        Assert.Contains("badUiParam", Codes(With(P("a", "enum"))));
+    }
+
+    [Fact]
     public void StepFunctionAndPropertyRules()
     {
         var m = Doc(); m.Steps[0].Id = "Weigh";

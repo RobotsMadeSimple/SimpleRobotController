@@ -31,6 +31,7 @@ namespace Controller.RobotControl.AuxAxis
             foreach (var cfg in _config.Devices)
             {
                 var device = new AuxAxisDevice(cfg);
+                device.InputLatched += e => InputLatched?.Invoke(e);
                 lock (_devicesLock) _devices.Add(device);
                 device.Start();
                 foreach (var a in cfg.Axes) ApplyAxisBounds(device, a);
@@ -122,6 +123,26 @@ namespace Controller.RobotControl.AuxAxis
         public void SetPosition(string deviceId, int axis, long steps) =>
             GetDevice(deviceId)?.SetPosition(axis, steps);
 
+        // ── Live position (conveyor tracking) ─────────────────────────────────
+
+        /// <summary>Input edges from every aux device (latch pins with exact board positions, plain
+        /// inputs interpolated) — see <see cref="AuxAxisDevice.InputLatched"/>. Raised on the device thread.</summary>
+        public event Action<AuxLatchEvent>? InputLatched;
+
+        /// <summary>Live position (steps) + velocity (steps/s) of an axis, extrapolated to now. False when
+        /// the device is unknown. Never waits on serial — see <see cref="AuxAxisDevice.TryGetLivePosition"/>.</summary>
+        public bool TryGetLivePosition(string deviceId, int axis, out double steps, out double stepsPerSec)
+        {
+            var dev = GetDevice(deviceId);
+            if (dev != null) return dev.TryGetLivePosition(axis, out steps, out stepsPerSec);
+            steps = 0; stepsPerSec = 0;
+            return false;
+        }
+
+        /// <summary>Set a device's POS stream period (ms; 0 = baseline) — see <see cref="AuxAxisDevice.SetPositionStreaming"/>.</summary>
+        public void SetPositionStreaming(string deviceId, int periodMs) =>
+            GetDevice(deviceId)?.SetPositionStreaming(periodMs);
+
         // ── State query ───────────────────────────────────────────────────────
 
         public List<AuxAxisState> GetState()
@@ -162,6 +183,13 @@ namespace Controller.RobotControl.AuxAxis
                         GripperCloseTimeSec = a.GripperCloseTimeSec,
                         GripperAccel        = a.GripperAccel,
                         GripperOverTravelMm = a.GripperOverTravelMm,
+                        SiloPitchMm          = a.SiloPitchMm,
+                        SiloCapacity         = a.SiloCapacity,
+                        SiloClearanceMm      = a.SiloClearanceMm,
+                        SiloHomeOverTravelMm = a.SiloHomeOverTravelMm,
+                        SiloHomeSpeed        = a.SiloHomeSpeed,
+                        SiloCount            = a.SiloCount,
+                        SiloHomed            = IsSiloHomed(device.Id, a.AxisIndex),
                     }).ToList() ?? new(),
                 });
             }
@@ -190,11 +218,68 @@ namespace Controller.RobotControl.AuxAxis
             axis.GripperCloseTimeSec = patch.GripperCloseTimeSec;
             axis.GripperAccel        = patch.GripperAccel;
             axis.GripperOverTravelMm = patch.GripperOverTravelMm;
+            axis.SiloPitchMm          = patch.SiloPitchMm;
+            axis.SiloCapacity         = patch.SiloCapacity;
+            axis.SiloClearanceMm      = patch.SiloClearanceMm;
+            axis.SiloHomeOverTravelMm = patch.SiloHomeOverTravelMm;
+            axis.SiloHomeSpeed        = patch.SiloHomeSpeed;
+            // siloCount is runtime inventory, not geometry: a config save keeps it (only clamped to
+            // a smaller capacity). SiloAction SetCount / Refill change it.
+            if (axis.SiloCapacity > 0) axis.SiloCount = Math.Clamp(axis.SiloCount, 0, axis.SiloCapacity);
             Save(_config);
 
             // Re-pin the live device's soft bounds — role or gap limits may have just changed.
             var device = GetDevice(deviceId);
             if (device != null) ApplyAxisBounds(device, axis);
+        }
+
+        // ── Silo role (docs/aux-silo.md) ────────────────────────────────────────
+
+        // (deviceId, axis) -> the device's reference epoch when the silo was homed. Runtime only:
+        // any other move / zero / reconnect of the axis bumps the epoch and so clears "homed".
+        private readonly Dictionary<(string, int), long> _siloHomedEpoch = new();
+        private readonly object _siloLock = new();
+
+        /// <summary>True when the silo axis was homed and nothing else has moved, zeroed or
+        /// reconnected it since.</summary>
+        public bool IsSiloHomed(string deviceId, int axis)
+        {
+            var dev = GetDevice(deviceId);
+            if (dev == null) return false;
+            lock (_siloLock)
+                return _siloHomedEpoch.TryGetValue((deviceId, axis), out long e) && e == dev.ReferenceEpoch(axis);
+        }
+
+        /// <summary>Marks the silo homed at the axis's current reference epoch — called after the
+        /// home zero, and again right after a silo's own Present move is dispatched (so that move,
+        /// unlike any other, keeps it homed).</summary>
+        public void MarkSiloHomed(string deviceId, int axis)
+        {
+            var dev = GetDevice(deviceId);
+            if (dev == null) return;
+            lock (_siloLock) _siloHomedEpoch[(deviceId, axis)] = dev.ReferenceEpoch(axis);
+        }
+
+        /// <summary>Forgets the homed flag of a silo axis.</summary>
+        public void ClearSiloHomed(string deviceId, int axis)
+        {
+            lock (_siloLock) _siloHomedEpoch.Remove((deviceId, axis));
+        }
+
+        /// <summary>Sets the persisted part count of a silo axis, clamped to 0…capacity (no upper
+        /// clamp while the capacity is unset). Returns the stored count, or null when the axis is unknown.</summary>
+        public int? SetSiloCount(string deviceId, int axis, int count)
+        {
+            var cfg = GetAxisConfig(deviceId, axis);
+            if (cfg == null) return null;
+            int n = Math.Max(0, count);
+            if (cfg.SiloCapacity > 0) n = Math.Min(n, cfg.SiloCapacity);
+            if (cfg.SiloCount != n)
+            {
+                cfg.SiloCount = n;
+                Save(_config);
+            }
+            return n;
         }
 
         // ── Digital IO (Uno spare pins) ─────────────────────────────────────────
@@ -229,9 +314,11 @@ namespace Controller.RobotControl.AuxAxis
             GetDevice(deviceId)?.SetIoOutput(pin, value);
 
         /// <summary>Add, update, or remove (type = Unconfigured) an IO pin on the device + config.
-        /// Returns false when the device isn't live.</summary>
-        public bool SetIoPinType(string deviceId, int pin, PinType type)
+        /// <paramref name="latch"/> makes an Input a latch input (edges reported with exact step
+        /// counts; plain input on firmware without "latch"). Returns false when the device isn't live.</summary>
+        public bool SetIoPinType(string deviceId, int pin, PinType type, bool latch = false)
         {
+            latch &= type == PinType.Input;
             var dev = GetDevice(deviceId);
             if (dev == null) return false;
             var cfg = _config.Devices.FirstOrDefault(d => d.Id == deviceId);
@@ -244,13 +331,13 @@ namespace Controller.RobotControl.AuxAxis
                 return true;
             }
 
-            dev.UpsertIoPin(pin, type, dev.GetIoPinStates().FirstOrDefault(s => s.Pin == pin)?.Name ?? "");
-            dev.ConfigureIoPin(pin, type);
+            dev.UpsertIoPin(pin, type, dev.GetIoPinStates().FirstOrDefault(s => s.Pin == pin)?.Name ?? "", latch);
+            dev.ConfigureIoPin(pin, type, latch);
             if (cfg != null)
             {
                 var pinCfg = cfg.IoPins.FirstOrDefault(p => p.Pin == pin);
-                if (pinCfg != null) pinCfg.Type = type;
-                else cfg.IoPins.Add(new IoPinConfig { Pin = pin, Type = type, Name = "" });
+                if (pinCfg != null) { pinCfg.Type = type; pinCfg.Latch = latch; }
+                else cfg.IoPins.Add(new IoPinConfig { Pin = pin, Type = type, Name = "", Latch = latch });
                 Save(_config);
             }
             return true;

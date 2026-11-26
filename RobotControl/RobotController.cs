@@ -16,7 +16,8 @@ using System.Numerics;
 
 namespace Controller.RobotControl
 {
-    internal class RobotController : IHomingHost
+    // partial: e-stop monitoring + the alarm watch live in RobotController.Safety.cs
+    internal partial class RobotController : IHomingHost
     {
         // ── Tuning constants ──────────────────────────────────────────────────
         /// <summary>Speed override bounds: 5%–200% of the programmed speed.</summary>
@@ -280,6 +281,9 @@ namespace Controller.RobotControl
         // ── Aux Stepper Axes ──────────────────────────────────────────────────
         public AuxAxisManager AuxAxisManager { get; private set; } = null!;
 
+        // ── Generic serial devices (user-defined) ─────────────────────────────
+        public Serial.GenericSerialManager SerialManager { get; private set; } = null!;
+
         /// <summary>Every IO device's live state — the Nano edge devices plus any aux-stepper
         /// device that has spare-pin IO configured. This is the single source the GetIO response
         /// and the GetStatus `ioDevices` field both serialize.</summary>
@@ -317,6 +321,13 @@ namespace Controller.RobotControl
         /// discovers plugins and starts them once the web host is listening.
         /// </summary>
         public Plugins.PluginManager PluginManager { get; internal set; } = null!;
+
+        // ── 3D cell packages ──────────────────────────────────────────────────
+        /// <summary>
+        /// Cell packages under &lt;data&gt;/cells (docs/cell-package.md §4). The active id is the
+        /// config's activeCellId, persisted to robot-config.json when the repository changes it.
+        /// </summary>
+        public global::Controller.RobotControl.Cells.CellRepository Cells { get; internal set; } = null!;
 
         // ── Program vision snapshots ──────────────────────────────────────────
         private readonly Dictionary<string, byte[]> _programVisionSnapshots = new();
@@ -360,6 +371,7 @@ namespace Controller.RobotControl
             // here. Call Start() once identity/config have been applied so the
             // first motion tick and the first STB write already see the real config.
             _homing = new HomingSequencer(this);
+            InitSafety(); // alarm history (RobotController.Safety.cs)
 
             NanoManager = new NanoManager("io_devices.json");
 
@@ -371,6 +383,15 @@ namespace Controller.RobotControl
             RelayManager = new UsbRelayManager();
 
             AuxAxisManager = new AuxAxisManager("aux_config.json");
+
+            // User-defined generic serial devices (one fixed port each, no ID? probe).
+            SerialManager = new Serial.GenericSerialManager("serial_devices.json");
+
+            // Conveyor tracking (docs/conveyor-tracking.md) — config + runtime; its sensor thread
+            // starts in Start().
+            Conveyors = new global::Controller.RobotControl.Conveyors.ConveyorService(
+                new global::Controller.RobotControl.Conveyors.ConveyorRepository("conveyors.json"),
+                new global::Controller.RobotControl.Conveyors.ControllerConveyorSource(this));
 
             CameraManager = new Camera.CameraManager("camera_config.json");
 
@@ -388,6 +409,10 @@ namespace Controller.RobotControl
                 this, programManager, pointRepo, toolRepo, localRepo, builtProgramRepo, gridRepo, stackRepo,
                 isBackground: false, globalVars: backgroundProgramManager.GlobalVars,
                 globalImages: backgroundProgramManager.GlobalImages, backgroundManager: backgroundProgramManager);
+
+            Cells = new global::Controller.RobotControl.Cells.CellRepository(Directory.GetCurrentDirectory(),
+                () => _config.ActiveCellId,
+                id => { var c = _config; c.ActiveCellId = id; RobotConfigService.Save(c); });
 
             PluginManager = CreatePluginManager();
             // variables.get / variables.set: the program's executor (foreground or background), or the globals.
@@ -431,6 +456,9 @@ namespace Controller.RobotControl
             NanoManager.Start();
             RelayManager.Start();
             AuxAxisManager.Start();
+            SerialManager.Start();
+            Conveyors.Reload(); // ask the aux boards the conveyors use to stream positions
+            Conveyors.Start();
             CameraManager.Start();
 
             stb.Start();
@@ -443,6 +471,8 @@ namespace Controller.RobotControl
             // through QueuedCommands, the volatile request flags, and MotionBusy.
             new Thread(MotionLoop)  { IsBackground = true, Name = "MotionLoop"  }.Start();
             new Thread(ProgramLoop) { IsBackground = true, Name = "ProgramLoop" }.Start();
+            // E-stop input + alarm watch — its own thread, off the motion and STB loops.
+            StartSafetyThread();
         }
 
         // LOAD-BEARING TIMING — see docs/stb-loop-timing.md before changing.
@@ -491,7 +521,10 @@ namespace Controller.RobotControl
 
                     // Let the stepper motor drive toward the new targets, and publish
                     // the motion-busy signal the program thread polls for completion.
-                    stb.moving   = IsMoving;
+                    // (Holding on a tracked conveyor part moves the arm too, so it drives the STB
+                    // like a move — the same 5 ms cadence; MotionBusy stays false so the program
+                    // carries on while the robot follows.)
+                    stb.moving   = IsMoving || _trkHolding;
                     _motionActive = IsMoving;
 
                     if (diag)
@@ -604,8 +637,12 @@ namespace Controller.RobotControl
             // the soft-limit clamp uses this as the "where we already are" reference.
             _jointsBeforeTick.Copy(CurrentJointTargets);
 
+            // Conveyor tracking: this tick's belt sample (lock-free; no-op when nothing is tracked).
+            TrackingSample();
+
             if (continuousProfiler is not null)
             {
+                StopFollowing(); // blended runs are never tracked
                 CurrentPosition = continuousProfiler.Loop();
                 if (continuousProfiler.IsFinished)
                 {
@@ -621,13 +658,19 @@ namespace Controller.RobotControl
             else if (linearMotionProfiler is not null)
             {
                 CurrentPosition = linearMotionProfiler.Update();
-                if (linearMotionProfiler.IsFinished)
+                double progress = linearMotionProfiler.Progress;
+                bool finished = linearMotionProfiler.IsFinished;
+                if (finished)
                 {
                     // Set the position to the final postiion
                     CurrentPosition.Copy(TargetPosition);
                     // Destroy the profiler
                     linearMotionProfiler = null;
                 }
+
+                // A tracked MoveL rides on the belt: add its offset before IK.
+                if (_trkMove) ApplyMoveTracking(progress, finished);
+                else StopFollowing();
 
                 // Calculate IK to get the joint targets for the next interpolated linear movement
                 CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
@@ -636,6 +679,7 @@ namespace Controller.RobotControl
             }
             else if (jointMotionProfiler is not null)
             {
+                StopFollowing();
                 // Always update first (matches linear pattern)
                 CurrentJointTargets = jointMotionProfiler.Update();
 
@@ -658,6 +702,7 @@ namespace Controller.RobotControl
             }
             else if (IsJogging)
             {
+                StopFollowing();
                 CurrentPosition = joggingMotionProfiler.Update(CurrentPosition);
                 // Calculate IK to get the joint targets for the next Jog movement
                 CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
@@ -666,6 +711,7 @@ namespace Controller.RobotControl
             }
             else if (IsJointJogging)
             {
+                StopFollowing();
                 // Continue Jogging the joints that are moving
                 CurrentJointTargets = jointJoggingProfiler.Update(CurrentJointTargets);
 
@@ -677,12 +723,21 @@ namespace Controller.RobotControl
             }
             else if (IsToolJogging)
             {
+                StopFollowing();
                 CurrentPosition = toolJoggingMotionProfiler.Update(CurrentPosition);
                 // Calculate IK to get the joint targets for the next Jog movement
                 CurrentJointTargets = _kinematics.InverseKinematics(CurrentPosition, CurrentTool);
                 UpdateJointTargets();
                 if (_lastClampViolated) CurrentPosition = _kinematics.ForwardKinematics(CurrentTool);
             }
+            else if (_trkFollowing && _trkSession && !_faulted)
+            {
+                // No move running and a part is tracked: hold on the part (waits and gripper
+                // actions happen while following).
+                RunTrackingHold();
+            }
+            // Published for the STB drive (stb.moving) and the status: following with no move running.
+            _trkHolding = _trkFollowing && _trkSession && !IsMoving;
         }
         public void UpdateJointTargets()
         {
@@ -779,6 +834,7 @@ namespace Controller.RobotControl
 
             // Stop everything: clear profilers, force-stop jogs, halt any program so
             // it cannot keep re-issuing the offending move.
+            ClearTrackingMotion();
             linearMotionProfiler = null;
             jointMotionProfiler  = null;
             continuousProfiler   = null;
@@ -926,7 +982,10 @@ namespace Controller.RobotControl
             object? payload;
             try
             {
-                payload = _commands.TryGet(command.Command, out var handler)
+                // Moves, jogs, homing and program starts are refused while the e-stop is active/latched.
+                payload = SafetyGate(command.Command) is { } refused
+                    ? refused
+                    : _commands.TryGet(command.Command, out var handler)
                     ? await handler(command)
                     : new { ok = false, error = "unknownCommand" };
             }
@@ -977,11 +1036,17 @@ namespace Controller.RobotControl
 
             RobotCommand NewCommand = CommandJson.LoadParams<RobotCommand>(command);
             NewCommand.CommandType = command.Command;
+            // A grid cell / stack slot target: resolved, reach-checked and turned into x…rz here.
+            object? arrayAck = null;
+            if (command.Command is "MoveL" or "MoveJ" && (NewCommand.Grid != null || NewCommand.Stack != null))
+            {
+                if (ResolveArrayMove(NewCommand, out arrayAck) is { } refused) return refused;
+            }
             // Stamp with the current jog epoch so a stop arriving after this
             // enqueue can invalidate a trailing jog (see _jogGeneration).
             NewCommand.JogGeneration = _jogGeneration;
             QueuedCommands.Enqueue(NewCommand);
-            return null;
+            return arrayAck;
         }
 
         internal void RequestHome() => PostToMotionThread(() =>
@@ -1086,6 +1151,14 @@ namespace Controller.RobotControl
         });
         public void RunCommands()
         {
+            // E-stop active/latched: nothing queued may start (programs are aborted, clients are
+            // refused at the command gate — this catches a move already in the queue).
+            if (_estopInhibit)
+            {
+                if (!QueuedCommands.IsEmpty) QueuedCommands.Clear();
+                return;
+            }
+
             if (_drainQueueRequested)
             {
                 QueuedCommands.Clear();
@@ -1113,7 +1186,7 @@ namespace Controller.RobotControl
             // below — so the program thread never observes an empty queue together
             // with a stale "not moving" for a move we've just started (completion
             // race across the thread boundary). Reconciled to IsMoving each motion tick.
-            if (CommandType is "MoveL" or "OffsetL" or "MoveJ" or "StartContinuous")
+            if (CommandType is "MoveL" or "OffsetL" or "MoveJ" or "StartContinuous" or "MoveJoints")
                 _motionActive = true;
 
             switch (CommandType)
@@ -1128,13 +1201,18 @@ namespace Controller.RobotControl
                             LatchMotionError($"Point '{Command.Name}' not found");
                             break;
                         }
-                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
+                        MoveL(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor, Command.Profile, Command.TrackTravel);
                     }
                     break;
 
                 case "OffsetL":
                     Vector6 NewPosition = CurrentPosition + Command.Vector6;
-                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
+                    MoveL(NewPosition, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor, Command.Profile);
+                    break;
+
+                case "MoveJoints":
+                    // Joint-space target (X=J1, Y=J2, Z=J3, RZ=J4) — see RobotController.Motion.cs.
+                    MoveJoints(Command.Vector6, Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride, Command.SpeedFactor, Command.Profile);
                     break;
 
                 case "MoveJ":
@@ -1147,7 +1225,7 @@ namespace Controller.RobotControl
                             LatchMotionError($"Point '{Command.Name}' not found");
                             break;
                         }
-                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor);
+                        MoveJ(target, Command.Speed, Command.Accel, Command.Decel, Command.ToolOffsetVector6, Command.ApplySpeedOverride, Command.SpeedFactor, Command.Profile, Command.TrackTravel);
                     }
                     break;
 
@@ -1156,7 +1234,7 @@ namespace Controller.RobotControl
                     // program thread mutating continuousProfiler directly.
                     if (Command.Waypoints is { Count: >= 2 })
                         StartContinuousMove(Command.Waypoints, Command.BlendRadii ?? new List<double>(),
-                            Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride, Command.SpeedFactor);
+                            Command.Speed, Command.Accel, Command.Decel, Command.ApplySpeedOverride, Command.SpeedFactor, Command.Profile);
                     break;
 
                 case "SetTool":
@@ -1529,6 +1607,8 @@ namespace Controller.RobotControl
         private void ExecuteMotionStop()
         {
             _motionStopRequested = false;
+            // A tracked move stopped by its condition keeps following the part from here.
+            StopTrackedMoveInPlace();
             linearMotionProfiler = null;
             jointMotionProfiler  = null;
             continuousProfiler   = null;
@@ -1545,6 +1625,8 @@ namespace Controller.RobotControl
             linearMotionProfiler = null;
             jointMotionProfiler = null;
             continuousProfiler = null;
+            ClearTrackingMotion(); // stop dead — no more riding on a conveyor part
+
             joggingMotionProfiler.ForceStop();
             jointJoggingProfiler.ForceStop();
             toolJoggingMotionProfiler.ForceStop();
@@ -1553,7 +1635,7 @@ namespace Controller.RobotControl
             _homing.Reset();
         }
 
-        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0)
+        public void MoveJ(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0, string? profile = null, double? trackTravel = null)
         {
             if (IsMoving)
                 return;
@@ -1578,16 +1660,24 @@ namespace Controller.RobotControl
                 this.TargetPosition = TargetPosition;
             }
 
+            // A tracked target (conveyor): aim at the predicted intercept instead — see
+            // RobotController.Conveyor.cs. Null = the intercept is out of reach (tracking stopped).
+            if (trackTravel is { } tr)
+            {
+                jointMotionProfiler = PlanTrackedJoint(this.TargetPosition, tr, jointSpeed, jointAccel, jointDecel, ResolveProfile(profile));
+                return;
+            }
+
             // Calculate the joint positions for the target position and the current tooling
             this.TargetJoints = _kinematics.InverseKinematics(this.TargetPosition, this.CurrentTool);
 
             // Generate a joint motion profile using the current and target joint positions
-            jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, jointSpeed, jointAccel, jointDecel);
+            jointMotionProfiler = new(CurrentJointTargets, this.TargetJoints, jointSpeed, jointAccel, jointDecel, ResolveProfile(profile));
         }
 
         
 
-        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0)
+        public void MoveL(Vector6 TargetPosition, double? Speed, double? Accel, double? Decel, Vector6? ToolOffset, bool applyOverride = false, double programFactor = 1.0, string? profile = null, double? trackTravel = null)
         {
             if (IsMoving)
                 return;
@@ -1610,8 +1700,10 @@ namespace Controller.RobotControl
                 this.TargetPosition = TargetPosition;
             }
 
-            // Generate a new linear motion profiler for this move
-            linearMotionProfiler = new(CurrentPosition, this.TargetPosition, lineSpeed, lineAccel, lineDecel);
+            // Generate a new linear motion profiler for this move. A tracked target (conveyor)
+            // plans from its nominal start and rides on the belt — see RobotController.Conveyor.cs.
+            var start = BeginTrackedLinear(trackTravel, lineSpeed);
+            linearMotionProfiler = new(start, this.TargetPosition, lineSpeed, lineAccel, lineDecel, ResolveProfile(profile));
         }
 
         /// <summary>
@@ -1621,7 +1713,7 @@ namespace Controller.RobotControl
         /// single trapezoidal speed profile over its total blended length.
         /// </summary>
         public void StartContinuousMove(List<Vector6> waypoints, List<double> blendRadii,
-            double? Speed, double? Accel, double? Decel, bool applyOverride = false, double programFactor = 1.0)
+            double? Speed, double? Accel, double? Decel, bool applyOverride = false, double programFactor = 1.0, string? profile = null)
         {
             if (IsMoving) return;
             if (_faulted) return;  // no automatic moves while a joint-limit fault is latched
@@ -1640,7 +1732,7 @@ namespace Controller.RobotControl
             radii.AddRange(blendRadii);
 
             this.TargetPosition = waypoints[^1];
-            continuousProfiler = new(pts, radii, lineSpeed, lineAccel, lineDecel);
+            continuousProfiler = new(pts, radii, lineSpeed, lineAccel, lineDecel, ResolveProfile(profile));
         }
 
         public void JogJ(Vector6 jogJointDirection, double? Speed, double? Accel, double? Decel)

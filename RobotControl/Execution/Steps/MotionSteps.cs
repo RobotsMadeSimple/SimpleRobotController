@@ -19,6 +19,7 @@ namespace Controller.RobotControl.Execution
             r[StepType.ClearLocal]     = new ClearLocalStep();
             r[StepType.RunHoming]      = new RunHomingStep();
             r[StepType.SetJointPosition] = new SetJointPositionStep();
+            r[StepType.MoveJoints]     = MoveJointsStep.Instance;
         }
 
         // Effective blend radius for a move: its own override if set, else the program default.
@@ -51,17 +52,34 @@ namespace Controller.RobotControl.Execution
             // Blended MoveL run: gather consecutive blendable MoveL steps into one
             // continuous path so the robot rounds the corners instead of stopping. A move
             // with a stop condition never blends — its end point is decided mid-move.
+            // While tracking a conveyor part every move is dispatched on its own (a blended run is
+            // never tracked).
+            bool tracking = ctx.IsTracking;
             if (step.Type == StepType.MoveL && MotionSteps.EffectivelyBlends(step, ctx) && !hasToolOffset
-                && !MoveStopConditions.HasCondition(step))
+                && !MoveStopConditions.HasCondition(step) && !tracking)
             {
                 if (TryDispatchBlendedRun(step, target, frame, ctx) is { } outcome) return outcome;
             }
 
             var ev = ctx.Eval;
             var toolOffset = MoveTargetResolver.ResolveToolOffset(step, ev);
+
+            // Out of reach (no IK solution, or a joint past its soft limit): fail before moving,
+            // with the catchable outOfReach. A MoveL checks its whole line, a MoveJ its end.
+            var unreachable = step.Type == StepType.MoveL
+                ? ctx.FailIfLineUnreachable(step, ctx.LivePosition(), target, toolOffset)
+                : ctx.FailIfUnreachable(step, [target], toolOffset);
+            if (unreachable is { } failed) return failed;
+            // Tracking: the part keeps moving during the move — the end must be reachable where the
+            // belt will have carried it.
+            if (tracking && ctx.FailIfUnreachable(step, [ctx.PredictTrackedEnd(target, ev.OptionalField(step, "speed", step.Speed),
+                                                                              ev.OptionalField(step, "accel", step.Accel))], toolOffset) is { } late)
+                return late;
+
             var cmd = new RobotCommand
             {
                 CommandType = step.Type == StepType.MoveL ? "MoveL" : "MoveJ",
+                Profile     = step.MotionProfile,
                 X  = target.X,
                 Y  = target.Y,
                 Z  = target.Z,
@@ -136,7 +154,11 @@ namespace Controller.RobotControl.Execution
             double? accel = ev.OptionalField(first, "accel", first.Accel);
             double? decel = ev.OptionalField(first, "decel", first.Decel);
 
-            ctx.Motion.StartContinuous(waypoints, radii, speed, accel, decel);
+            // Every corner of the run must be reachable before any of it moves.
+            for (int k = 0; k < run.Count; k++)
+                if (ctx.FailIfUnreachable(run[k], [waypoints[k]]) is { } failed) return failed;
+
+            ctx.Motion.StartContinuous(waypoints, radii, speed, accel, decel, first.MotionProfile);
             ctx.AwaitBlendedRun(run, frame);
             return StepOutcome.Yield;
         }
@@ -154,6 +176,7 @@ namespace Controller.RobotControl.Execution
         public double  ZEnd;
         public string  CmdType  = "MoveL";
         public double? Speed, Accel, Decel;
+        public string? Profile;           // the step's own motionProfile (null = the config's)
 
         public void Reset()
         {
@@ -164,6 +187,7 @@ namespace Controller.RobotControl.Execution
             ZEnd     = 0;
             CmdType  = "MoveL";
             Speed = Accel = Decel = null;
+            Profile  = null;
         }
     }
 
@@ -201,6 +225,22 @@ namespace Controller.RobotControl.Execution
                 jump.Speed    = ev.OptionalField(step, "speed", step.Speed); // override applied in MoveL/MoveJ
                 jump.Accel    = ev.OptionalField(step, "accel", step.Accel);
                 jump.Decel    = ev.OptionalField(step, "decel", step.Decel);
+                jump.Profile  = step.MotionProfile;
+
+                // The lift point, the point above the target and the target itself must all be
+                // reachable before the jump starts (catchable outOfReach otherwise).
+                {
+                    var s0 = jump.StartPos;
+                    var t0 = jump.Target;
+                    if (ctx.FailIfUnreachable(step, [
+                            new Vector6(s0.X, s0.Y, jump.ZStart, s0.RX, s0.RY, s0.RZ),
+                            new Vector6(t0.X, t0.Y, jump.ZEnd,   t0.RX, t0.RY, t0.RZ),
+                            t0]) is { } failed)
+                    {
+                        jump.Reset();
+                        return failed;
+                    }
+                }
 
                 // The stop condition spans every leg: armed once here, evaluated by the
                 // executor until the last leg completes (or the move is stopped).
@@ -221,7 +261,7 @@ namespace Controller.RobotControl.Execution
                     ctx.Motion.StartContinuous(
                         new List<Vector6> { apexUp, apexOver, t },
                         new List<double> { r, r, 0 },   // round both apexes; land exactly on target
-                        jump.Speed, jump.Accel, jump.Decel);
+                        jump.Speed, jump.Accel, jump.Decel, jump.Profile);
                     jump.SubStep = 0;
                     ctx.AwaitMove(step, frame);
                     return StepOutcome.Yield;
@@ -236,6 +276,7 @@ namespace Controller.RobotControl.Execution
                     RX = jump.StartPos.RX, RY = jump.StartPos.RY, RZ = jump.StartPos.RZ,
                     Speed = jump.Speed, Accel = jump.Accel, Decel = jump.Decel,
                     ApplySpeedOverride = true,
+                    Profile = jump.Profile,
                 });
                 ctx.Motion.AwaitingMove = true;
                 ctx.Progress.StepStarted(step);
@@ -251,6 +292,7 @@ namespace Controller.RobotControl.Execution
                     RX = jump.Target.RX, RY = jump.Target.RY, RZ = jump.Target.RZ,
                     Speed = jump.Speed, Accel = jump.Accel, Decel = jump.Decel,
                     ApplySpeedOverride = true,
+                    Profile = jump.Profile,
                 });
                 jump.SubStep = 2;
                 ctx.Motion.AwaitingMove = true;
@@ -266,6 +308,7 @@ namespace Controller.RobotControl.Execution
                     RX = jump.Target.RX, RY = jump.Target.RY, RZ = jump.Target.RZ,
                     Speed = jump.Speed, Accel = jump.Accel, Decel = jump.Decel,
                     ApplySpeedOverride = true,
+                    Profile = jump.Profile,
                 });
                 jump.SubStep = 3;
                 ctx.Motion.AwaitingMove = true;
@@ -306,6 +349,7 @@ namespace Controller.RobotControl.Execution
             {
                 var ev       = ctx.Eval;
                 var start    = ctx.LivePosition();
+                ctx.StampTrackingPlan(); // tracking: the strokes ride on the part from here
                 double dist  = ev.EvalField(step, "threadDistance",  step.ThreadDistance  ?? 0);
                 double pitch = ev.EvalField(step, "threadPitch",     step.ThreadPitch     ?? 1);
                 bool   peck  = step.ThreadPeck ?? false;

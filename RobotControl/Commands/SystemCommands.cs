@@ -71,6 +71,7 @@ internal sealed class SystemCommands
 
         var speeds = robot.MotionParameters;
         var fault  = robot.FaultStatus;
+        var estop  = robot.Estop.State;
         string homingState = robot.HomingState;
 
         return new
@@ -158,6 +159,15 @@ internal sealed class SystemCommands
             // before re-rendering so unchanging digital pins don't churn.
             ioDevices = JsonSerializer.Serialize(robot.GetAllIoStates(), CommandJson.CamelCaseWithEnums),
 
+            // User-defined generic serial devices — live state (connected + rolling tx/rx console) rides
+            // along like ioDevices so the app's console updates every poll. Serialized to a JSON string
+            // so the app reuses its GetSerialDevices decoder.
+            serialDevices = JsonSerializer.Serialize(robot.SerialManager.GetAllStates(), CommandJson.CamelCaseWithEnums),
+
+            // Conveyor tracking — per conveyor: travel, speed, the queued parts (≤ 16) and the
+            // tracked one (docs/conveyor-tracking.md). Rebuilt at most every 100 ms.
+            conveyors = robot.Conveyors?.Status(),
+
             // Program cycle — the full summary now rides behind lastProgramUpdate (fetched via
             // GetPrograms), so it isn't re-sent every poll. Only a compact live block for the
             // actively-running program(s) is broadcast so the monitor view stays real-time.
@@ -167,6 +177,13 @@ internal sealed class SystemCommands
             // Tool repository
             lastToolUpdate = robot.toolRepo.LastUpdatedUnixMs,
             activeTool     = robot.ActiveToolName,
+            // The active tool's stable id (GetTools `id`), null when no tool is active — what a
+            // cell package's tools[].controllerTool matches (docs/cell-package.md §3.2).
+            activeToolId   = string.IsNullOrEmpty(robot.ActiveToolName) ? null : robot.toolRepo.Get(robot.ActiveToolName)?.Id,
+
+            // 3D cell packages — bumped on upload/delete/active change and on a change to an
+            // adjustable build-length setting or the robot type; refetch /cells/active on change.
+            lastCellUpdate = robot.Cells?.LastUpdatedUnixMs ?? 0,
 
             // Local repository
             lastLocalUpdate = robot.localRepo.LastUpdatedUnixMs,
@@ -196,6 +213,18 @@ internal sealed class SystemCommands
             limitBypass        = fault.Bypass,
             jointLimitsEnabled = config.JointLimitsEnabled,
             robotType          = config.RobotType,
+
+            // Hardwired e-stop (docs/estop.md) + alarm history — refetch GetAlarms on lastAlarmUpdate.
+            estopEnabled       = estop.Enabled,
+            estopActive        = estop.Active,
+            estopLatched       = estop.Latched,
+            estopInput         = estop.Raw,
+            estopInputHealthy  = estop.Healthy,
+            estopSourceOnline  = estop.SourceOnline,
+            estopSource        = estop.Label,
+            estopReason        = estop.Reason,
+            activeAlarmCount   = robot.Alarms.ActiveCount,
+            lastAlarmUpdate    = robot.Alarms.LastUpdatedUnixMs,
 
             version = RobotController.Version,
             isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux),

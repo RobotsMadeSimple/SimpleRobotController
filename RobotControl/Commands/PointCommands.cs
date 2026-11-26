@@ -32,6 +32,11 @@ internal sealed class PointCommands
         var loc = _robot.ActiveLocalOffset;
         var basePos = loc == null ? pos : LocalFrame.Inverse(loc, pos);
         _robot.pointRepo.SavePoint(tp.Name, basePos);
+        // Optional one-shot description when teaching a brand-new point. SavePoint
+        // already preserves an existing point's description across a re-teach, so
+        // only apply when explicitly provided.
+        if (!string.IsNullOrEmpty(tp.Description))
+            _robot.pointRepo.EditPoint(tp.Name, new Dictionary<string, object?> { ["Description"] = tp.Description });
     }
 
     private void DeletePoint(CommandMessage msg)
@@ -44,8 +49,9 @@ internal sealed class PointCommands
     {
         var ep = CommandJson.LoadParams<EditPointParams>(msg);
         var values = new Dictionary<string, object?>();
-        if (ep.NewName != null)   values["Name"] = ep.NewName;
-        if (ep.X.HasValue)        values["X"]    = ep.X.Value;
+        if (ep.NewName != null)     values["Name"]        = ep.NewName;
+        if (ep.Description != null)  values["Description"] = ep.Description;
+        if (ep.X.HasValue)          values["X"]           = ep.X.Value;
         if (ep.Y.HasValue)        values["Y"]    = ep.Y.Value;
         if (ep.Z.HasValue)        values["Z"]    = ep.Z.Value;
         if (ep.RX.HasValue)       values["RX"]   = ep.RX.Value;

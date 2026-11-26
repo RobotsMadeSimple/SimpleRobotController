@@ -13,24 +13,31 @@ namespace RobotControl.Tests;
 internal sealed class StepsRig : IDisposable
 {
     public readonly string              Tmp;
-    public readonly RobotController     Robot    = new();
+    public readonly RobotController     Robot;
     public readonly ProgramCycleManager Programs = new();
     public readonly PointRepository     Points;
     public readonly LocalRepository     Locals;
+    public readonly GridRepository      Grids;
+    public readonly StackRepository     Stacks;
     public readonly ProgramExecutor     Exec;
 
     /// <summary>Every command the executor queued for the motion thread, in order.</summary>
     public readonly List<RobotCommand> Dispatched = new();
 
-    public StepsRig()
+    public StepsRig() : this(identityKinematics: true) { }
+
+    /// <param name="identityKinematics">True (the default): CNC4Axis joints = axes, so the small test
+    /// coordinates are all reachable. False: the real ASTRO kinematics (reach tests).</param>
+    public StepsRig(bool identityKinematics)
     {
+        Robot = identityKinematics ? new RobotController().WithIdentityKinematics() : new RobotController();
         Tmp = Path.Combine(Path.GetTempPath(), "rms-steps-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Tmp);
         Points = new PointRepository(Path.Combine(Tmp, "points.json"), Path.Combine(Tmp, "pointsHistory.json"));
         Locals = new LocalRepository(Path.Combine(Tmp, "locals.json"), Path.Combine(Tmp, "localsHistory.json"));
-        var grids  = new GridRepository(Path.Combine(Tmp, "grids.json"));
-        var stacks = new StackRepository(Path.Combine(Tmp, "stacks.json"));
-        Exec = new ProgramExecutor(Robot, Programs, Points, Robot.toolRepo, Locals, Robot.builtProgramRepo, grids, stacks);
+        Grids  = new GridRepository(Path.Combine(Tmp, "grids.json"));
+        Stacks = new StackRepository(Path.Combine(Tmp, "stacks.json"));
+        Exec = new ProgramExecutor(Robot, Programs, Points, Robot.toolRepo, Locals, Robot.builtProgramRepo, Grids, Stacks);
     }
 
     public void Dispose()

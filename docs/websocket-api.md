@@ -62,7 +62,7 @@ stack cell reference).
 
 | Command | Params | Description |
 |---|---|---|
-| `MoveL` | `x,y,z,rx,ry,rz` or `name`; optional `speed,accel,decel`, tool offset `tx,ty,tz,trx,try,trz`, `blend`, `blendRadius` | Linear (straight-line) move to a Cartesian target. Consecutive blend-enabled `MoveL`s round their corners into one continuous path. |
+| `MoveL` | `x,y,z,rx,ry,rz` or `name` or a grid cell `grid,row,col` / stack slot `stack,index` ([Grids & Stacks](#grids--stacks)); optional `speed,accel,decel`, tool offset `tx,ty,tz,trx,try,trz`, `blend`, `blendRadius` | Linear (straight-line) move to a Cartesian target. Consecutive blend-enabled `MoveL`s round their corners into one continuous path. |
 | `MoveJ` | same as `MoveL` | Joint-interpolated move to a target (joints move proportionally; path is not a straight line). |
 | `OffsetL` | `x,y,z,rx,ry,rz` (relative), optional `speed,accel,decel` | Linear move **relative** to the current position. |
 | `SetTool` | `x,y,z,rx,ry,rz` | Set the active TCP tool offset used for subsequent moves. |
@@ -102,7 +102,7 @@ stack cell reference).
 | `GetStatus` | — | The main state snapshot (see fields below). |
 | `GetRobotInfo` | — | Returns `robotName, robotType, serialNumber`. |
 | `SetRobotIdentity` | `robotName?, robotType?` | Rename the robot / change its type, persisted. |
-| `GetRobotConfig` | — | Returns the full config (homing speeds/directions, motor directions, enabled peripherals, jog speeds, CNC motor setup, joint limits). |
+| `GetRobotConfig` | — | Returns the full config (homing speeds/directions, motor directions, enabled peripherals, jog speeds, CNC motor setup, joint limits, motion profile). |
 | `SetRobotConfig` | any subset of the config fields | Patch config (only present fields change). An explicit `null` on a `jointNMin/Max` clears that bound. Persisted. |
 
 **`GetStatus` returns** (selected fields): `moving`, `wasHomed`, `homingState`,
@@ -119,7 +119,29 @@ though `status` reads `Complete` both times); `activeTool`, `activeLocal`;
 `backgroundPrograms`; repository update timestamps; `speedOverridePercent`; fault
 state `faulted, faultJoint, faultDirection, faultMessage, limitBypass`;
 `jointLimitsEnabled`, `robotType`, `version`, `isLinux`; `plugins` — one
-`{ id, name, state, statusState }` per installed plugin (see **Plugins**).
+`{ id, name, state, statusState }` per installed plugin (see **Plugins**);
+`activeToolId` — the active tool's stable `id` (null when none); `lastCellUpdate` —
+bumped on any cell package upload/delete, active-cell change, or change to
+`astroVerticalTravelMm` / `astroRadialTravelMm` / `robotType` (refetch `GET /cells/active`);
+the e-stop and alarm fields `estopEnabled, estopActive, estopLatched, estopInput,
+estopInputHealthy, estopSourceOnline, estopSource, estopReason, activeAlarmCount,
+lastAlarmUpdate` (see **Safety & alarms**); `conveyors` — per conveyor travel, speed, queued
+parts and the tracked part (see **Conveyors**).
+
+Robot config also carries the 3D cell viewer settings `astroVerticalTravelMm` and
+`astroRadialTravelMm` (built column / reach travel, mm, default 400 — drawing only, never
+kinematics) and `activeCellId` (null = none; `SetRobotConfig` rejects an id that isn't stored,
+explicit `null` clears). `ResetRobotConfig` keeps all three.
+
+Robot config also carries the **motion profile** program and point moves run with (MoveL /
+MoveJ / MoveJoints, blended paths, Jump legs, MoveC): `motionProfile` — `"trapezoid"` (default,
+the classic constant-acceleration ramps) or `"scurve"` (jerk-limited; an unknown value rejects
+the whole patch with `ok: false`); `scurveSmoothness` — 1–100 % (default 50, clamped), the share
+of each acceleration phase spent ramping the acceleration; `scurveJerk` — an absolute jerk limit
+(mm/s³ linear, joint units/s³ joint) or `null` (present-is-authoritative like the joint limits:
+`null` or ≤ 0 clears it, and the jerk is then derived from the smoothness). A move step's own
+`motionProfile` overrides the config per move. Homing and jogging always use the trapezoid.
+`ResetRobotConfig` (full) resets these to the defaults.
 
 ---
 
@@ -146,6 +168,19 @@ state `faulted, faultJoint, faultDirection, faultMessage, limitBypass`;
 
 ---
 
+## Cells (3D cell viewer packages)
+
+Packages are uploaded and read over HTTP (`POST /cells`, `GET /cells/active`, meshes under
+`GET /cells/{id}/…`) — see [cell-package.md](cell-package.md) §4. Over the socket:
+
+| Command | Params | Description |
+|---|---|---|
+| `GetCells` | — | `{ cells: [{ id, name, updatedUnixMs, active, tools, fixtures }], activeCellId }` (`tools`/`fixtures` are counts; `activeCellId` null when none). |
+| `SetActiveCell` | `id` (string, or `null` to clear) | Make a stored package the active one; returns `{ activeCellId }`. Unknown id → `ok: false, error: "unknownCell"`. Persisted as the config's `activeCellId`. |
+| `DeleteCell` | `id` | Remove a stored package (clears the active id if it was active). Unknown id → `error: "unknownCell"`. |
+
+---
+
 ## Locals (coordinate frames)
 
 | Command | Params | Description |
@@ -160,8 +195,36 @@ state `faulted, faultJoint, faultDirection, faultMessage, limitBypass`;
 
 ## Grids & Stacks
 
-Grids are 2-D position arrays; stacks are 1-D. Both are referenced by index as
-move targets (a `MoveL`/`MoveJ` `name` can be a grid/stack cell reference).
+Grids are 2-D position arrays; stacks are 1-D. Program moves reference them by id + index
+(`gridPoint` / `stackPoint` on a MoveL / MoveJ step).
+
+**Manual moves to a cell (additive).** `MoveL` / `MoveJ` also take a grid cell or stack slot as
+the target, by the array's stable **id** (never its name), zero-based:
+
+| Params | Target |
+|---|---|
+| `grid, row, col` | grid cell `row`, `col` |
+| `stack, index` | stack slot `index` |
+
+plus the usual optional `speed, accel, decel` and tool offset `tx…trz`. The cell resolves exactly
+as a program's grid / stack move with no per-step local: `MoveTargetResolver.GridCell` /
+`StackSlot` (base point + offsets, grid rotation about the base Z, the base point's rx/ry/rz),
+then the **active local** frame, with the **active tool**. It is checked before anything is
+queued and refused with `{ ok:false, error, message }`:
+
+| `error` | When |
+|---|---|
+| `estopActive` / `estopLatched` | the e-stop gate (as every `Move…`) |
+| `pointNotFound` | no grid / stack with that id, or its base point is missing |
+| `indexOutOfRange` | a negative index, or one past `rowCount` / `colCount` / `maxCount` (unlimited directions take any index ≥ 0) |
+| `badParams` | `grid` without both `row` and `col`, or `stack` without `index` |
+| `outOfReach` | the reach pre-check (as program moves): no IK solution or a joint outside its soft limits at the cell — for `MoveL` also along the line from the live position |
+
+On success the ACK adds `resolvedBy: "controller"`, `cell` (`{ grid, row, col }` /
+`{ stack, index }`) and `target: { x, y, z, rx, ry, rz }` (world frame), and the move is queued
+as that raw vector. The grid / stack target takes precedence over `name` and `x…rz`, so a
+client can also send its own resolved `x…rz`: an older controller ignores the unknown fields and
+moves there, and the missing `resolvedBy` in its ACK tells the client which path ran.
 
 | Command | Params | Description |
 |---|---|---|
@@ -194,6 +257,16 @@ move targets (a `MoveL`/`MoveJ` `name` can be a grid/stack cell reference).
 | `ParseProgramText` | `text, base?, validate?` (default true) | `{ ok, program?, problems: [{ line, col, endLine, endCol, severity, code, message, stepId?, field?, source }], map }`. `ok` (the text parsed) replaces the ack's own `ok`: read problems even when it is false. `base` keeps its metadata and step ids. |
 | `EvaluateExpression` | `expression, programName?` | `{ ok, value, error?, isBoolean, code?, position? }`. Plugin functions (`scale.tare()`) and properties (`$scale.weight`) evaluate live. |
 | `GetExpressionSymbols` | `programName?` | `{ variables, properties, functions, io, plugins }`. Plugin functions are listed in `functions` as `{ name: "scale.tare", signature, description, pluginId }` and plugin properties in `properties` as `{ name: "scale.weight", description, type, pluginId, value }` (`value` null until known). `plugins: [{ id, name, running, functions: [{ name, fullName, signature, description, minArgs, maxArgs, timeoutMs }], properties: [{ name, fullName, description, type, value }] }]` — bare manifest names plus `fullName`. Additive: older clients ignore it. |
+
+**Motion additions (additive).** `GetStepCatalog` lists the step type `MoveJoints` (alias
+`MoveAbsJ`; fields `jointsExpr`, `j1`…`j4`, `speed/accel/decel`, `motionProfile`, stop
+condition), the field `motionProfile` on MoveL / MoveJ / JumpL / JumpJ, the SavePosition source
+`joints`, and the catchable error code `outOfReach` in `errorCodes` (a move target, a MoveJoints
+target or a `jointsOf()` point the robot cannot reach — checked before the move starts).
+`GetExpressionSymbols` / `EvaluateExpression` gain the functions `reachable(point[, tool][, local])`,
+`jointsOf(point[, tool][, local])` and `poseOf(joints[, tool][, local])`
+([`expressions-and-variables.md`](expressions-and-variables.md) §2). No new commands: MoveJoints
+is a program step only.
 
 ### Revision history
 
@@ -283,12 +356,59 @@ Default `deviceId` is `AUX_STEPPER_001`; `axis` is the channel index (0–3).
 | `JogAux` | `deviceId?, axis, velocity, accel=10000, decel=10000` | Continuous jog at `velocity` steps/s (sign = direction); `velocity: 0` stops. |
 | `StopAux` | `deviceId?, axis?, decel=10000, immediate=false` | Stop an axis (or all); `immediate` halts without a decel ramp. |
 | `EnableAux` | `deviceId?, enable=true` | Enable/disable the stepper drivers. |
-| `SetAuxAxisConfig` | `deviceId?, axisIndex, name, stepsPerRev=1600, invertDirection, axisType, gearRatio=1, mmPerRev` | Configure an aux channel's physical units. |
-| `GetAuxState` | — | Returns per-device live state (`state` JSON): `connected, motorEnabled, deviceId, deviceName, portName, firmwareVersion, capabilities, axes[]`. See [Arduino firmware handshake](#arduino-firmware-handshake--capabilities). |
+| `SetAuxAxisConfig` | `deviceId?, axisIndex, name, stepsPerRev=1600, invertDirection, axisType, gearRatio=1, mmPerRev, role, …` | Configure an aux channel's physical units and role. Silo fields `siloPitchMm, siloCapacity, siloClearanceMm, siloHomeOverTravelMm, siloHomeSpeed` keep their stored value when left out; `siloCount` is never set here (`SiloAction SetCount`). |
+| `GetAuxState` | — | Returns per-device live state (`state` JSON): `connected, motorEnabled, deviceId, deviceName, portName, firmwareVersion, capabilities, axes[]` (each axis also carries the silo fields, `siloCount` and the runtime `siloHomed`). See [Arduino firmware handshake](#arduino-firmware-handshake--capabilities). |
 | `GetAuxConfig` | — | Returns aux configuration (`config` JSON). |
+| `SiloAction` | `deviceId, axis, action, count?` | Silo-role axis ([aux-silo.md](aux-silo.md)). `action`: `Home` \| `Present` \| `Refill` \| `SetCount` (`count`, clamped to 0…capacity). **Acks at once** (like `MoveAux` / `Home` — a socket runs its commands one at a time, so a waiting ack would hold back a `StopAux`): `{ siloCount, siloHomed, moving }`. When `moving`, the finish (Home/Refill: zero + homed; Present: `siloCount − 1`) runs when the lift stops — watch `GetAuxState`. A move stopped part-way is not finished. Refused with `error`: `siloNotHomed`, `siloEmpty` (Present) or `siloConfig` (not a usable silo axis / unknown action). |
 
 `MoveAux`/`JogAux` are refused (ack error) on a board whose firmware reports no `stepper`
 capability — see the handshake section below.
+
+---
+
+## Conveyors (conveyor tracking)
+
+Configured belts the robot can track parts on — the full contract (model, travel sources,
+motion integration, calibration) is [conveyor-tracking.md](conveyor-tracking.md). Conveyors
+are stored in `conveyors.json` and linked by their stable `id` (letters, digits and `_` only,
+generated as `c` + 12 hex digits, so it can be written in `$conveyor.<id>.…`). A command naming
+an unknown `id` acks `ok: false` with `error: "Conveyor not found: …"`.
+
+| Command | Params | Result |
+|---|---|---|
+| `GetConveyors` | — | `{ conveyors: Conveyor[] }` (sorted by name) |
+| `SaveConveyor` | `conveyor` — the whole object; `id` empty → new | `{ conveyor }` as stored (with its id). A bad config acks `ok: false` with the reason. Changing `source` or `scale` clears that conveyor's queue. |
+| `DeleteConveyor` | `id` | — |
+| `ConveyorAddPart` | `id, offsetMm` | `{ partId }` — a part at conveyor X = `offsetMm` now |
+| `ConveyorClearQueue` | `id` | — (a tracked part of it stops being tracked) |
+| `ConveyorSetTravel` | `id, travelMm` | — (`manual` source only; else `ok: false`) |
+| `ConveyorSample` | `id` | `{ x, y, z, rz, travelMm }` — the live TCP and the belt travel now (a calibration sample) |
+| `ConveyorCalibrate` | `id, samples: [{x, y, z, travelMm}, …]` (≥ 2, the same belt mark, in the order taken), optional `sensorSample: {x, y, z, travelMm, latchTravelMm}` | `{ frame: {x, y, z, rz}, scale, sensorOffsetMm, residualMm }` — a proposal, **not saved** (`sensorOffsetMm` null without a sensor sample; `residualMm` = the largest distance of a sample from the fitted belt line) |
+
+`Conveyor`:
+
+```jsonc
+{
+  "id": "c3fa9b1e2c4d", "name": "Conveyor 1",
+  "source": { "kind": "aux|timed|manual", "deviceId": "uno-1", "axis": 0, "mmPerStep": null,
+              "runOutput": { "outputCard": "stb|relay|io", "outputDeviceId": null, "outputNumber": 1 },
+              "speedMmS": 0 },
+  "scale": 1.0,
+  "frame": { "x": 0, "y": 0, "z": 0, "rz": 0 },
+  "sensor": { "kind": "none|auxPin|io|stb", "deviceId": null, "pin": null, "input": null,
+              "activeHigh": false, "offsetMm": 0, "minSpacingMm": 10 },
+  "window": { "startMm": 0, "endMm": 300 },
+  "maxQueue": 32,
+  "lastUpdatedUnixMs": 0
+}
+```
+
+**`GetStatus` → `conveyors`**: one entry per conveyor, rebuilt at most every 100 ms:
+`{ id, travelMm, speedMmS, running, tracking, trackedPartId, parts: [{ id, x, travelAtLatch }],
+latched, picked, missed, lastLatchTravelMm, sourceOk }` — `parts` are the queued parts oldest
+first (released parts left out), capped at 16; `x` is the part's X in the conveyor frame now;
+`lastLatchTravelMm` is the travel at the last sensor latch (what the calibration wizard's sensor
+step sends as `latchTravelMm`); `sourceOk` is false while an aux source is not reporting.
 
 ---
 
@@ -298,10 +418,10 @@ capability — see the handshake section below.
 |---|---|---|
 | `SetSTBOutput` | `pin, value` | Set an STB digital output (pins 1–4). |
 | `GetIO` | — | Returns IO device states (`ioDevices` JSON: one row per Nano **and** per aux-stepper board, each `id, name, connected, firmwareVersion, capabilities, pins[]` — an aux board is listed even with no pins yet) and relay state (`relay`). The same `ioDevices` string rides in every `GetStatus` broadcast. |
-| `SetNanoOutput` | `nanoId, pin, value` | Set a Nano output pin. |
+| `SetIoOutput` | `deviceId, pin, value` | Set an IO device output pin (Nano or Uno). |
 | `SetNeoPixel` | `nanoId, pin, colors: [{r,g,b}, …]` | Set a NeoPixel strip's colors (one entry per pixel). |
-| `RenameNanoPin` | `nanoId, pin, name` | Give a Nano pin a friendly name. |
-| `ConfigureNanoPin` | `nanoId, pin, type` (`Input`/`Output`/`Neopixel`/`Unconfigured`), `pixelCount=8` | Set a Nano pin's mode. |
+| `RenameIoPin` | `deviceId, pin, name` | Give an IO device pin a friendly name. |
+| `ConfigureIoPin` | `deviceId, pin, type` (`Input`/`Output`/`Latch`/`Neopixel`/`Unconfigured`), `pixelCount=8` | Set an IO device pin's mode. `Latch` (Uno firmware with the `latch` cap) is an input that reports edges with the motor positions at the edge; `Neopixel` is Nano only. |
 | `SetRelay` | `relay` (1–4), `value` | Set a USB relay channel. |
 | `RenameRelay` | `relay` (1–4), `name` | Name a relay channel. |
 | `GetRelayState` | — | Returns relay board state (`connected, serial, relays[], names[]`). |
@@ -567,6 +687,91 @@ HTTP:
 - `GET /plugins/{id}/download` — the plugin folder as a zip (without `.venv`
   and `plugin.log*`).
 - `GET /plugin` — the WebSocket plugins connect to (not for apps).
+
+---
+
+## Safety & alarms
+
+### Emergency stop
+
+The hardwired e-stop sense input — wiring, states and the recovery sequence are in
+[estop.md](estop.md). **Not a certified safety function.**
+
+| Command | Params | Description |
+|---|---|---|
+| `GetEstopConfig` | — | `{ config, state }`. `config`: `enabled` (default false), `source` (`"stb"` \| `"io"`), `stbInput` (1–4, default 4), `deviceId` + `pin` (an IO board or aux board pin, by stable device id), `polarity` (`"normallyClosed"` default \| `"normallyOpen"`). `state`: `enabled, active, latched, sourceOnline, input` (the raw level, null when offline), `inputHealthy` (null when off/offline), `source` (label), `reason`, `trippedUnixMs`. Reads the input fresh. |
+| `SetEstopConfig` | any subset of the `config` fields | Patch, validated as a whole (`badConfig` + `message` on a bad field; an enabled `io` source needs `deviceId` and `pin`). Saved in `robot-config.json` under `estop`; `ResetRobotConfig` keeps it. Returns `{ ok, config, state }`. |
+| `ResetEstop` | — | Clears the latch once the input reads healthy (or monitoring is off): `{ ok, state, message }`. Otherwise `{ ok:false, error:"estopNotHealthy", message, state }`. Home the robot afterwards — a trip marks every joint unreferenced. |
+
+While `estopActive` or `estopLatched`, these are refused with `error: "estopActive"` /
+`"estopLatched"` and a `message`: every command starting with `Move` or `Jog` (MoveL, MoveJ,
+JogL/J/Tool, MoveAux, JogAux, …), `OffsetL`, `StartContinuous`, `Home`, `SetHomed`,
+`SetJointPosition`, `ExecuteBuiltProgram`, `StartBackgroundProgram`, `StartProgram`,
+`StepBuiltProgram`, `RunPluginStep`, `SiloAction`. On a trip the controller hard-stops, ends every program with
+the uncatchable `emergencyStop` error, marks the robot unhomed, publishes the `robot.estop` plugin
+event `{ active, latched, reason, source }` (again on reset) and raises an `emergencyStop` alarm.
+
+### Alarms
+
+Each alarm: `id, code, severity` (`critical` \| `error` \| `warning` \| `info`), `title`, `message`,
+`source { programId?, programName?, stepId?, deviceId?, pluginId?, background? }`,
+`timestampUnixMs`, `acknowledged`, `acknowledgedUnixMs`, `cleared` (the condition has gone),
+`clearedUnixMs`, `active`. An alarm is **active** until it is both cleared and acknowledged; a
+program error has no lasting condition, so it is raised cleared and is active until acknowledged.
+
+Raised for: program errors (foreground and background, with the program's stable id and the
+failing step id; the code is the program's error code, or `programError`), joint-limit faults
+(`jointLimit`, cleared with the fault), the e-stop (`emergencyStop`, cleared by `ResetEstop`), the
+motor driver disconnecting (`driverDisconnected`), an IO or aux board disconnecting
+(`deviceDisconnected`, cleared when it reconnects; only devices that had connected), and a plugin
+crash (`pluginCrashed`, cleared when it runs again or is stopped).
+
+The history holds the newest 500 alarms (an alarm whose condition is still present is never
+dropped) in `alarms.json` in the data folder, written on the thread pool shortly after a change.
+
+| Command | Params | Description |
+|---|---|---|
+| `GetAlarmCatalog` | — | `{ alarms: [{ code, title, severity, cause, remedy, catchable }] }` — help for every program error code plus `deviceDisconnected`, `pluginCrashed`, `programError`. The one place the help text lives. |
+| `GetAlarms` | `offset?` (0), `limit?` (50), `activeOnly?` | `{ total, activeCount, offset, lastAlarmUpdate, alarms }` — active alarms first (most severe, then newest), then the rest newest first. |
+| `AcknowledgeAlarm` | `id`, or none / `all: true` for every alarm | `{ ok, acknowledged, activeCount }`; `unknownAlarm` for a bad id. |
+| `ClearAlarms` | — | Removes every alarm whose condition has gone (acknowledged or not); alarms still present stay. `{ ok, removed, remaining, activeCount }`. |
+
+`GetStatus` carries `activeAlarmCount` and `lastAlarmUpdate` (refetch `GetAlarms` when it changes).
+
+---
+
+## Backup & restore
+
+One zip of the data folder's **user data**: programs (with revisions and images), points, tools,
+locals, grids, stacks (with their history files), robot config, IO device / aux / relay / camera /
+phone-device config, vision programs, camera calibrations, cell packages, persistent variables,
+plugin configs and DXF files. Never included: caches, logs, IO history samples, the alarm log,
+`identity.json` (a restore never changes the robot's serial or name) and plugin binaries —
+`manifest.json` lists the installed plugins instead. Both routes send
+`Access-Control-Allow-Origin: *` (on errors too) and answer `OPTIONS` preflights, like `/cells`.
+
+- `GET /backup` — the zip (`application/zip`, `Content-Disposition: attachment;
+  filename="<robot>-backup-<yyyyMMdd-HHmmss>.zip"`). `manifest.json`: `format`
+  (`"rms-controller-backup"`), `formatVersion` (1), `controllerVersion`, `robotType`, `robotName`,
+  `serialNumber`, `createdUnixMs`, `createdUtc`, `plugins: [{ id, name, version }]`, `files`.
+- `POST /backup/restore` — raw zip body (≤ 500 MB). Validates the manifest and every entry path
+  (absolute paths, drive letters, `..` or empty segments refuse the whole zip:
+  `400 { error: "unsafePath" }`; also `badZip`, `badManifest`, `413 tooLarge`) and returns
+  `{ ok, applied: false, preview }` — `preview`: `manifest`, `categories: [{ key, label, current,
+  backup }]` (item counts now and in the backup), `missingPlugins`, `warnings` (another
+  controller's serial, another robot type, plugin version differences, ignored files),
+  `fileCount`, `totalBytes`. Nothing changes.
+- `POST /backup/restore?apply=true` — the same validation, then: refused with `409 { error:
+  "busy" }` while a program (foreground or background) is running or the robot or an aux axis is
+  moving or homing, and with `409 { error: "restoring" }` once a restore has been applied; writes a pre-restore backup to `backups/pre-restore-<stamp>.zip` (the newest 5
+  are kept); extracts to a staging folder and swaps each allowlisted file and folder in (an
+  allowlisted item the backup does not have is removed, so the data matches the backup; rolled back
+  on failure). Returns `{ ok, applied: true, preview, filesWritten, preRestoreBackup, restarting:
+  true }`, then **restarts the controller** (the same helper as `RestartController`; under systemd it
+  exits and the service restarts it). Every repository, device manager and plugin then loads the
+  restored data exactly as at boot — chosen over reloading each repository live, which would leave
+  device managers, plugins and cached state half old, half new. Between the reply and the restart
+  only `Get*` commands are served (`error: "restoring"`). Re-home after the restart.
 
 ---
 

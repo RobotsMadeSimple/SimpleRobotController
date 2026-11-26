@@ -10,6 +10,8 @@ using SimpleRobot.PluginSdk;
 // drives the arm. See docs/plugins.md and CheckersServer/checkers.py (the engine
 // this is ported from).
 
+if (args.Length > 0 && args[0] == "--selftest") return CheckersSelfTest.Run();
+
 var game = new Game();
 var plugin = new PluginHost();   // reads SRC_PLUGIN_* from the environment (set by the controller)
 
@@ -35,20 +37,37 @@ plugin.Step("newGame", (ctx, p) =>
 {
     string side = p.GetString("firstPlayer", "black");
     var result = game.NewGame(side);
-    game.PublishProperties(ctx);
+    game.Publish(ctx);
     ctx.Log(result["moveText"]?.ToString() ?? "new game");
     return Task.FromResult(result);
 });
 
 // Load an externally-observed board (e.g. from the vision pipeline) as the truth,
-// replacing the tracked game. Lists are 32-element boolean (or 0/1) arrays.
+// replacing the tracked game. Lists are 32-element boolean (or 0/1) arrays — or, given
+// whiteCells/blackCells, a camera reading (the same params as detectMove), read as men.
+// A camera reading can be held back while something is over the board:
+//   maxStrayCells — pieces only sit on dark squares, so light squares showing something are a
+//                   hand (or arm) in view: more than this many beyond the few the loaded board
+//                   itself lights (pieces spill into their neighbours); -1 (default) = don't check.
+//   settleReads   — only load a reading once this many reads in a row agree (default 1),
+//                   so a hand moving over the board never lands on it.
+// Outputs applied (loaded this read), blocked (held back: something over the board),
+// strayCells and steadyReads; whiteCount/blackCount are always the board as loaded.
 plugin.Step("setBoard", (ctx, p) =>
 {
-    var result = game.SetBoard(
-        ReadBoolList(p, "white"), ReadBoolList(p, "black"),
-        ReadBoolList(p, "whiteKings"), ReadBoolList(p, "blackKings"),
-        p.GetString("turn", "black"));
-    game.PublishProperties(ctx);
+    var turn = p.GetString("turn", "black");
+    StepResult result;
+    if (p.Has("whiteCells") || p.Has("blackCells"))
+    {
+        var (white, black, turns) = ReadCamera(p);
+        result = game.SetBoardFromCamera(white, black, turns, turn,
+            p.GetInt("settleReads", 1), p.GetInt("maxStrayCells", -1));
+    }
+    else
+        result = game.SetBoard(
+            ReadBoolList(p, "white"), ReadBoolList(p, "black"),
+            ReadBoolList(p, "whiteKings"), ReadBoolList(p, "blackKings"), turn);
+    game.Publish(ctx);
     return Task.FromResult(result);
 });
 
@@ -58,7 +77,7 @@ plugin.Step("setBoard", (ctx, p) =>
 plugin.Step("applyMove", (ctx, p) =>
 {
     var result = game.ApplyHumanMove(p.GetInt("from", -1), p.GetInt("to", -1));
-    game.PublishProperties(ctx);
+    game.Publish(ctx);
     return Task.FromResult(result);
 });
 
@@ -66,29 +85,17 @@ plugin.Step("applyMove", (ctx, p) =>
 // human (the side to move) made, without applying it. whiteCells/blackCells are the
 // per-cell results of a vision tool gridded 8x8 (RunVision cells records with
 // row/col/index/value/passed, or plain numbers / booleans, row-major).
-// status: "same" (board unchanged), "move" (matches exactly one legal move's result
-// — from/to/captured are set; confirm it over a few reads, then applyMove), or
-// "unclear" (changed but matches no legal move: mid-move, a hand over the board, a
-// captured piece not yet removed, or an illegal move).
+// status: "same" (board unchanged), "move" (matches exactly one legal move — from/to/captured
+// are set; confirm it over a few reads, then applyMove; a jump is also matched when its captured
+// pieces are still on the board, so the robot can clear them afterwards), or "unclear" (changed
+// but matches no single legal move: mid-move, a hand over the board, or an illegal move).
 // orientation: where black's side (board row 0) is in the camera grid — normal (top),
 // rotated90 (right), rotated180 (bottom), rotated270 (left).
 // bothMeans: what a cell that reads as both colours is — "white" (default: black pieces
 // found by their texture, which white pieces also have), "black", or "neither".
 plugin.Step("detectMove", (ctx, p) =>
 {
-    double minCoverage = p.GetDouble("minCoverage", 0);   // 0 = use each tool's own pass/fail
-    var white = ReadCells(p, "whiteCells", minCoverage);
-    var black = ReadCells(p, "blackCells", minCoverage);
-    int turns = p.GetString("orientation", "normal").Trim().ToLowerInvariant() switch
-    {
-        "rotated90" => 1, "rotated180" => 2, "rotated270" => 3, _ => 0,
-    };
-    switch (p.GetString("bothMeans", "white").Trim().ToLowerInvariant())
-    {
-        case "black":   for (int i = 0; i < 64; i++) if (black[i]) white[i] = false; break;
-        case "neither": for (int i = 0; i < 64; i++) if (white[i] && black[i]) white[i] = black[i] = false; break;
-        default:        for (int i = 0; i < 64; i++) if (white[i]) black[i] = false; break;
-    }
+    var (white, black, turns) = ReadCamera(p);
     return Task.FromResult(game.DetectMove(white, black, turns));
 });
 
@@ -103,7 +110,7 @@ plugin.Step("aiMove", async (ctx, p) =>
     // The search is CPU-bound; run it off the request-dispatch thread so progress
     // and cancellation stay responsive.
     var result = await Task.Run(() => game.AiMove(depth, budget));
-    game.PublishProperties(ctx);
+    game.Publish(ctx);
     ctx.Log(result["moveText"]?.ToString() ?? "ai move");
     return result;
 });
@@ -155,6 +162,7 @@ plugin.Background(async (ctx, ct) =>
 });
 
 await plugin.RunAsync();
+return 0;
 
 // Reads an int field from a UI-action args object, tolerating numeric strings.
 static int ReadInt(JsonElement args, string key, int fallback)
@@ -191,6 +199,27 @@ static bool[] ReadBoolList(StepParams p, string key)
         };
     }
     return outList;
+}
+
+// The camera params detectMove and setBoard share: whiteCells/blackCells (8x8 vision cells),
+// minCoverage, orientation (where black's side is in the camera grid) and bothMeans (what a
+// cell read as both colours is). Returns the per-cell colours with bothMeans resolved.
+static (bool[] White, bool[] Black, int QuarterTurns) ReadCamera(StepParams p)
+{
+    double minCoverage = p.GetDouble("minCoverage", 0);   // 0 = use each tool's own pass/fail
+    var white = ReadCells(p, "whiteCells", minCoverage);
+    var black = ReadCells(p, "blackCells", minCoverage);
+    int turns = p.GetString("orientation", "normal").Trim().ToLowerInvariant() switch
+    {
+        "rotated90" => 1, "rotated180" => 2, "rotated270" => 3, _ => 0,
+    };
+    switch (p.GetString("bothMeans", "white").Trim().ToLowerInvariant())
+    {
+        case "black":   for (int i = 0; i < 64; i++) if (black[i]) white[i] = false; break;
+        case "neither": for (int i = 0; i < 64; i++) if (white[i] && black[i]) white[i] = black[i] = false; break;
+        default:        for (int i = 0; i < 64; i++) if (white[i]) black[i] = false; break;
+    }
+    return (white, black, turns);
 }
 
 // Reads an 8x8 row-major cell list into "occupied" per 8x8 cell index. A record cell
@@ -296,6 +325,87 @@ sealed class Game
         }
     }
 
+    /// <summary>SetBoard from a camera reading: per-cell colours of the 8x8 camera grid (bothMeans
+    /// already resolved), mapped to the 32 dark squares. The camera cannot tell kings, so all are men.
+    /// The reading is held back (the board keeps its last one) while more than maxStray light squares
+    /// show something — a hand over the board — or until settleReads reads in a row agree.</summary>
+    public StepResult SetBoardFromCamera(bool[] whiteCells, bool[] blackCells, int quarterTurns, string turn,
+        int settleReads = 1, int maxStray = -1)
+    {
+        var white = new bool[CheckersEngine.BoardSquares];
+        var black = new bool[CheckersEngine.BoardSquares];
+        uint seenW = 0, seenB = 0;
+        for (int sq = 0; sq < CheckersEngine.BoardSquares; sq++)
+        {
+            var (r, c) = CameraCell(CheckersEngine.IdxToRc(sq), quarterTurns);
+            white[sq] = whiteCells[r * 8 + c];
+            black[sq] = blackCells[r * 8 + c] && !white[sq];
+            if (white[sq]) seenW |= 1u << sq;
+            if (black[sq]) seenB |= 1u << sq;
+        }
+        int stray = 0;
+        for (int r = 0; r < 8; r++)
+            for (int c = 0; c < 8; c++)
+            {
+                if ((r + c) % 2 != 0) continue;   // dark square: pieces belong there
+                var (cr, cc) = CameraCell((r, c), quarterTurns);
+                if (whiteCells[cr * 8 + cc] || blackCells[cr * 8 + cc]) stray++;
+            }
+
+        bool blocked, apply;
+        int steady;
+        lock (_gate)
+        {
+            // Pieces spill into the light squares beside them (perspective, tall white pieces), so
+            // a hand is light squares lit beyond what the loaded board itself showed.
+            blocked = maxStray >= 0 && _baseStray >= 0 && stray > _baseStray + maxStray;
+            if (blocked) _steadyReads = 0;
+            else if (_steadyReads > 0 && seenW == _steadyW && seenB == _steadyB) _steadyReads++;
+            else { _steadyW = seenW; _steadyB = seenB; _steadyReads = 1; }
+            steady = _steadyReads;
+            // A reading of the board already loaded has nothing to confirm.
+            bool same = seenW == _board.White && seenB == _board.Black;
+            apply = !blocked && (same || steady >= Math.Max(1, settleReads));
+            // A new board resets the spill baseline; the same board only ever lowers it, so a hand
+            // creeping in a square or two per read can't raise it.
+            if (apply) _baseStray = same && _baseStray >= 0 ? Math.Min(_baseStray, stray) : stray;
+        }
+
+        StepResult result;
+        if (apply)
+        {
+            var none = new bool[CheckersEngine.BoardSquares];
+            result = SetBoard(white, black, none, none, turn);
+            lock (_gate) _moveText = $"Camera sees {result["whiteCount"]} white, {result["blackCount"]} black ({DateTime.Now:HH:mm:ss})";
+        }
+        else
+        {
+            lock (_gate)
+            {
+                _moveText = blocked
+                    ? "Hand over the board — waiting for it to clear"
+                    : $"Board changed — checking ({steady}/{settleReads})";
+                result = new StepResult
+                {
+                    ["whiteCount"] = (double)CheckersEngine.PopCount(_board.White),
+                    ["blackCount"] = (double)CheckersEngine.PopCount(_board.Black),
+                    ["turn"] = (double)(int)_turn,
+                };
+            }
+        }
+        result["applied"] = apply;
+        result["blocked"] = blocked;
+        result["strayCells"] = (double)stray;
+        result["steadyReads"] = (double)steady;
+        return result;
+    }
+
+    // The camera reading setBoard is waiting to see repeat (settleReads), and how often it has.
+    private uint _steadyW, _steadyB;
+    private int _steadyReads;
+    // Light squares lit when the board was loaded (piece spill); -1 = nothing loaded from the camera yet.
+    private int _baseStray = -1;
+
     public StepResult ApplyHumanMove(int from, int to)
     {
         lock (_gate)
@@ -353,11 +463,31 @@ sealed class Game
                 result["moveText"] = "Board unchanged";
                 return result;
             }
-            var match = CheckersEngine.LegalMoves(_board, _turn).FirstOrDefault(m =>
+            var legal = CheckersEngine.LegalMoves(_board, _turn);
+            // Exact: the board already shows the move's result (any jumped pieces removed).
+            var match = legal.FirstOrDefault(m =>
             {
                 var after = CheckersEngine.ApplyMove(_board, _turn, m);
                 return after.White == seenW && after.Black == seenB;
             });
+            // Lenient: a jump whose captured pieces are still on the board — the robot clears them
+            // afterwards. The mover's pieces must match exactly, every surviving foe piece must be
+            // present, and any extra foe pieces must sit exactly on this move's captured squares.
+            // Accepted only when a single legal jump fits, so it never guesses between two moves.
+            if (match == null)
+            {
+                var fits = legal.Where(m =>
+                {
+                    if (m.Captures.Length == 0) return false;   // only jumps leave extra pieces
+                    var after = CheckersEngine.ApplyMove(_board, _turn, m);
+                    uint capMask = 0;
+                    foreach (var cap in m.Captures) capMask |= 1u << cap;
+                    return _turn == Side.White
+                        ? seenW == after.White && (after.Black & ~seenB) == 0 && (seenB & ~after.Black & ~capMask) == 0
+                        : seenB == after.Black && (after.White & ~seenW) == 0 && (seenW & ~after.White & ~capMask) == 0;
+                }).ToList();
+                if (fits.Count == 1) match = fits[0];
+            }
             if (match == null)
             {
                 result["status"] = "unclear";
@@ -585,4 +715,42 @@ sealed class Game
     };
 
     private static string Name(Side s) => s == Side.White ? "white" : "black";
+}
+
+// Offline check of DetectMove's two match tiers (run: Checkers.exe --selftest). White (to move)
+// has a single forced jump 16->9 over the black man at 13. Verifies the jump is recognised both
+// when the captured piece has been removed (exact) and when it is still on the board (lenient —
+// the robot clears it afterwards), and that an unchanged board still reads "same".
+static class CheckersSelfTest
+{
+    static bool[] Men(params int[] sq)   { var a = new bool[32]; foreach (var s in sq) a[s] = true; return a; }
+    static bool[] Cells(params int[] sq) { var a = new bool[64]; foreach (var s in sq) { var (r, c) = CheckersEngine.IdxToRc(s); a[r * 8 + c] = true; } return a; }
+
+    public static int Run()
+    {
+        int fails = 0;
+        void Check(bool ok, string name) { Console.WriteLine((ok ? "ok   " : "FAIL ") + name); if (!ok) fails++; }
+        string? Status(StepResult r) => r["status"] as string;
+
+        var g = new Game();
+
+        // Jump played, captured black (13) still physically on the board.
+        g.SetBoard(Men(16), Men(13), new bool[32], new bool[32], "white");
+        var left = g.DetectMove(Cells(9), Cells(13), 0);
+        var cap  = (double[])left["captured"]!;
+        Check(Status(left) == "move" && (double)left["from"]! == 16 && (double)left["to"]! == 9, "jump detected with captured piece still on the board");
+        Check(cap.Length == 1 && cap[0] == 13, "captured square reported (13)");
+
+        // Same jump, captured piece already removed (the exact match).
+        g.SetBoard(Men(16), Men(13), new bool[32], new bool[32], "white");
+        var gone = g.DetectMove(Cells(9), Cells(), 0);
+        Check(Status(gone) == "move" && (double)gone["to"]! == 9, "jump detected with captured piece removed");
+
+        // Nothing moved.
+        g.SetBoard(Men(16), Men(13), new bool[32], new bool[32], "white");
+        Check(Status(g.DetectMove(Cells(16), Cells(13), 0)) == "same", "unchanged board reads same");
+
+        Console.WriteLine(fails == 0 ? "SELFTEST PASS" : $"SELFTEST FAIL ({fails})");
+        return fails == 0 ? 0 : 1;
+    }
 }

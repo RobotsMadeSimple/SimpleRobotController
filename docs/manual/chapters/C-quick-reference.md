@@ -35,10 +35,16 @@ status "Done: {$count}"
 | `JumpL grid Tray[$r, $c], z=40` | to a grid cell (`Tray[$n]` by index) |
 | `MoveL stack Bins[$i]` | to a stack slot |
 | `MoveC Place1, via=Via1` | arc through a via point |
+| `MoveJoints j1=90, j2=250, j3=120, j4=0` | to joint values (`MoveAbsJ`) |
+| `MoveJoints $home[0], j4=45` | to a saved joints value, one joint changed |
+| `MoveL Pick1, profile=scurve` | jerk-limited (S-curve) speed profile |
+| `if reachable($pts[$i])` … `end` | only when the robot can reach it |
+| `$j2 = jointsOf("Pick").j2` / `poseOf($home[0]).z` | joints of a point / pose of joints |
 | `MoveL Pick1, until=$stb.in2, untilFlag=$hit` | stop when an input comes on |
 | `SetSpeedFactor 25` | this program at 25 % |
 | `SetLocal Fixture1` … `ClearLocal` | work in a local frame |
 | `SavePosition $pts, mode=append` | remember where the robot is |
+| `SavePosition $home, source=joints` | remember the joint values |
 
 ## Card 3 — Flow
 
@@ -96,4 +102,4 @@ call PickPart(slot=$i), out picked=$ok
 
 | Catchable | Fatal |
 |---|---|
-| `waitTimeout` · `visionTimeout` · `visionFailed` · `httpFailed` · `httpTimeout` · `receiveTimeout` · `pluginFailed` · `pluginTimeout` · `pluginNotRunning` · `promptTimeout` · `pointNotFound` · `arcDegenerate` · `indexOutOfRange` · `userError` · your own `raise` codes | `motionFault` · `jointLimit` · `driverDisconnected` · `emergencyStop` · `userStop` · `unknownVariable` · `expressionSyntax` · `computedVariable` · `badListOperation` |
+| `waitTimeout` · `visionTimeout` · `visionFailed` · `httpFailed` · `httpTimeout` · `receiveTimeout` · `pluginFailed` · `pluginTimeout` · `pluginNotRunning` · `promptTimeout` · `pointNotFound` · `arcDegenerate` · `indexOutOfRange` · `outOfReach` · `userError` · your own `raise` codes | `motionFault` · `jointLimit` · `driverDisconnected` · `emergencyStop` · `userStop` · `unknownVariable` · `expressionSyntax` · `computedVariable` · `badListOperation` |

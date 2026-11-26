@@ -3,9 +3,49 @@ using Controller.RobotControl.Persistence;
 
 namespace Controller.RobotControl.Execution
 {
-    /// <summary>The saved geometry a move target can reference.</summary>
+    /// <summary>The saved geometry a move target can reference. <see cref="Points"/> is the global
+    /// point repository (the write side — SavePosition saves there); <see cref="PointReader"/> is the
+    /// read side used to RESOLVE a target: a per-program composite (the running program's own points
+    /// over the global library), so a step can target either. Outside a program both are the repo.</summary>
     internal readonly record struct MoveTargetSources(
-        PointRepository Points, GridRepository Grids, StackRepository Stacks, LocalRepository Locals);
+        PointRepository Points, IPointLookup PointReader, GridRepository Grids, StackRepository Stacks, LocalRepository Locals);
+
+    /// <summary>
+    /// A point source that checks the currently-running program's own points first (by stable id,
+    /// then name — same id-over-name rule as elsewhere) and falls back to the global library.
+    /// The program points are read through a delegate so the executor can supply whichever program
+    /// owns the step being run (the nearest routine on the frame stack, else the top-level program).
+    /// </summary>
+    internal sealed class CompositePointLookup : IPointLookup
+    {
+        private readonly Func<IReadOnlyList<Point>?> _programPoints;
+        private readonly IPointLookup _global;
+
+        public CompositePointLookup(Func<IReadOnlyList<Point>?> programPoints, IPointLookup global)
+        {
+            _programPoints = programPoints;
+            _global        = global;
+        }
+
+        public Point? GetById(string? id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            var local = _programPoints();
+            if (local != null)
+                foreach (var p in local)
+                    if (p.Id == id) return p;
+            return _global.GetById(id);
+        }
+
+        public Point? Get(string name)
+        {
+            var local = _programPoints();
+            if (local != null)
+                foreach (var p in local)
+                    if (string.Equals(p.Name, name, StringComparison.Ordinal)) return p;
+            return _global.Get(name);
+        }
+    }
 
     /// <summary>
     /// Pure target math for move steps: base pose (grid cell, stack slot, points-list
@@ -51,7 +91,8 @@ namespace Controller.RobotControl.Execution
                 var grid = src.Grids.Get(gp.GridId);
                 if (grid == null) { error = $"Grid not found: {gp.GridId}"; return false; }
 
-                var basePoint = src.Points.Get(grid.BasePointName);
+                // Resolve the base id-first (a renamed base still works) then by name (old grids).
+                var basePoint = src.PointReader.GetById(grid.BasePointId) ?? src.PointReader.Get(grid.BasePointName);
                 if (basePoint == null) { error = $"Grid base point not found: {grid.BasePointName}"; return false; }
 
                 int row, col;
@@ -80,7 +121,7 @@ namespace Controller.RobotControl.Execution
                 var stack = src.Stacks.Get(sp.StackId);
                 if (stack == null) { error = $"Stack not found: {sp.StackId}"; return false; }
 
-                var basePoint = src.Points.Get(stack.BasePointName);
+                var basePoint = src.PointReader.Get(stack.BasePointName);
                 if (basePoint == null) { error = $"Stack base point not found: {stack.BasePointName}"; return false; }
 
                 int idx = (int)Math.Round(ev.EvalField(step, "stackIndex", sp.Index ?? 0));
@@ -121,7 +162,7 @@ namespace Controller.RobotControl.Execution
                         return false;
                     }
 
-                    var namedPoint = src.Points.Get(targetName);
+                    var namedPoint = src.PointReader.Get(targetName);
                     if (namedPoint is null)
                     {
                         error = $"Point not found: {targetName} (from '{step.PointNameExpr}')";
@@ -130,7 +171,7 @@ namespace Controller.RobotControl.Execution
                     point = namedPoint;
                 }
             }
-            else if (!string.IsNullOrEmpty(step.PointId) && src.Points.GetById(step.PointId) is { } byId)
+            else if (!string.IsNullOrEmpty(step.PointId) && src.PointReader.GetById(step.PointId) is { } byId)
             {
                 // Preferred path: resolve by stable id so a renamed point still resolves
                 // to its current coordinates. Falls through to the name path below when the
@@ -148,7 +189,7 @@ namespace Controller.RobotControl.Execution
             }
             else
             {
-                var found = src.Points.Get(step.PointName);
+                var found = src.PointReader.Get(step.PointName);
                 if (found is null)
                 {
                     error = $"Point not found: {step.PointName}";

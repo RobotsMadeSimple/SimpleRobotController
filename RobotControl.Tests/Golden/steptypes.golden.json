@@ -7,5 +7,7 @@
   "ThreadMove", "CncProgram", "SetBlendRadius", "HttpRequest", "CaptureImage", "HttpReceive",
   "Plugin", "Tare", "ReadLoadCell", "StartRecording", "StopRecording", "ExportData", "Unknown",
   "Note", "LoopControl", "Return", "EndProgram", "RaiseError", "Switch", "Try", "SavePosition",
-  "SetSpeedFactor", "ListOp", "Prompt", "MoveC"
+  "SetSpeedFactor", "ListOp", "Prompt", "MoveC", "MoveJoints",
+  "ConveyorTrack", "ConveyorEndTracking", "ConveyorAddPart", "ConveyorClearQueue",
+  "SiloAction", "SerialCommand"
 ]

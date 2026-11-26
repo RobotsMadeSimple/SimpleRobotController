@@ -1,8 +1,8 @@
-{
+﻿{
   "id": "checkers",
   "name": "Checkers Opponent",
-  "version": "1.0.0",
-  "description": "An American-checkers opponent hosted by the controller. Computes the robot's move with an alpha-beta search; no external server. Works in 0..31 square indices — the program maps a square to a physical point.",
+  "version": "1.3.1",
+  "description": "An American-checkers opponent hosted by the controller. Computes the robot's move with an alpha-beta search; no external server. Works in 0..31 square indices â€” the program maps a square to a physical point.",
   "author": "SimpleRobot",
   "protocolVersion": 1,
 
@@ -14,7 +14,13 @@
   "restart": { "mode": "always", "maxRestarts": 5, "backoffMs": 2000 },
   "readyTimeoutMs": 15000,
 
-  "ui": { "entry": "ui/index.html", "title": "Checkers board" },
+  "ui": {
+    "entry": "ui/index.html",
+    "title": "Checkers board",
+    "params": [
+      { "key": "orientation", "label": "Board view (where black's side is)", "type": "enum", "default": "normal", "options": ["normal", "rotated90", "rotated180", "rotated270"] }
+    ]
+  },
 
   "configSchema": [
     { "key": "maxDepth",     "label": "Search depth",   "type": "number", "default": 8,    "min": 1, "max": 20,    "step": 1, "help": "Maximum plies searched (higher = stronger, slower)" },
@@ -38,22 +44,33 @@
     },
     {
       "id": "setBoard",
-      "label": "Set board from lists",
-      "description": "Replace the tracked board with an observed one (e.g. from vision). Each list is 32 booleans indexed by dark-square number.",
+      "label": "Set board",
+      "description": "Replace the tracked board with an observed one. Either 32-boolean lists indexed by dark-square number, or a camera reading (White/Black cells from RunVision, read as men; these win when given).",
       "params": [
-        { "key": "white",      "label": "White men",    "type": "list" },
-        { "key": "black",      "label": "Black men",    "type": "list" },
-        { "key": "whiteKings", "label": "White kings",  "type": "list" },
-        { "key": "blackKings", "label": "Black kings",  "type": "list" },
-        { "key": "turn",       "label": "Side to move", "type": "enum", "default": "black", "options": ["black", "white"] }
+        { "key": "white",       "label": "White men",            "type": "list" },
+        { "key": "black",       "label": "Black men",            "type": "list" },
+        { "key": "whiteKings",  "label": "White kings",          "type": "list" },
+        { "key": "blackKings",  "label": "Black kings",          "type": "list" },
+        { "key": "whiteCells",  "label": "White cells (vision)", "type": "list" },
+        { "key": "blackCells",  "label": "Black cells (vision)", "type": "list" },
+        { "key": "minCoverage", "label": "Min cell value (0 = the tool's pass/fail)", "type": "number", "default": 0 },
+        { "key": "orientation", "label": "Camera grid",          "type": "enum", "default": "normal", "options": ["normal", "rotated90", "rotated180", "rotated270"] },
+        { "key": "bothMeans",   "label": "Cell read as both",    "type": "enum", "default": "white", "options": ["white", "black", "neither"] },
+        { "key": "turn",        "label": "Side to move",         "type": "enum", "default": "black", "options": ["black", "white"] },
+        { "key": "settleReads",   "label": "Reads that must agree before loading", "type": "number", "default": 1 },
+        { "key": "maxStrayCells", "label": "Extra light squares seen before it's a hand (-1 = off)", "type": "number", "default": -1 }
       ],
       "outputs": [
-        { "key": "legal",      "label": "Side has a move", "type": "boolean" },
-        { "key": "whiteCount", "label": "White pieces",    "type": "number" },
-        { "key": "blackCount", "label": "Black pieces",    "type": "number" },
-        { "key": "turn",       "label": "Side to move",    "type": "number" },
-        { "key": "gameOver",   "label": "Game over",       "type": "boolean" },
-        { "key": "winner",     "label": "Winner",          "type": "string" }
+        { "key": "legal",       "label": "Side has a move", "type": "boolean" },
+        { "key": "whiteCount",  "label": "White pieces",    "type": "number" },
+        { "key": "blackCount",  "label": "Black pieces",    "type": "number" },
+        { "key": "turn",        "label": "Side to move",    "type": "number" },
+        { "key": "gameOver",    "label": "Game over",       "type": "boolean" },
+        { "key": "winner",      "label": "Winner",          "type": "string" },
+        { "key": "applied",     "label": "Loaded this read", "type": "boolean" },
+        { "key": "blocked",     "label": "Something over the board", "type": "boolean" },
+        { "key": "strayCells",  "label": "Light squares seen", "type": "number" },
+        { "key": "steadyReads", "label": "Reads in a row that agree", "type": "number" }
       ],
       "timeoutMs": 0
     },

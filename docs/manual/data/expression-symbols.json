@@ -423,6 +423,21 @@
       "description": "1 when (x, y) is within r of (cx, cy), edge included; else 0"
     },
     {
+      "name": "reachable",
+      "signature": "reachable(point[, tool][, local])",
+      "description": "1 when the robot can reach the point — inverse kinematics solves and every joint is inside its soft limits; else 0. point: $pts[i], \"Name\", grid(\"G\", row, col), stack(\"S\", i); tool/local: a name, \"none\", or \"\" for the active one"
+    },
+    {
+      "name": "jointsOf",
+      "signature": "jointsOf(point[, tool][, local]).j1",
+      "description": "The joint values that reach the point (read one with .j1 … .j4, or store the whole value with a List step); fails with outOfReach when it cannot be reached"
+    },
+    {
+      "name": "poseOf",
+      "signature": "poseOf(joints[, tool][, local]).x",
+      "description": "The TCP pose a joints value puts the tool at — forward kinematics (read one with .x .y .z .rz); joints: $j[i] (an Objects list with j1…j4) or jointsOf(…)"
+    },
+    {
       "name": ".contains",
       "signature": "$text.contains(\"x\")",
       "description": "1 when the text contains x, else 0",
