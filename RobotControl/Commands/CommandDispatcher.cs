@@ -49,6 +49,7 @@ internal sealed class CommandDispatcher
         new RevisionCommands(robot).Register(d);
         new ProgramCycleCommands(robot, programs, executor).Register(d);
         new IoCommands(robot).Register(d);
+        new SimplePlcCommands(robot).Register(d);
         new AuxCommands(robot).Register(d);
         new CameraCommands(robot).Register(d);
         new DeviceCommands(robot).Register(d);

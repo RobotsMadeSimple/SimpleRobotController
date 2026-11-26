@@ -158,6 +158,10 @@ internal sealed class SystemCommands
             // before re-rendering so unchanging digital pins don't churn.
             ioDevices = JsonSerializer.Serialize(robot.GetAllIoStates(), CommandJson.CamelCaseWithEnums),
 
+            // SimplePLC heads (connection + slots + fault), so the IO page's PLC cards and config
+            // screen update live every poll, the same way serial/nano state does.
+            simplePlcDevices = JsonSerializer.Serialize(robot.SimplePlcManager.GetAllStates(), CommandJson.CamelCaseWithEnums),
+
             // Program cycle — the full summary now rides behind lastProgramUpdate (fetched via
             // GetPrograms), so it isn't re-sent every poll. Only a compact live block for the
             // actively-running program(s) is broadcast so the monitor view stays real-time.

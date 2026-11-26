@@ -77,12 +77,16 @@ internal sealed class IoCommands
     private void SetIoOutput(CommandMessage msg)
     {
         var p = CommandJson.LoadParams<SetIoOutputParams>(msg);
-        // Route by id: a Nano edge device, else an aux-stepper device's spare-pin IO.
+        // Route by id: a Nano edge device, a SimplePLC head, else an aux-stepper device's spare-pin IO.
         var nano = _robot.NanoManager.GetDevice(p.DeviceId);
         if (nano != null)
         {
             nano.RequireCapability(FirmwareInfo.CapIo, FeatureDigitalIo);
             _robot.NanoManager.SetOutput(p.DeviceId, p.Pin, p.Value);
+        }
+        else if (_robot.SimplePlcManager.HasDevice(p.DeviceId))
+        {
+            _robot.SimplePlcManager.SetOutput(p.DeviceId, p.Pin, p.Value);
         }
         else
         {
